@@ -116,9 +116,23 @@ async def create_invoice(
     # use the fake wallet if the invoice is for internal use only
     funding_source = fake_wallet if internal else get_funding_source()
 
-    amount_sat, extra = await calculate_fiat_amounts(
-        amount, user_wallet, currency, extra
-    )
+    # Skip currency conversion for Taproot assets
+    if extra and extra.get("type") == "taproot_asset":
+        amount_sat = int(amount)
+        # Ensure extra contains the asset information
+        if "asset_id" not in extra:
+            raise InvoiceError("Missing asset_id for Taproot asset.", status="failed")
+            
+        # For Taproot assets, we'll use the asset_id and asset_amount directly
+        # The actual invoice creation happens in the payment_api.py
+        # This is just to ensure the extra field has the correct information
+        extra["asset_id"] = extra["asset_id"]
+        extra["asset_amount"] = amount_sat
+    else:
+        # Normal flow for sats or fiat currencies
+        amount_sat, extra = await calculate_fiat_amounts(
+            amount, user_wallet, currency, extra
+        )
 
     if settings.is_wallet_max_balance_exceeded(
         user_wallet.balance_msat / 1000 + amount_sat
@@ -148,11 +162,17 @@ async def create_invoice(
 
     invoice = bolt11_decode(payment_request)
 
+    # For Taproot assets, we don't want to multiply the amount by 1000
+    if extra and extra.get("type") == "taproot_asset":
+        amount_msat = amount_sat
+    else:
+        amount_msat = amount_sat * 1000
+        
     create_payment_model = CreatePayment(
         wallet_id=wallet_id,
         bolt11=payment_request,
         payment_hash=invoice.payment_hash,
-        amount_msat=amount_sat * 1000,
+        amount_msat=amount_msat,
         expiry=invoice.expiry_date,
         memo=memo,
         extra=extra,

@@ -212,6 +212,86 @@ async def _api_payments_create_invoice(data: CreateInvoice, wallet: Wallet):
         # do not save memo if description_hash or unhashed_description is set
         memo = ""
 
+    # Handle Taproot asset if asset_id is provided
+    if data.asset_id:
+        from lnbits.nodes.tapd import TaprootAssetsNode
+        
+        # Create a Taproot Assets node
+        node = TaprootAssetsNode()
+        try:
+            # Verify the asset exists
+            assets = await node.list_assets()
+            asset = next((a for a in assets if a["asset_id"] == data.asset_id), None)
+            
+            if not asset:
+                await node.close()
+                raise HTTPException(
+                    status_code=HTTPStatus.NOT_FOUND,
+                    detail=f"Asset with ID {data.asset_id} not found"
+                )
+            
+            # For Taproot assets, use the asset name as the unit
+            asset_name = asset["name"]
+            
+            # Create the invoice using the RFQ process
+            invoice_result = await node.create_asset_invoice(
+                memo=memo or f"Taproot Asset Transfer",
+                asset_id=data.asset_id,
+                asset_amount=int(data.amount)
+            )
+            
+            # Extract the payment hash and payment request
+            payment_hash = invoice_result["invoice_result"]["r_hash"]
+            payment_request = invoice_result["invoice_result"]["payment_request"]
+            
+            # Create extra data with Taproot Asset information
+            if not data.extra:
+                data.extra = {}
+            data.extra["type"] = "taproot_asset"
+            data.extra["asset_id"] = data.asset_id
+            data.extra["asset_name"] = asset_name
+            data.extra["asset_amount"] = int(data.amount)
+            data.extra["buy_quote"] = invoice_result["accepted_buy_quote"]
+            
+            # We need to decode the payment request to get additional information
+            from lnbits import bolt11
+            decoded = bolt11.decode(payment_request)
+            
+            # Create a payment record in the database
+            from lnbits.core.crud import create_payment
+            from lnbits.core.models import CreatePayment
+            
+            # Create payment model with the correct amount format
+            # For Taproot assets, we use the asset amount directly (not multiplied by 1000)
+            create_payment_model = CreatePayment(
+                wallet_id=wallet.id,
+                bolt11=payment_request,
+                payment_hash=payment_hash,
+                amount_msat=int(data.amount),  # For Taproot assets, we use the asset amount directly
+                memo=memo,
+                extra=data.extra,
+                webhook=data.webhook,
+                expiry=decoded.expiry_date,
+            )
+            
+            # Create the payment
+            payment = await create_payment(
+                checking_id=payment_hash,
+                data=create_payment_model,
+            )
+            
+            # Close the node connection
+            await node.close()
+            
+            return payment
+        except Exception as e:
+            # Make sure to close the node connection even if there's an error
+            await node.close()
+            raise HTTPException(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=f"Failed to create Taproot Asset invoice: {str(e)}"
+            )
+
     payment = await create_invoice(
         wallet_id=wallet.id,
         amount=data.amount,
@@ -278,11 +358,15 @@ async def api_all_payments_paginated(
         `amount`, `unit`, and `memo`. To pay an arbitrary invoice from the funds
         already in the authorized account, specify `out: true` and use the `bolt11`
         field to supply the BOLT11 invoice to be paid.
+        
+        For Taproot Assets: To create an invoice that includes Taproot Asset information,
+        include the `asset_id` parameter with the ID of the Taproot Asset.
     """,
     status_code=HTTPStatus.CREATED,
     responses={
         400: {"description": "Invalid BOLT11 string or missing fields."},
         401: {"description": "Invoice (or Admin) key required."},
+        404: {"description": "Asset not found."},
         520: {"description": "Payment or Invoice error."},
     },
 )

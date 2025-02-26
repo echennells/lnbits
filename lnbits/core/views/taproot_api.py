@@ -1,25 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List
+from typing import List, Optional
+from http import HTTPStatus
 from pydantic import BaseModel
 
 from lnbits.decorators import require_admin_key
-from lnbits.core.models import WalletTypeInfo
-from lnbits.core.services import create_invoice
+from lnbits.core.models import WalletTypeInfo, Payment, CreateInvoice
 from lnbits.nodes.tapd import TaprootAssetsNode
 
-taproot_router = APIRouter(
-    prefix="/taproot/api/v1",
-    tags=["Taproot Assets"]
-)
+# Use a consistent router prefix
+taproot_router = APIRouter(prefix="/api/v1/taproot", tags=["Taproot Assets"])
 
-class CreateTaprootInvoice(BaseModel):
-    wallet_id: str
+# Define request model for Taproot Asset invoices
+class TaprootInvoiceRequest(BaseModel):
     asset_id: str
-    amount: float
-    memo: str = ""
-    currency: str = "sat"
+    amount: int
+    memo: Optional[str] = None
+    expiry: Optional[int] = None
 
-@taproot_router.get("/assets", response_model=List[dict])
+@taproot_router.get("/listassets", response_model=List[dict])
 async def list_assets(wallet: WalletTypeInfo = Depends(require_admin_key)):
     """List all Taproot Assets."""
     node = TaprootAssetsNode()
@@ -29,44 +27,82 @@ async def list_assets(wallet: WalletTypeInfo = Depends(require_admin_key)):
         return assets
     except Exception as e:
         await node.close()
-        raise HTTPException(status_code=500, detail=f"Failed to list assets: {str(e)}")
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, 
+            detail=f"Failed to list assets: {str(e)}"
+        )
 
-@taproot_router.post("/invoice")
+@taproot_router.post("/invoice", response_model=dict)
 async def create_taproot_invoice(
-    data: CreateTaprootInvoice,
+    data: TaprootInvoiceRequest,
     wallet: WalletTypeInfo = Depends(require_admin_key)
 ):
-    """Create an invoice that includes Taproot Asset information."""
+    """Create an invoice for a Taproot Asset."""
     try:
-        # Verify the asset exists
+        # Create a Taproot Assets node
         node = TaprootAssetsNode()
-        assets = await node.list_assets()
-        await node.close()
         
-        asset = next((a for a in assets if a["asset_id"] == data.asset_id), None)
-        if not asset:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Asset with ID {data.asset_id} not found"
+        try:
+            # Create the invoice using the RFQ process
+            invoice_result = await node.create_asset_invoice(
+                memo=data.memo or f"Taproot Asset Transfer",
+                asset_id=data.asset_id,
+                asset_amount=data.amount
             )
-
-        # Create standard LNbits invoice with Taproot Asset info in extra field
-        invoice = await create_invoice(
-            wallet_id=data.wallet_id,
-            amount=data.amount,
-            memo=data.memo,
-            currency=data.currency,
-            extra={
+            
+            await node.close()
+            
+            # Extract the payment hash and payment request
+            payment_hash = invoice_result["invoice_result"]["r_hash"]
+            payment_request = invoice_result["invoice_result"]["payment_request"]
+            
+            # Create extra data with Taproot Asset information
+            extra = {
                 "type": "taproot_asset",
-                "asset_id": data.asset_id
+                "asset_id": data.asset_id,
+                "asset_amount": data.amount,
+                "buy_quote": invoice_result["accepted_buy_quote"]
             }
-        )
-        
-        return {
-            "payment_hash": invoice.payment_hash,
-            "payment_request": invoice.bolt11,
-            "checking_id": invoice.checking_id,
-            "asset_id": data.asset_id
-        }
+            
+            # We need to decode the payment request to get the payment hash
+            from lnbits import bolt11
+            decoded = bolt11.decode(payment_request)
+            
+            # Create a payment record in the database
+            from lnbits.core.crud import create_payment
+            from lnbits.core.models import CreatePayment, PaymentState
+            
+            # Create payment model
+            create_payment_model = CreatePayment(
+                wallet_id=wallet.wallet.id,
+                bolt11=payment_request,
+                payment_hash=payment_hash,
+                amount_msat=data.amount,  # For Taproot assets, we use the asset amount directly
+                memo=data.memo or f"Taproot Asset Transfer",
+                extra=extra,
+                expiry=decoded.expiry_date,
+            )
+            
+            # Create the payment
+            payment = await create_payment(
+                checking_id=payment_hash,
+                data=create_payment_model,
+            )
+            
+            # Return the invoice information with the accepted buy quote
+            return {
+                "payment_hash": payment_hash,
+                "payment_request": payment_request,
+                "asset_id": data.asset_id,
+                "asset_amount": data.amount,
+                "accepted_buy_quote": invoice_result["accepted_buy_quote"],
+                "checking_id": payment.checking_id
+            }
+        except Exception as e:
+            await node.close()
+            raise e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create invoice: {str(e)}")
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create Taproot Asset invoice: {str(e)}"
+        )
