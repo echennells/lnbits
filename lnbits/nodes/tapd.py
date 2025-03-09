@@ -488,10 +488,9 @@ class TaprootAssetsNode:
                         "remote_balance": "15"  # Hardcoded based on the lncli output
                     }
                     
-                    # Only add the asset with amount 100 to match the lncli output
-                    if str(asset.amount) == "100":
-                        channels_by_id[taproot_channel_id]["assets"].append(asset_info)
-                        logger.debug(f"Added asset {asset_name} with amount {asset.amount} to channel {taproot_channel_id}")
+                    # Add all assets to the channel
+                    channels_by_id[taproot_channel_id]["assets"].append(asset_info)
+                    logger.debug(f"Added asset {asset_name} with amount {asset.amount} to channel {taproot_channel_id}")
             
             # Return only channels with assets
             result = [chan for chan in channels_by_id.values() if chan["assets"]]
