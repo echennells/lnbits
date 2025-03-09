@@ -510,9 +510,12 @@ class TaprootAssetsNode:
                         "remote_balance": str(asset_remote_balance)
                     }
                     
-                    # Add all assets to the channel
-                    channels_by_id[taproot_channel_id]["assets"].append(asset_info)
-                    logger.debug(f"Added asset {asset_name} with amount {asset.amount} to channel {taproot_channel_id}")
+                    # Only add version 1 assets to match LND CLI behavior
+                    if asset.version == 1:
+                        channels_by_id[taproot_channel_id]["assets"].append(asset_info)
+                        logger.debug(f"Added asset {asset_name} with amount {asset.amount} to channel {taproot_channel_id}")
+                    else:
+                        logger.debug(f"Skipped asset with version {asset.version}")
             
             # Return only channels with assets
             result = [chan for chan in channels_by_id.values() if chan["assets"]]
