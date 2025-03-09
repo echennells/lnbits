@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package taprootassets;
+
+message AssetGenesis {
+    string genesis_point = 1;
+    string name = 2;
+    bytes meta_hash = 3;
+    bytes asset_id = 4;
+}
+
+message AssetUtxo {
+    int32 version = 1;
+    AssetGenesis asset_genesis = 2;
+    int64 amount = 3;
+    bytes script_key = 4;
+    int32 decimal_display = 5;
+}
+
+message Asset {
+    AssetUtxo asset_utxo = 1;
+    int64 capacity = 2;
+    int64 local_balance = 3;
+    int64 remote_balance = 4;
+}
+
+message CustomChannelData {
+    repeated Asset assets = 1;
+}
