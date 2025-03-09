@@ -469,6 +469,28 @@ class TaprootAssetsNode:
                     meta_hash = asset.asset_genesis.meta_hash.hex() if isinstance(asset.asset_genesis.meta_hash, bytes) else asset.asset_genesis.meta_hash
                     script_key = asset.script_key.hex() if isinstance(asset.script_key, bytes) else asset.script_key
                     
+                    # Get the channel's local and remote balances
+                    channel = channels_response.channels[taproot_channels.index(taproot_channel_id)]
+                    channel_local_balance = int(channel.local_balance)
+                    channel_remote_balance = int(channel.remote_balance)
+                    channel_capacity = int(channel.capacity)
+                    
+                    # Calculate asset balances proportionally based on channel balances
+                    asset_amount = int(asset.amount)
+                    
+                    # If channel capacity is 0, use a default 100% local balance
+                    if channel_capacity == 0:
+                        asset_local_balance = asset_amount
+                        asset_remote_balance = 0
+                    else:
+                        # Calculate the proportion of local and remote balances
+                        local_ratio = channel_local_balance / channel_capacity
+                        remote_ratio = channel_remote_balance / channel_capacity
+                        
+                        # Apply these ratios to the asset amount
+                        asset_local_balance = int(asset_amount * local_ratio)
+                        asset_remote_balance = asset_amount - asset_local_balance  # Ensure they sum to asset_amount
+                    
                     # Create asset info with the correct structure
                     asset_info = {
                         "asset_utxo": {
@@ -479,13 +501,13 @@ class TaprootAssetsNode:
                                 "meta_hash": meta_hash,
                                 "asset_id": asset_id
                             },
-                            "amount": str(asset.amount),
+                            "amount": str(asset_amount),
                             "script_key": script_key,
                             "decimal_display": 0
                         },
-                        "capacity": str(asset.amount),
-                        "local_balance": "85",  # Hardcoded based on the lncli output
-                        "remote_balance": "15"  # Hardcoded based on the lncli output
+                        "capacity": str(asset_amount),
+                        "local_balance": str(asset_local_balance),
+                        "remote_balance": str(asset_remote_balance)
                     }
                     
                     # Add all assets to the channel
