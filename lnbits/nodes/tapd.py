@@ -89,6 +89,7 @@ class TaprootAssetsNode:
     async def list_assets(self) -> list[dict]:
         """List all Taproot Assets."""
         try:
+            # Get all assets from tapd
             request = tap_pb2.ListAssetRequest(  # type: ignore
                 with_witness=False,
                 include_spent=False,  # Changed to avoid conflict with include_leased
@@ -96,7 +97,9 @@ class TaprootAssetsNode:
                 include_unconfirmed_mints=True
             )
             response = await self.stub.ListAssets(request, timeout=10)
-            return [
+            
+            # Get all assets from the response
+            assets = [
                 {
                     "name": asset.asset_genesis.name.decode('utf-8') if isinstance(asset.asset_genesis.name, bytes) else asset.asset_genesis.name,
                     "asset_id": asset.asset_genesis.asset_id.hex() if isinstance(asset.asset_genesis.asset_id, bytes) else asset.asset_genesis.asset_id,
@@ -110,8 +113,119 @@ class TaprootAssetsNode:
                 }
                 for asset in response.assets
             ]
+            
+            # Get channel assets information
+            channel_assets = await self.list_channel_assets()
+            
+            # Create a mapping of asset_id to asset info for easier lookup
+            asset_map = {asset["asset_id"]: asset for asset in assets}
+            
+            # Merge channel asset information with regular assets
+            for channel_asset in channel_assets:
+                asset_id = channel_asset["asset_id"]
+                if asset_id in asset_map:
+                    # Add channel information to existing asset
+                    asset_map[asset_id]["channel_info"] = {
+                        "channel_point": channel_asset["channel_point"],
+                        "capacity": channel_asset["capacity"],
+                        "local_balance": channel_asset["local_balance"],
+                        "remote_balance": channel_asset["remote_balance"]
+                    }
+                else:
+                    # This is a channel-only asset, add it to the map
+                    asset_map[asset_id] = {
+                        "asset_id": asset_id,
+                        "name": "Unknown (Channel Asset)",
+                        "type": "CHANNEL_ONLY",
+                        "amount": str(channel_asset["capacity"]),
+                        "channel_info": {
+                            "channel_point": channel_asset["channel_point"],
+                            "capacity": channel_asset["capacity"],
+                            "local_balance": channel_asset["local_balance"],
+                            "remote_balance": channel_asset["remote_balance"]
+                        }
+                    }
+            
+            return list(asset_map.values())
         except Exception as e:
             raise Exception(f"Failed to list assets: {str(e)}")
+            
+    async def list_channel_assets(self) -> list[dict]:
+        """
+        List all Lightning channels with Taproot Assets.
+        
+        This method retrieves all Lightning channels and extracts Taproot asset information
+        from channels with commitment type 4 or 6 (Taproot overlay).
+        
+        Returns:
+            A list of dictionaries containing channel and asset information.
+        """
+        try:
+            # Call the LND ListChannels endpoint
+            from lnbits.wallets.lnd_grpc_files import lightning_pb2, lightning_pb2_grpc
+            request = lightning_pb2.ListChannelsRequest()
+            response = await self.ln_stub.ListChannels(request, timeout=10)
+            
+            channel_assets = []
+            
+            # Process each channel
+            for channel in response.channels:
+                try:
+                    # Check if the channel has custom_channel_data
+                    if hasattr(channel, 'custom_channel_data') and channel.custom_channel_data:
+                        try:
+                            # Decode the custom_channel_data as UTF-8 JSON
+                            asset_data = json.loads(channel.custom_channel_data.decode('utf-8'))
+                            print(f"DEBUG:tapd:Taproot Assets for Chan ID {channel.chan_id}: {asset_data}")
+                            
+                            # Process each asset in the channel
+                            for asset in asset_data.get("assets", []):
+                                # Extract asset information from the nested structure
+                                asset_utxo = asset.get("asset_utxo", {})
+                                
+                                # Get asset_id from the correct location
+                                asset_id = ""
+                                if "asset_id" in asset_utxo:
+                                    asset_id = asset_utxo["asset_id"]
+                                elif "asset_genesis" in asset_utxo and "asset_id" in asset_utxo["asset_genesis"]:
+                                    asset_id = asset_utxo["asset_genesis"]["asset_id"]
+                                
+                                # Get name from the correct location
+                                name = ""
+                                if "name" in asset_utxo:
+                                    name = asset_utxo["name"]
+                                elif "asset_genesis" in asset_utxo and "name" in asset_utxo["asset_genesis"]:
+                                    name = asset_utxo["asset_genesis"]["name"]
+                                
+                                asset_info = {
+                                    "asset_id": asset_id,
+                                    "name": name,
+                                    "channel_id": str(channel.chan_id),
+                                    "channel_point": channel.channel_point,
+                                    "remote_pubkey": channel.remote_pubkey,
+                                    "capacity": asset.get("capacity", 0),
+                                    "local_balance": asset.get("local_balance", 0),
+                                    "remote_balance": asset.get("remote_balance", 0),
+                                    "commitment_type": str(channel.commitment_type)
+                                }
+                                
+                                # Add to channel assets if it has an asset_id
+                                if asset_info["asset_id"]:
+                                    channel_assets.append(asset_info)
+                                    print(f"DEBUG:tapd:Added asset {asset_info['asset_id']} to channel {channel.channel_point}")
+                        except Exception as e:
+                            print(f"DEBUG:tapd:Failed to decode custom_channel_data for Chan ID {channel.chan_id}: {e}")
+                    else:
+                        print(f"DEBUG:tapd:Chan ID {channel.chan_id} has no Taproot assets")
+                except Exception as e:
+                    print(f"DEBUG:tapd:Error processing channel {channel.channel_point}: {e}")
+                    continue
+            
+            print(f"DEBUG:tapd:Returning {len(channel_assets)} channel assets")
+            return channel_assets
+        except Exception as e:
+            print(f"DEBUG:tapd:Error in list_channel_assets: {e}")
+            raise Exception(f"Failed to list channel assets: {str(e)}")
             
     async def create_asset_invoice(self, memo: str, asset_id: str, asset_amount: int) -> Dict[str, Any]:
         """

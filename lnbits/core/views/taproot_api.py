@@ -19,7 +19,38 @@ class TaprootInvoiceRequest(BaseModel):
 
 @taproot_router.get("/listassets", response_model=List[dict])
 async def list_assets(wallet: WalletTypeInfo = Depends(require_admin_key)):
-    """List all Taproot Assets."""
+    """
+    List all Taproot Assets, including those in Lightning channels.
+    
+    This endpoint retrieves all Taproot assets and combines them with asset information
+    from Lightning channels with commitment type 4 or 6 (Taproot overlay).
+    
+    For assets that exist in channels, a `channel_info` field will be included with
+    details about the channel, including capacity, balances, and channel point.
+    
+    Example response:
+    ```json
+    [
+        {
+            "name": "piratecoin",
+            "asset_id": "b9ad8b868631ffe50fb09ff15e737fba9d4a34688a77ad608d3f6ee5db5eae44",
+            "type": "0",
+            "amount": "100",
+            "genesis_point": "5dc88b161b7146e7e03dc916ba9b07575f9a1454bcb2ecc67dc063642007a244:0",
+            "meta_hash": "70521e796c5550b5c6b5b3a10f2df6b6286fba213519a478e820e9818ddf5ce4",
+            "version": "1",
+            "is_spent": false,
+            "script_key": "0250aaeb166f4234650d84a2d8a130987aeaf6950206e0905401ee74ff3f8d18e6",
+            "channel_info": {
+                "channel_point": "0433cf3f58bf26d0f7fb10917397e231bc25d57dba645cd3bbdbc837ee27cda3:0",
+                "capacity": 100,
+                "local_balance": 85,
+                "remote_balance": 15
+            }
+        }
+    ]
+    ```
+    """
     node = TaprootAssetsNode()
     try:
         assets = await node.list_assets()
