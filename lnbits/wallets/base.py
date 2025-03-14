@@ -20,6 +20,7 @@ class InvoiceResponse(NamedTuple):
     checking_id: Optional[str] = None  # payment_hash, rpc_id
     payment_request: Optional[str] = None
     error_message: Optional[str] = None
+    extra: Optional[dict] = None
 
     @property
     def success(self) -> bool:

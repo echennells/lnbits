@@ -520,6 +520,21 @@ class BreezSdkFundingSource(LNbitsSettings):
     breez_use_trampoline: bool = Field(default=True)
 
 
+class TaprootFundingSource(LNbitsSettings):
+    tapd_host: Optional[str] = Field(default="lit:10009")
+    tapd_network: Optional[str] = Field(default="signet")
+    tapd_tls_cert_path: Optional[str] = Field(default="/root/.lnd/tls.cert")
+    tapd_macaroon_path: Optional[str] = Field(default="/root/.tapd/data/signet/admin.macaroon")
+    tapd_macaroon_hex: Optional[str] = Field(default="")
+    lnd_macaroon_path: Optional[str] = Field(default="/root/.lnd/data/chain/bitcoin/signet/admin.macaroon")
+    lnd_macaroon_hex: Optional[str] = Field(default="")
+    
+    # RFQ (Request for Quote) settings for Taproot Assets
+    tapd_rfq_price_oracle_address: Optional[str] = Field(default="use_mock_price_oracle_service_promise_to_not_use_on_mainnet")
+    tapd_rfq_mock_oracle_assets_per_btc: int = Field(default=100000)
+    tapd_rfq_skip_accept_quote_price_check: bool = Field(default=False)
+
+
 class BoltzFundingSource(LNbitsSettings):
     boltz_client_endpoint: Optional[str] = Field(default="127.0.0.1:9002")
     boltz_client_macaroon: Optional[str] = Field(default=None)
@@ -551,6 +566,7 @@ class FundingSourcesSettings(
     LnTipsFundingSource,
     NWCFundingSource,
     BreezSdkFundingSource,
+    TaprootFundingSource,
 ):
     lnbits_backend_wallet_class: str = Field(default="VoidWallet")
     # How long to wait for the payment to be confirmed before returning a pending status
@@ -828,6 +844,7 @@ class SuperUserSettings(LNbitsSettings):
             "LndWallet",
             "OpenNodeWallet",
             "PhoenixdWallet",
+            "TaprootAssetsWallet",
             "VoidWallet",
             "ZBDWallet",
             "NWCWallet",

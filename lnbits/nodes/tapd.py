@@ -1,16 +1,24 @@
 import os
+import time
 from typing import Optional, Dict, Any
 import grpc
 import grpc.aio
 import json
 import base64
-
 from lnbits import bolt11
 
-from lnbits.wallets.tapd_grpc_files import taprootassets_pb2 as tap_pb2
-from lnbits.wallets.tapd_grpc_files import taprootassets_pb2_grpc as tap_grpc
-from lnbits.wallets.lnd_grpc_files import lightning_pb2 as ln_pb2
-from lnbits.wallets.lnd_grpc_files import lightning_pb2_grpc as ln_grpc
+# Import the adapter module for Taproot Asset gRPC interfaces
+from lnbits.wallets.taproot_adapter import (
+    taprootassets_pb2,
+    rfq_pb2,
+    rfq_pb2_grpc,
+    tapchannel_pb2,
+    lightning_pb2,
+    router_pb2,
+    create_taprootassets_client,
+    create_tapchannel_client,
+    create_lightning_client
+)
 
 class TaprootAssetsNode:
     """
@@ -21,45 +29,56 @@ class TaprootAssetsNode:
     
     def __init__(
         self,
-        host: str = os.getenv("TAPD_HOST", "lit:10009"),
-        network: str = os.getenv("TAPD_NETWORK", "signet"),
-        tls_cert_path: str = os.getenv("TAPD_TLS_CERT_PATH", "/root/.lnd/tls.cert"),
-        macaroon_path: str = os.getenv("TAPD_MACAROON_PATH", "/root/.tapd/data/signet/admin.macaroon"),
-        ln_macaroon_path: str = os.getenv("LND_MACAROON_PATH", "/root/.lnd/data/chain/bitcoin/signet/admin.macaroon"),
-        ln_macaroon_hex: str = os.getenv("LND_MACAROON_HEX", ""),
-        tapd_macaroon_hex: str = os.getenv("TAPD_MACAROON_HEX", ""),
+        wallet=None,
+        host: str = None,
+        network: str = None,
+        tls_cert_path: str = None,
+        macaroon_path: str = None,
+        ln_macaroon_path: str = None,
+        ln_macaroon_hex: str = None,
+        tapd_macaroon_hex: str = None,
     ):
-        self.host = host
-        self.network = network
+        from lnbits.settings import settings
+        
+        self.wallet = wallet
+        self.host = host or settings.tapd_host
+        self.network = network or settings.tapd_network
+        
+        # Get paths from settings if not provided
+        tls_cert_path = tls_cert_path or settings.tapd_tls_cert_path
+        macaroon_path = macaroon_path or settings.tapd_macaroon_path
+        ln_macaroon_path = ln_macaroon_path or settings.lnd_macaroon_path
+        tapd_macaroon_hex = tapd_macaroon_hex or settings.tapd_macaroon_hex
+        ln_macaroon_hex = ln_macaroon_hex or settings.lnd_macaroon_hex
         
         # Read TLS certificate
         try:
             with open(tls_cert_path, 'rb') as f:
                 self.cert = f.read()
         except Exception as e:
-            raise Exception(f"Failed to read TLS cert: {str(e)}")
+            raise Exception(f"Failed to read TLS cert from {tls_cert_path}: {str(e)}")
 
         # Read Taproot macaroon
         if tapd_macaroon_hex:
-            # Use the hex-encoded macaroon from environment variable
+            # Use the hex-encoded macaroon from settings
             self.macaroon = tapd_macaroon_hex
         else:
             try:
                 with open(macaroon_path, 'rb') as f:
                     self.macaroon = f.read().hex()
             except Exception as e:
-                raise Exception(f"Failed to read Taproot macaroon: {str(e)}")
+                raise Exception(f"Failed to read Taproot macaroon from {macaroon_path}: {str(e)}")
             
         # Read Lightning macaroon (for invoice creation)
         if ln_macaroon_hex:
-            # Use the hex-encoded macaroon from environment variable
+            # Use the hex-encoded macaroon from settings
             self.ln_macaroon = ln_macaroon_hex
         else:
             try:
                 with open(ln_macaroon_path, 'rb') as f:
                     self.ln_macaroon = f.read().hex()
             except Exception as e:
-                raise Exception(f"Failed to read Lightning macaroon: {str(e)}")
+                raise Exception(f"Failed to read Lightning macaroon from {ln_macaroon_path}: {str(e)}")
 
         # Setup gRPC auth credentials for Taproot
         self.credentials = grpc.ssl_channel_credentials(self.cert)
@@ -80,17 +99,21 @@ class TaprootAssetsNode:
 
         # Create async gRPC channels
         self.channel = grpc.aio.secure_channel(self.host, self.combined_creds)
-        self.stub = tap_grpc.TaprootAssetsStub(self.channel)
+        self.stub = create_taprootassets_client(self.channel)
         
         # Create Lightning gRPC channel for invoice creation
         self.ln_channel = grpc.aio.secure_channel(self.host, self.ln_combined_creds)
-        self.ln_stub = ln_grpc.LightningStub(self.ln_channel)
+        self.ln_stub = create_lightning_client(self.ln_channel)
+        
+        # Create TaprootAssetChannels gRPC channel for asset invoice creation
+        self.tap_channel = grpc.aio.secure_channel(self.host, self.combined_creds)
+        self.tapchannel_stub = create_tapchannel_client(self.tap_channel)
 
     async def list_assets(self) -> list[dict]:
         """List all Taproot Assets."""
         try:
             # Get all assets from tapd
-            request = tap_pb2.ListAssetRequest(  # type: ignore
+            request = taprootassets_pb2.ListAssetRequest(  # type: ignore
                 with_witness=False,
                 include_spent=False,  # Changed to avoid conflict with include_leased
                 include_leased=True,
@@ -162,7 +185,6 @@ class TaprootAssetsNode:
         """
         try:
             # Call the LND ListChannels endpoint
-            from lnbits.wallets.lnd_grpc_files import lightning_pb2, lightning_pb2_grpc
             request = lightning_pb2.ListChannelsRequest()
             response = await self.ln_stub.ListChannels(request, timeout=10)
             
@@ -231,8 +253,9 @@ class TaprootAssetsNode:
         """
         Create an invoice for a Taproot Asset transfer.
         
-        This uses the Lightning Network API to create an invoice with Taproot Asset metadata.
-        The RFQ (Request for Quote) process is handled internally by the Lightning Terminal.
+        This uses the TaprootAssetChannels service's AddInvoice method that is specifically
+        designed for asset invoices. The RFQ (Request for Quote) process is handled internally
+        by the Taproot Assets daemon.
         
         Args:
             memo: Description for the invoice
@@ -240,46 +263,183 @@ class TaprootAssetsNode:
             asset_amount: The amount of the asset to transfer
             
         Returns:
-            Dict containing the invoice information
+            Dict containing the invoice information with accepted_buy_quote and invoice_result
         """
         try:
-            # For Taproot Assets, we need to use the Lightning API with special metadata
-            # Create a Lightning invoice with Taproot Asset metadata in custom records
+            # First, check if there are any buy offers for this asset
+            print(f"DEBUG:tapd:Checking RFQ offers for asset: {asset_id}")
+            
+            # Create RFQ client
+            rfq_stub = rfq_pb2_grpc.RfqStub(self.channel)
+            
+            # Query peer accepted quotes
+            try:
+                print(f"DEBUG:tapd:Creating QueryPeerAcceptedQuotesRequest")
+                rfq_request = rfq_pb2.QueryPeerAcceptedQuotesRequest()
+                print(f"DEBUG:tapd:QueryPeerAcceptedQuotesRequest created: {rfq_request}")
+                print(f"DEBUG:tapd:rfq_stub type: {type(rfq_stub)}")
+                print(f"DEBUG:tapd:rfq_stub methods: {dir(rfq_stub)}")
+                
+                print(f"DEBUG:tapd:Calling QueryPeerAcceptedQuotes")
+                rfq_response = await rfq_stub.QueryPeerAcceptedQuotes(rfq_request, timeout=10)
+                print(f"DEBUG:tapd:QueryPeerAcceptedQuotes response type: {type(rfq_response)}")
+                print(f"DEBUG:tapd:QueryPeerAcceptedQuotes response attributes: {dir(rfq_response)}")
+                print(f"DEBUG:tapd:Found {len(rfq_response.buy_quotes)} buy quotes and {len(rfq_response.sell_quotes)} sell quotes")
+                
+                # Log buy quotes
+                for i, quote in enumerate(rfq_response.buy_quotes):
+                    print(f"DEBUG:tapd:Buy Quote {i+1}:")
+                    print(f"DEBUG:tapd:  Quote type: {type(quote)}")
+                    print(f"DEBUG:tapd:  Quote attributes: {dir(quote)}")
+                    print(f"DEBUG:tapd:  Peer: {quote.peer}")
+                    print(f"DEBUG:tapd:  SCID: {quote.scid}")
+                    print(f"DEBUG:tapd:  Asset Max Amount: {quote.asset_max_amount}")
+                    
+                    # Check if the quote has an asset_id field
+                    if hasattr(quote, 'asset_id'):
+                        quote_asset_id = quote.asset_id.hex() if isinstance(quote.asset_id, bytes) else quote.asset_id
+                        print(f"DEBUG:tapd:  Asset ID: {quote_asset_id}")
+                        # Check if this quote is for the requested asset
+                        if quote_asset_id == asset_id:
+                            print(f"DEBUG:tapd:  This quote is for the requested asset: {asset_id}")
+                    
+                    if hasattr(quote, 'ask_asset_rate'):
+                        print(f"DEBUG:tapd:  Ask Asset Rate: {quote.ask_asset_rate.coefficient} (scale: {quote.ask_asset_rate.scale})")
+                
+                # Note: QueryAssetQuotesRequest is not available in the current protobuf definitions
+                # We'll rely on the AddInvoice method to find a buy quote for this asset
+                print(f"DEBUG:tapd:QueryAssetQuotesRequest is not available in the current protobuf definitions")
+                print(f"DEBUG:tapd:We'll rely on the AddInvoice method to find a buy quote for this asset")
+            except Exception as e:
+                print(f"DEBUG:tapd:Error querying RFQ service: {e}")
+                print(f"DEBUG:tapd:Error type: {type(e)}")
             
             # Convert asset_id from hex to bytes if needed
             asset_id_bytes = bytes.fromhex(asset_id) if isinstance(asset_id, str) else asset_id
             
-            # Create a basic invoice using LND's AddInvoice
-            invoice_request = ln_pb2.Invoice()
-            invoice_request.memo = memo if memo else "Taproot Asset Transfer"
-            invoice_request.value = 0  # Value in satoshis
+            # Create a standard invoice for the invoice_request field
+            invoice = lightning_pb2.Invoice(
+                memo=memo if memo else "Taproot Asset Transfer",
+                value=0,  # The value will be determined by the RFQ process
+                private=True
+            )
             
-            # Call LND's AddInvoice method
-            response = await self.ln_stub.AddInvoice(invoice_request, timeout=30)
+            # Create the AddInvoiceRequest using the tapchannel_pb2 definition
+            # This is the correct way to create an asset invoice
+            try:
+                print(f"DEBUG:tapd:Creating AddInvoiceRequest with asset_id={asset_id}, asset_amount={asset_amount}")
+                print(f"DEBUG:tapd:asset_id_bytes type: {type(asset_id_bytes)}, length: {len(asset_id_bytes)}")
+                print(f"DEBUG:tapd:invoice type: {type(invoice)}")
+                print(f"DEBUG:tapd:invoice attributes: {dir(invoice)}")
+                
+                request = tapchannel_pb2.AddInvoiceRequest(
+                    asset_id=asset_id_bytes,
+                    asset_amount=asset_amount,
+                    invoice_request=invoice
+                )
+                
+                # Debug the request
+                print(f"DEBUG:tapd:AddInvoiceRequest created successfully")
+                print(f"DEBUG:tapd:AddInvoiceRequest type: {type(request)}")
+                print(f"DEBUG:tapd:AddInvoiceRequest attributes: {dir(request)}")
+                
+                # Call the TaprootAssetChannels AddInvoice method
+                print(f"DEBUG:tapd:Calling TaprootAssetChannels.AddInvoice with asset_id={asset_id}, asset_amount={asset_amount}")
+                print(f"DEBUG:tapd:tapchannel_stub type: {type(self.tapchannel_stub)}")
+                print(f"DEBUG:tapd:tapchannel_stub methods: {dir(self.tapchannel_stub)}")
+                
+                response = await self.tapchannel_stub.AddInvoice(request, timeout=30)
+                print(f"DEBUG:tapd:AddInvoice call successful")
+            except Exception as e:
+                print(f"DEBUG:tapd:Error creating or sending AddInvoiceRequest: {e}")
+                print(f"DEBUG:tapd:Error type: {type(e)}")
+                raise
             
-            # Extract the payment hash and payment request
-            payment_hash = response.r_hash.hex() if isinstance(response.r_hash, bytes) else response.r_hash
-            payment_request = response.payment_request
+            # Debug response
+            print(f"DEBUG:tapd:AddInvoice response type: {type(response)}")
+            print(f"DEBUG:tapd:AddInvoice response attributes: {dir(response)}")
             
-            # Since we don't have direct access to the RFQ information from the gRPC response,
-            # we'll create a simplified version based on what we know
-            accepted_buy_quote = {
-                "id": "generated_" + payment_hash[:8],
-                "asset_id": asset_id,
-                "asset_amount": asset_amount,
-                "min_transportable_units": 1,  # Default value
-                "expiry": 3600,  # 1 hour expiry
-                "scid": "0x0x0",  # Placeholder
-                "peer": "unknown",  # Placeholder
-            }
+            # Extract the payment hash and payment request from the invoice_result
+            # The AddInvoiceResponse has two fields: accepted_buy_quote and invoice_result
+            payment_hash = response.invoice_result.r_hash
+            if isinstance(payment_hash, bytes):
+                payment_hash = payment_hash.hex()
+                
+            payment_request = response.invoice_result.payment_request
             
-            # Return the invoice information
+            # Get the payment address if available
+            payment_addr = ""
+            if hasattr(response.invoice_result, 'payment_addr'):
+                payment_addr = response.invoice_result.payment_addr
+                if isinstance(payment_addr, bytes):
+                    payment_addr = payment_addr.hex()
+            
+            # Get the add_index if available
+            add_index = ""
+            if hasattr(response.invoice_result, 'add_index'):
+                add_index = str(response.invoice_result.add_index)
+            
+            # Helper function to convert protobuf message to a JSON-serializable dict
+            def protobuf_to_dict(pb_obj):
+                """Convert a protobuf object to a JSON-serializable dict."""
+                if pb_obj is None:
+                    return None
+                
+                result = {}
+                
+                # Get all fields from the protobuf object
+                for field_name in pb_obj.DESCRIPTOR.fields_by_name:
+                    value = getattr(pb_obj, field_name)
+                    
+                    # Handle different types of values
+                    if isinstance(value, bytes):
+                        # Convert bytes to hex string
+                        result[field_name] = value.hex()
+                    elif hasattr(value, 'DESCRIPTOR'):
+                        # Recursively convert nested protobuf objects
+                        result[field_name] = protobuf_to_dict(value)
+                    elif isinstance(value, (list, tuple)):
+                        # Handle repeated fields
+                        result[field_name] = [
+                            protobuf_to_dict(item) if hasattr(item, 'DESCRIPTOR') else item
+                            for item in value
+                        ]
+                    else:
+                        # Primitive types (int, float, bool, str)
+                        result[field_name] = value
+                
+                return result
+            
+            # Convert the accepted_buy_quote to a dictionary
+            accepted_buy_quote = None
+            print(f"DEBUG:tapd:Checking for accepted_buy_quote in response")
+            print(f"DEBUG:tapd:Response has accepted_buy_quote attribute: {hasattr(response, 'accepted_buy_quote')}")
+            
+            if hasattr(response, 'accepted_buy_quote') and response.accepted_buy_quote:
+                print(f"DEBUG:tapd:accepted_buy_quote value: {response.accepted_buy_quote}")
+                print(f"DEBUG:tapd:accepted_buy_quote type: {type(response.accepted_buy_quote)}")
+                
+                try:
+                    # Convert the protobuf message to a dictionary using our helper function
+                    accepted_buy_quote = protobuf_to_dict(response.accepted_buy_quote)
+                    print(f"DEBUG:tapd:Got accepted_buy_quote from response: {accepted_buy_quote}")
+                except Exception as e:
+                    print(f"DEBUG:tapd:Error converting accepted_buy_quote to dictionary: {e}")
+                    print(f"DEBUG:tapd:Error type: {type(e)}")
+                    # Provide a fallback empty dict if conversion fails
+                    accepted_buy_quote = {}
+            else:
+                print(f"DEBUG:tapd:accepted_buy_quote is empty or None")
+                accepted_buy_quote = {}
+            
+            # Return the invoice information in the format expected by the client
             return {
                 "accepted_buy_quote": accepted_buy_quote,
                 "invoice_result": {
                     "r_hash": payment_hash,
                     "payment_request": payment_request,
-                    "add_index": response.add_index,
+                    "add_index": add_index,
+                    "payment_addr": payment_addr
                 }
             }
         except Exception as e:
@@ -289,3 +449,4 @@ class TaprootAssetsNode:
         """Close the gRPC channels."""
         await self.channel.close()
         await self.ln_channel.close()
+        await self.tap_channel.close()

@@ -9,8 +9,8 @@ from loguru import logger
 
 import lnbits.wallets.lnd_grpc_files.lightning_pb2 as ln
 import lnbits.wallets.lnd_grpc_files.lightning_pb2_grpc as lnrpc
-import lnbits.wallets.lnd_grpc_files.router_pb2 as router
-import lnbits.wallets.lnd_grpc_files.router_pb2_grpc as routerrpc
+import lnbits.wallets.lnd_grpc_files.routerrpc.router_pb2 as router
+import lnbits.wallets.lnd_grpc_files.routerrpc.router_pb2_grpc as routerrpc
 from lnbits.settings import settings
 from lnbits.utils.crypto import AESCipher
 
@@ -149,11 +149,11 @@ class LndWallet(Wallet):
         except Exception as exc:
             logger.warning(exc)
             error_message = str(exc)
-            return InvoiceResponse(False, None, None, error_message)
+            return InvoiceResponse(False, None, None, error_message, None)
 
         checking_id = bytes_to_hex(resp.r_hash)
         payment_request = str(resp.payment_request)
-        return InvoiceResponse(True, checking_id, payment_request, None)
+        return InvoiceResponse(True, checking_id, payment_request, None, None)
 
     async def pay_invoice(self, bolt11: str, fee_limit_msat: int) -> PaymentResponse:
         # fee_limit_fixed = ln.FeeLimit(fixed=fee_limit_msat // 1000)

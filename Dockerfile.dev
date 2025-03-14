@@ -10,20 +10,21 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
 RUN curl -sSL https://install.python-poetry.org | python3 - --version 1.8.3
 ENV PATH="/root/.local/bin:$PATH"
 WORKDIR /app
-ENV POETRY_NO_INTERACTION=1 POETRY_VIRTUALENVS_IN_PROJECT=1 POETRY_VIRTUALENVS_CREATE=1 POETRY_CACHE_DIR=/tmp/poetry_cache
+ENV POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_IN_PROJECT=1 \
+    POETRY_VIRTUALENVS_CREATE=1 \
+    POETRY_CACHE_DIR=/tmp/poetry_cache
 # Install gRPC tools
-RUN pip install "grpcio==1.69.0" "grpcio-tools==1.69.0" "protobuf==5.29.0"
-
-# Copy and generate Taproot Assets gRPC files
-COPY lnbits/wallets/tapd_grpc_files/taprootassets.proto /app/lnbits/wallets/tapd_grpc_files/
-COPY lnbits/wallets/tapd_grpc_files/generate_grpc.sh /app/lnbits/wallets/tapd_grpc_files/
-RUN cd /app/lnbits/wallets/tapd_grpc_files && chmod +x generate_grpc.sh && ./generate_grpc.sh
-
-# Copy and generate LND gRPC files
-COPY lnbits/wallets/lnd_grpc_files/lightning.proto /app/lnbits/wallets/lnd_grpc_files/
-RUN cd /app/lnbits/wallets/lnd_grpc_files && \
-    python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. lightning.proto && \
-    sed -i 's/import lightning_pb2/from . import lightning_pb2/' lightning_pb2_grpc.py && \
-    touch __init__.py
-
-CMD ["poetry", "run", "uvicorn", "--reload", "--host", "0.0.0.0", "--port", "5000", "lnbits.__main__:app"]
+RUN pip install "grpcio==1.69.0" "grpcio-tools==1.69.0" "protobuf==5.29.0" "httpx>=0.25.0" "loguru>=0.7.0"
+# Create directory structure - this ensures the directories exist
+RUN mkdir -p /app/lnbits/wallets/lnd_grpc_files \
+    /app/lnbits/wallets/tapd_grpc_files/tapchannelrpc \
+    /app/lnbits/wallets/tapd_grpc_files/rfqrpc \
+    /app/lnbits/wallets/tapd_grpc_files/routerrpc \
+    /app/lnbits/wallets/tapd_grpc_files/assetwalletrpc/assetwalletrpc
+# Copy the application
+COPY . /app/
+# Install dependencies
+RUN poetry install
+# Ensure httpx is installed even if poetry install misses it
+RUN pip install "httpx>=0.25.0" "loguru>=0.7.0" "websockets"

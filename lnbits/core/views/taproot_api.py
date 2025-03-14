@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from lnbits.decorators import require_admin_key
 from lnbits.core.models import WalletTypeInfo, Payment, CreateInvoice
-from lnbits.nodes.tapd import TaprootAssetsNode
+from lnbits.wallets.taproot import TaprootAssetsWallet
 
 # Use a consistent router prefix
 taproot_router = APIRouter(prefix="/api/v1/taproot", tags=["Taproot Assets"])
@@ -51,13 +51,16 @@ async def list_assets(wallet: WalletTypeInfo = Depends(require_admin_key)):
     ]
     ```
     """
-    node = TaprootAssetsNode()
+    taproot_wallet = TaprootAssetsWallet()
     try:
+        # Create a node instance
+        node = taproot_wallet.__node_cls__(wallet=taproot_wallet)
+        
+        # Get assets
         assets = await node.list_assets()
         await node.close()
         return assets
     except Exception as e:
-        await node.close()
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR, 
             detail=f"Failed to list assets: {str(e)}"
@@ -70,68 +73,132 @@ async def create_taproot_invoice(
 ):
     """Create an invoice for a Taproot Asset."""
     try:
-        # Create a Taproot Assets node
-        node = TaprootAssetsNode()
+        print(f"DEBUG:taproot_api:Creating Taproot Asset invoice for asset_id={data.asset_id}, amount={data.amount}")
         
+        # Create a TaprootAssetsWallet instance
+        taproot_wallet = TaprootAssetsWallet()
+        
+        # Create the invoice directly using the TaprootAssetsWallet
         try:
-            # Create the invoice using the RFQ process
-            invoice_result = await node.create_asset_invoice(
-                memo=data.memo or f"Taproot Asset Transfer",
-                asset_id=data.asset_id,
-                asset_amount=data.amount
+            # First, create the invoice using the TaprootAssetsWallet
+            invoice_response = await taproot_wallet.create_invoice(
+                amount=data.amount,
+                memo=data.memo or "Taproot Asset Transfer",
+                asset_id=data.asset_id
             )
             
-            await node.close()
+            if not invoice_response.ok:
+                raise Exception(f"Failed to create invoice: {invoice_response.error_message}")
             
-            # Extract the payment hash and payment request
-            payment_hash = invoice_result["invoice_result"]["r_hash"]
-            payment_request = invoice_result["invoice_result"]["payment_request"]
+            # Extract the original payment_request and payment_hash from the tapd response
+            original_payment_request = invoice_response.payment_request
+            original_payment_hash = invoice_response.checking_id  # The payment_hash is stored in the checking_id field
             
-            # Create extra data with Taproot Asset information
-            extra = {
-                "type": "taproot_asset",
-                "asset_id": data.asset_id,
-                "asset_amount": data.amount,
-                "buy_quote": invoice_result["accepted_buy_quote"]
-            }
+            print(f"DEBUG:taproot_api:Got original payment_request from tapd: {original_payment_request}")
+            print(f"DEBUG:taproot_api:Got original payment_hash from tapd: {original_payment_hash}")
             
-            # We need to decode the payment request to get the payment hash
+            # Extract buy_quote if it exists
+            buy_quote = {}
+            if invoice_response.extra and "buy_quote" in invoice_response.extra:
+                buy_quote = invoice_response.extra["buy_quote"]
+            
+            # Parse the original BOLT11 invoice to get the correct satoshi amount
             from lnbits import bolt11
-            decoded = bolt11.decode(payment_request)
+            try:
+                decoded_invoice = bolt11.decode(original_payment_request)
+                satoshi_amount_msat = decoded_invoice.amount_msat
+                satoshi_amount = satoshi_amount_msat // 1000 if satoshi_amount_msat is not None else 0
+                print(f"DEBUG:taproot_api:Decoded original invoice, satoshi_amount={satoshi_amount} sats ({satoshi_amount_msat} msats)")
+            except Exception as e:
+                print(f"DEBUG:taproot_api:Error decoding original invoice: {e}")
+                satoshi_amount = data.amount  # Fallback to asset amount if decoding fails
+                satoshi_amount_msat = data.amount * 1000
             
-            # Create a payment record in the database
-            from lnbits.core.crud import create_payment
-            from lnbits.core.models import CreatePayment, PaymentState
+            # Now create a payment record in the database using the original invoice details
+            from lnbits.core.services import create_invoice
             
-            # Create payment model
-            create_payment_model = CreatePayment(
+            # Create the payment with the original BOLT11 invoice and correct satoshi amount
+            payment = await create_invoice(
                 wallet_id=wallet.wallet.id,
-                bolt11=payment_request,
-                payment_hash=payment_hash,
-                amount_msat=data.amount,  # For Taproot assets, we use the asset amount directly
-                memo=data.memo or f"Taproot Asset Transfer",
-                extra=extra,
-                expiry=decoded.expiry_date,
+                amount=satoshi_amount,  # Use the correct satoshi amount from the original invoice
+                memo=data.memo or "Taproot Asset Transfer",
+                extra={
+                    "type": "taproot_asset",
+                    "asset_id": data.asset_id,
+                    "asset_amount": data.amount,
+                    "buy_quote": buy_quote,
+                    "payment_request": original_payment_request,  # Pass the original BOLT11 invoice
+                    "payment_hash": original_payment_hash  # Pass the original payment hash
+                },
+                expiry=data.expiry
             )
             
-            # Create the payment
-            payment = await create_payment(
-                checking_id=payment_hash,
-                data=create_payment_model,
-            )
+            print(f"DEBUG:taproot_api:Payment created successfully: payment_hash={payment.payment_hash}")
+            print(f"DEBUG:taproot_api:Payment object: {payment}")
+            print(f"DEBUG:taproot_api:Payment extra data: {payment.extra}")
+        except Exception as e:
+            print(f"DEBUG:taproot_api:Error creating invoice: {e}")
+            print(f"DEBUG:taproot_api:Error type: {type(e)}")
+            raise
+        
+        # Helper function to ensure all values are JSON serializable
+        def ensure_serializable(obj):
+            """Recursively convert an object to JSON serializable types."""
+            if isinstance(obj, dict):
+                return {k: ensure_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [ensure_serializable(item) for item in obj]
+            elif isinstance(obj, (str, int, float, bool, type(None))):
+                return obj
+            elif hasattr(obj, '__dict__'):
+                # Convert custom objects to dict
+                return ensure_serializable(obj.__dict__)
+            else:
+                # Convert anything else to string
+                return str(obj)
+        
+        # Extract the accepted_buy_quote from the extra data
+        # Ensure it's a simple dict that can be JSON serialized
+        try:
+            # Get the buy_quote from extra data
+            accepted_buy_quote = payment.extra.get("buy_quote", {})
             
-            # Return the invoice information with the accepted buy quote
-            return {
-                "payment_hash": payment_hash,
-                "payment_request": payment_request,
+            # Ensure it's a serializable dict
+            accepted_buy_quote = ensure_serializable(accepted_buy_quote)
+            
+            print(f"DEBUG:taproot_api:Payment extra data: {payment.extra}")
+            print(f"DEBUG:taproot_api:Extracted accepted_buy_quote: {accepted_buy_quote}")
+            
+            # Check if we have a buy_quote in the extra data
+            if "buy_quote" in payment.extra:
+                print(f"DEBUG:taproot_api:buy_quote is present in extra data")
+            else:
+                print(f"DEBUG:taproot_api:buy_quote is NOT present in extra data")
+            
+            # Create a response with all serializable values
+            response_data = ensure_serializable({
+                "payment_hash": payment.payment_hash,
+                "payment_request": payment.bolt11,  # Use the original BOLT11 invoice
                 "asset_id": data.asset_id,
                 "asset_amount": data.amount,
-                "accepted_buy_quote": invoice_result["accepted_buy_quote"],
+                "satoshi_amount": satoshi_amount,  # Include the satoshi amount for clarity
+                "accepted_buy_quote": accepted_buy_quote,
+                "checking_id": payment.checking_id
+            })
+        except Exception as e:
+            print(f"DEBUG:taproot_api:Error processing accepted_buy_quote: {e}")
+            # Fallback to a simpler response without the problematic field
+            response_data = {
+                "payment_hash": payment.payment_hash,
+                "payment_request": payment.bolt11,  # Use the original BOLT11 invoice
+                "asset_id": data.asset_id,
+                "asset_amount": data.amount,
+                "accepted_buy_quote": {},
                 "checking_id": payment.checking_id
             }
-        except Exception as e:
-            await node.close()
-            raise e
+        
+        print(f"DEBUG:taproot_api:Returning response: {response_data}")
+        return response_data
     except Exception as e:
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,

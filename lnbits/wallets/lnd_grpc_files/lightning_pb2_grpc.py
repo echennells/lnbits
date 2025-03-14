@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from . import lightning_pb2 as lightning__pb2
+import lnbits.wallets.lnd_grpc_files.lightning_pb2 as lightning__pb2
 
 GRPC_GENERATED_VERSION = '1.69.0'
 GRPC_VERSION = grpc.__version__
