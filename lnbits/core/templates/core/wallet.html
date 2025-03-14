@@ -166,7 +166,12 @@
                 @click="showReceiveDialog"
                 :label="$t('create_invoice')"
               ></q-btn>
-              <q-btn unelevated color="secondary" icon="qr_code_scanner">
+              <q-btn
+                unelevated
+                color="secondary"
+                icon="qr_code_scanner"
+                @click="showCamera"
+              >
                 <q-tooltip
                   ><span v-text="$t('camera_tooltip')"></span
                 ></q-tooltip>
@@ -367,6 +372,7 @@
                             type="text"
                             :disable="g.fiatTracking"
                             :options="receive.units.filter((u) => u !== 'sat')"
+                            :label="$t('currency_settings')"
                           ></q-select>
                         </div>
                         <div class="col-4 q-pl-sm">
@@ -725,19 +731,19 @@
               </div>
               <div v-if="g.fiatTracking">
                 <div v-if="isFiatPriority">
+                  <h5 class="q-my-none text-bold">
+                    <span
+                      v-text="walletFormatBalance(parse.invoice.sat)"
+                    ></span>
+                  </h5>
+                </div>
+                <div v-else style="opacity: 0.75">
                   <div class="text-h5 text-italic">
                     <span
                       v-text="parse.invoice.fiatAmount"
                       style="opacity: 0.75"
                     ></span>
                   </div>
-                </div>
-                <div v-else style="opacity: 0.75">
-                  <h5 class="q-my-none text-bold">
-                    <span
-                      v-text="walletFormatBalance(parse.invoice.sat)"
-                    ></span>
-                  </h5>
                 </div>
               </div>
             </div>
