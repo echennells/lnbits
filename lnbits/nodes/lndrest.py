@@ -4,7 +4,7 @@ import asyncio
 import base64
 import json
 from http import HTTPStatus
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import HTTPException
 from httpx import HTTPStatusError
@@ -60,7 +60,9 @@ def _parse_channel_point(raw: str) -> ChannelPoint:
 class LndRestNode(Node):
     wallet: LndRestWallet
 
-    async def request(self, method: str, path: str, json: dict | None = None, **kwargs):
+    async def request(
+        self, method: str, path: str, json: Optional[dict] = None, **kwargs
+    ):
         response = await self.wallet.client.request(
             method, f"{self.wallet.endpoint}{path}", json=json, **kwargs
         )
@@ -129,8 +131,8 @@ class LndRestNode(Node):
         self,
         peer_id: str,
         local_amount: int,
-        push_amount: int | None = None,
-        fee_rate: int | None = None,
+        push_amount: Optional[int] = None,
+        fee_rate: Optional[int] = None,
     ) -> ChannelPoint:
         response = await self.request(
             "POST",
@@ -174,8 +176,8 @@ class LndRestNode(Node):
 
     async def close_channel(
         self,
-        short_id: str | None = None,
-        point: ChannelPoint | None = None,
+        short_id: Optional[str] = None,
+        point: Optional[ChannelPoint] = None,
         force: bool = False,
     ):
         if short_id:
@@ -216,7 +218,7 @@ class LndRestNode(Node):
             },
         )
 
-    async def get_channel(self, channel_id: str) -> NodeChannel | None:
+    async def get_channel(self, channel_id: str) -> Optional[NodeChannel]:
         channel_info = await self.get(f"/v1/graph/edge/{channel_id}")
         info = await self.get("/v1/getinfo")
         if info["identity_pubkey"] == channel_info["node1_pub"]:

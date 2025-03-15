@@ -419,6 +419,7 @@
             dense
             use-input
             use-chips
+            multiple
             hide-dropdown-icon
           ></q-select>
           <div v-else-if="o.type === 'bool'">
@@ -638,100 +639,16 @@
       </q-input>
     </div>
     <div class="gt-sm col-auto">
-      <q-btn icon="event" flat color="grey">
-        <q-popup-proxy cover transition-show="scale" transition-hide="scale">
-          <q-date v-model="searchDate" mask="YYYY-MM-DD" range />
-          <div class="row">
-            <div class="col-6">
-              <q-btn
-                label="Search"
-                @click="searchByDate()"
-                color="primary"
-                flat
-                class="float-left"
-                v-close-popup
-              />
-            </div>
-            <div class="col-6">
-              <q-btn
-                v-close-popup
-                @click="clearDateSeach()"
-                label="Clear"
-                class="float-right"
-                color="grey"
-                flat
-              />
-            </div>
-          </div>
-        </q-popup-proxy>
-        <q-badge
-          v-if="searchDate?.to || searchDate?.from"
-          class="q-mt-lg q-mr-md"
-          color="primary"
-          rounded
-          floating
-          style="border-radius: 6px"
-        ></q-badge>
-        <q-tooltip>
-          <span v-text="$t('filter_date')"></span>
-        </q-tooltip>
-      </q-btn>
-      <q-btn color="grey" icon="filter_alt" flat>
-        <q-menu>
-          <q-item dense>
-            <q-checkbox
-              v-model="searchStatus.success"
-              @click="handleFilterChanged"
-              label="Success Payments"
-            ></q-checkbox>
-          </q-item>
-          <q-item dense>
-            <q-checkbox
-              v-model="searchStatus.pending"
-              @click="handleFilterChanged"
-              label="Pending Payments"
-            ></q-checkbox>
-          </q-item>
-          <q-item dense>
-            <q-checkbox
-              v-model="searchStatus.failed"
-              @click="handleFilterChanged"
-              label="Failed Payments"
-            ></q-checkbox>
-          </q-item>
-          <q-separator></q-separator>
-          <q-item dense>
-            <q-checkbox
-              v-model="searchStatus.incoming"
-              @click="handleFilterChanged"
-              label="Incoming Payments"
-            ></q-checkbox>
-          </q-item>
-          <q-item dense>
-            <q-checkbox
-              v-model="searchStatus.outgoing"
-              @click="handleFilterChanged"
-              label="Outgoing Payments"
-            ></q-checkbox>
-          </q-item>
-        </q-menu>
-        <q-tooltip>
-          <span v-text="$t('filter_payments')"></span>
-        </q-tooltip>
-      </q-btn>
       <q-btn-dropdown
-        dense
         outline
         persistent
-        icon="archive"
-        split
+        dense
         class="q-mr-sm"
         color="grey"
+        label="Export"
+        split
         @click="exportCSV(false)"
       >
-        <q-tooltip>
-          <span v-text="$t('export_csv')"></span>
-        </q-tooltip>
         <q-list>
           <q-item>
             <q-item-section>
@@ -771,12 +688,59 @@
                 outline
                 color="grey"
                 @click="exportCSV(true)"
-                :label="$t('export_csv_details')"
+                label="Export to CSV with details"
               ></q-btn>
             </q-item-section>
           </q-item>
         </q-list>
       </q-btn-dropdown>
+      <q-btn icon="event" outline flat color="grey">
+        <q-popup-proxy cover transition-show="scale" transition-hide="scale">
+          <q-date v-model="searchDate" mask="YYYY-MM-DD" range />
+          <div class="row">
+            <div class="col-6">
+              <q-btn
+                label="Search"
+                @click="searchByDate()"
+                color="primary"
+                flat
+                class="float-left"
+                v-close-popup
+              />
+            </div>
+            <div class="col-6">
+              <q-btn
+                v-close-popup
+                @click="clearDateSeach()"
+                label="Clear"
+                class="float-right"
+                color="grey"
+                flat
+              />
+            </div>
+          </div>
+        </q-popup-proxy>
+        <q-badge
+          v-if="searchDate?.to || searchDate?.from"
+          class="q-mt-lg q-mr-md"
+          color="primary"
+          rounded
+          floating
+          style="border-radius: 6px"
+        />
+      </q-btn>
+
+      <q-checkbox
+        v-model="failedPaymentsToggle"
+        checked-icon="warning"
+        unchecked-icon="warning_off"
+        :color="failedPaymentsToggle ? 'yellow' : 'grey'"
+        size="xs"
+      >
+        <q-tooltip>
+          <span v-text="`Include failed payments`"></span>
+        </q-tooltip>
+      </q-checkbox>
     </div>
   </div>
   <div class="row q-my-md"></div>
@@ -1057,16 +1021,7 @@
 
 <template id="lnbits-funding-sources">
   <div class="funding-sources">
-    <h6 class="q-my-none q-mb-sm">
-      <span v-text="$t('funding_sources')"></span>
-      <q-btn
-        round
-        flat
-        @click="this.hideInput = !this.hideInput"
-        :icon="this.hideInput ? 'visibility_off' : 'visibility'"
-      ></q-btn>
-    </h6>
-
+    <h6 class="q-mt-xl q-mb-md">Funding Sources</h6>
     <div class="row">
       <div class="col-12">
         <p>Active Funding<small> (Requires server restart)</small></p>
@@ -1104,6 +1059,13 @@
               :label="prop.label"
               :hint="prop.hint"
             >
+              <template v-slot:append>
+                <q-icon
+                  :name="hideInput ? 'visibility_off' : 'visibility'"
+                  class="cursor-pointer"
+                  @click="this.hideInput = !this.hideInput"
+                ></q-icon>
+              </template>
             </q-input>
           </div>
         </div>
@@ -1261,7 +1223,7 @@
       </q-form>
     </q-card-section>
     <!-- REGISTER -->
-    <q-card-section v-if="allowed_new_users && authAction === 'register'">
+    <q-card-section v-if="authAction === 'register'">
       <q-form @submit="register" class="q-gutter-sm">
         <q-input
           dense
@@ -1303,9 +1265,6 @@
           ></q-btn>
         </div>
       </q-form>
-    </q-card-section>
-    <q-card-section v-else-if="!allowed_new_users && authAction === 'register'">
-      <h5 class="text-center" v-text="$t('new_user_not_allowed')"></h5>
     </q-card-section>
     <slot></slot>
     <!-- RESET -->

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, AsyncGenerator, Coroutine, NamedTuple
+from typing import TYPE_CHECKING, AsyncGenerator, Coroutine, NamedTuple, Optional
 
 from loguru import logger
 
@@ -11,16 +11,16 @@ if TYPE_CHECKING:
 
 
 class StatusResponse(NamedTuple):
-    error_message: str | None
+    error_message: Optional[str]
     balance_msat: int
 
 
 class InvoiceResponse(NamedTuple):
     ok: bool
-    checking_id: str | None = None  # payment_hash, rpc_id
-    payment_request: str | None = None
-    error_message: str | None = None
-    extra: dict | None = None
+    checking_id: Optional[str] = None  # payment_hash, rpc_id
+    payment_request: Optional[str] = None
+    error_message: Optional[str] = None
+    extra: Optional[dict] = None
 
     @property
     def success(self) -> bool:
@@ -37,11 +37,11 @@ class InvoiceResponse(NamedTuple):
 
 class PaymentResponse(NamedTuple):
     # when ok is None it means we don't know if this succeeded
-    ok: bool | None = None
-    checking_id: str | None = None  # payment_hash, rcp_id
-    fee_msat: int | None = None
-    preimage: str | None = None
-    error_message: str | None = None
+    ok: Optional[bool] = None
+    checking_id: Optional[str] = None  # payment_hash, rcp_id
+    fee_msat: Optional[int] = None
+    preimage: Optional[str] = None
+    error_message: Optional[str] = None
 
     @property
     def success(self) -> bool:
@@ -57,9 +57,9 @@ class PaymentResponse(NamedTuple):
 
 
 class PaymentStatus(NamedTuple):
-    paid: bool | None = None
-    fee_msat: int | None = None
-    preimage: str | None = None
+    paid: Optional[bool] = None
+    fee_msat: Optional[int] = None
+    preimage: Optional[str] = None
 
     @property
     def success(self) -> bool:
@@ -95,7 +95,7 @@ class PaymentPendingStatus(PaymentStatus):
 
 class Wallet(ABC):
 
-    __node_cls__: type[Node] | None = None
+    __node_cls__: Optional[type[Node]] = None
 
     def __init__(self) -> None:
         self.pending_invoices: list[str] = []
@@ -112,9 +112,9 @@ class Wallet(ABC):
     def create_invoice(
         self,
         amount: int,
-        memo: str | None = None,
-        description_hash: bytes | None = None,
-        unhashed_description: bytes | None = None,
+        memo: Optional[str] = None,
+        description_hash: Optional[bytes] = None,
+        unhashed_description: Optional[bytes] = None,
         **kwargs,
     ) -> Coroutine[None, None, InvoiceResponse]:
         pass

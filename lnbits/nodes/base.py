@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from pydantic import BaseModel
 
@@ -15,10 +15,10 @@ if TYPE_CHECKING:
 
 class NodePeerInfo(BaseModel):
     id: str
-    alias: str | None = None
-    color: str | None = None
-    last_timestamp: int | None = None
-    addresses: list[str] | None = None
+    alias: Optional[str] = None
+    color: Optional[str] = None
+    last_timestamp: Optional[int] = None
+    addresses: Optional[list[str]] = None
 
 
 class ChannelState(Enum):
@@ -47,20 +47,20 @@ class NodeChannel(BaseModel):
     balance: ChannelBalance
     state: ChannelState
     # could be optional for closing/pending channels on lndrest
-    id: str | None = None
-    short_id: str | None = None
-    point: ChannelPoint | None = None
-    name: str | None = None
-    color: str | None = None
-    fee_ppm: int | None = None
-    fee_base_msat: int | None = None
+    id: Optional[str] = None
+    short_id: Optional[str] = None
+    point: Optional[ChannelPoint] = None
+    name: Optional[str] = None
+    color: Optional[str] = None
+    fee_ppm: Optional[int] = None
+    fee_base_msat: Optional[int] = None
 
 
 class ChannelStats(BaseModel):
     counts: dict[ChannelState, int]
     avg_size: int
-    biggest_size: int | None
-    smallest_size: int | None
+    biggest_size: Optional[int]
+    smallest_size: Optional[int]
     total_capacity: int
 
     @classmethod
@@ -95,9 +95,9 @@ class ChannelStats(BaseModel):
 
 class NodeFees(BaseModel):
     total_msat: int
-    daily_msat: int | None = None
-    weekly_msat: int | None = None
-    monthly_msat: int | None = None
+    daily_msat: Optional[int] = None
+    weekly_msat: Optional[int] = None
+    monthly_msat: Optional[int] = None
 
 
 class PublicNodeInfo(BaseModel):
@@ -121,25 +121,25 @@ class NodeInfoResponse(PublicNodeInfo):
 class NodePayment(BaseModel):
     pending: bool
     amount: int
-    fee: int | None = None
-    memo: str | None = None
+    fee: Optional[int] = None
+    memo: Optional[str] = None
     time: int
-    bolt11: str | None = None
-    preimage: str | None
+    bolt11: Optional[str] = None
+    preimage: Optional[str]
     payment_hash: str
-    expiry: float | None = None
-    destination: NodePeerInfo | None = None
+    expiry: Optional[float] = None
+    destination: Optional[NodePeerInfo] = None
 
 
 class NodeInvoice(BaseModel):
     pending: bool
     amount: int
-    memo: str | None
+    memo: Optional[str]
     bolt11: str
-    preimage: str | None
+    preimage: Optional[str]
     payment_hash: str
-    paid_at: int | None = None
-    expiry: int | None = None
+    paid_at: Optional[int] = None
+    expiry: Optional[int] = None
 
 
 class NodeInvoiceFilters(FilterModel):
@@ -154,7 +154,7 @@ class Node(ABC):
 
     def __init__(self, wallet: Wallet):
         self.wallet = wallet
-        self.id: str | None = None
+        self.id: Optional[str] = None
 
     @property
     def name(self):
@@ -203,22 +203,22 @@ class Node(ABC):
         self,
         peer_id: str,
         local_amount: int,
-        push_amount: int | None = None,
-        fee_rate: int | None = None,
+        push_amount: Optional[int] = None,
+        fee_rate: Optional[int] = None,
     ) -> ChannelPoint:
         raise NotImplementedError
 
     @abstractmethod
     async def close_channel(
         self,
-        short_id: str | None = None,
-        point: ChannelPoint | None = None,
+        short_id: Optional[str] = None,
+        point: Optional[ChannelPoint] = None,
         force: bool = False,
     ):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_channel(self, channel_id: str) -> NodeChannel | None:
+    async def get_channel(self, channel_id: str) -> Optional[NodeChannel]:
         raise NotImplementedError
 
     @abstractmethod

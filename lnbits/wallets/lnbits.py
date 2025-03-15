@@ -87,15 +87,13 @@ class LNbitsWallet(Wallet):
             r.raise_for_status()
             data = r.json()
 
-            # Backwards compatibility for pre-v1 which used the key "payment_request"
-            payment_str = data.get("bolt11") or data.get("payment_request")
-            if r.is_error or not payment_str:
+            if r.is_error or "bolt11" not in data:
                 error_message = data["detail"] if "detail" in data else r.text
                 return InvoiceResponse(
                     False, None, None, f"Server error: '{error_message}'"
                 )
 
-            return InvoiceResponse(True, data["checking_id"], payment_str, None)
+            return InvoiceResponse(True, data["checking_id"], data["bolt11"], None)
         except json.JSONDecodeError:
             return InvoiceResponse(
                 False, None, None, "Server error: 'invalid json response'"

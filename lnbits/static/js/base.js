@@ -209,7 +209,7 @@ window.LNbits = {
         })
       obj.walletOptions = obj.wallets.map(obj => {
         return {
-          label: [obj.name, ' - ', obj.id.substring(0, 5), '...'].join(''),
+          label: [obj.name, ' - ', obj.id].join(''),
           value: obj.id
         }
       })
@@ -357,10 +357,9 @@ window.LNbits = {
       }
     },
     prepareFilterQuery(tableConfig, props) {
-      tableConfig.filter = tableConfig.filter || {}
       if (props) {
         tableConfig.pagination = props.pagination
-        Object.assign(tableConfig.filter, props.filter)
+        tableConfig.filter = props.filter
       }
       const pagination = tableConfig.pagination
       tableConfig.loading = true
@@ -843,7 +842,6 @@ window.windowMixin = {
         ? this.$q.localStorage.getItem('lnbits.darkMode')
         : true
     )
-    Chart.defaults.color = this.$q.dark.isActive ? '#fff' : '#000'
     this.changeTheme(this.themeChoice)
     this.applyBorder()
     if (this.$q.dark.isActive) {

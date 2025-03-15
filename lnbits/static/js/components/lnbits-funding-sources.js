@@ -37,8 +37,7 @@ window.app.component('lnbits-funding-sources', {
           'FakeWallet',
           'Fake Wallet',
           {
-            fake_wallet_secret: 'Secret',
-            lnbits_denomination: '"sats" or 3 Letter Custom Denomination'
+            fake_wallet_secret: 'Secret'
           }
         ],
         [

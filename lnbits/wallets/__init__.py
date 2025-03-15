@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from typing import Optional
 
 from lnbits.nodes import set_node_class
 from lnbits.settings import settings
@@ -33,7 +34,7 @@ from .void import VoidWallet
 from .zbd import ZBDWallet
 
 
-def set_funding_source(class_name: str | None = None):
+def set_funding_source(class_name: Optional[str] = None):
     backend_wallet_class = class_name or settings.lnbits_backend_wallet_class
     funding_source_constructor = getattr(wallets_module, backend_wallet_class)
     global funding_source

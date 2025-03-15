@@ -854,9 +854,7 @@ window.WalletPageLogic = {
     handleFilterChange(value = {}) {
       if (
         this.paymentsFilter['time[ge]'] !== value['time[ge]'] ||
-        this.paymentsFilter['time[le]'] !== value['time[le]'] ||
-        this.paymentsFilter['amount[ge]'] !== value['amount[ge]'] ||
-        this.paymentsFilter['amount[le]'] !== value['amount[le]']
+        this.paymentsFilter['time[le]'] !== value['time[le]']
       ) {
         this.refreshCharts()
       }
@@ -886,19 +884,6 @@ window.WalletPageLogic = {
     filterChartData(data) {
       const timeFrom = this.paymentsFilter['time[ge]'] + 'T00:00:00'
       const timeTo = this.paymentsFilter['time[le]'] + 'T23:59:59'
-
-      let totalBalance = 0
-      data = data.map(p => {
-        if (this.paymentsFilter['amount[ge]'] !== undefined) {
-          totalBalance += p.balance_in
-          return {...p, balance: totalBalance, balance_out: 0, count_out: 0}
-        }
-        if (this.paymentsFilter['amount[le]'] !== undefined) {
-          totalBalance -= p.balance_out
-          return {...p, balance: totalBalance, balance_in: 0, count_in: 0}
-        }
-        return {...p}
-      })
       data = data.filter(p => {
         if (
           this.paymentsFilter['time[ge]'] &&
@@ -914,7 +899,6 @@ window.WalletPageLogic = {
         }
         return true
       })
-
       const labels = data.map(s =>
         new Date(s.date).toLocaleString('default', {
           month: 'short',

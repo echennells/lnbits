@@ -81,7 +81,6 @@ async def startup(app: FastAPI):
 
     # setup admin settings
     await check_admin_settings()
-    core_app_extra.register_new_ratelimiter()
     await check_webpush_settings()
 
     # check extensions after restart

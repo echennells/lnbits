@@ -5,6 +5,7 @@ import hmac
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Optional
 
 from ecdsa import SECP256k1, SigningKey
 from pydantic import BaseModel, Field
@@ -36,7 +37,7 @@ class Wallet(BaseModel):
     deleted: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    currency: str | None = None
+    currency: Optional[str] = None
     balance_msat: int = Field(default=0, no_database=True)
     extra: WalletExtra = WalletExtra()
 
@@ -66,7 +67,7 @@ class Wallet(BaseModel):
 
 
 class CreateWallet(BaseModel):
-    name: str | None = None
+    name: Optional[str] = None
 
 
 class KeyType(Enum):

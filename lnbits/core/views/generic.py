@@ -1,4 +1,5 @@
 from http import HTTPStatus
+from pathlib import Path
 from typing import Annotated, List, Optional, Union
 from urllib.parse import urlencode, urlparse
 
@@ -36,7 +37,7 @@ generic_router = APIRouter(
 
 @generic_router.get("/favicon.ico", response_class=FileResponse)
 async def favicon():
-    return RedirectResponse(settings.lnbits_qr_logo)
+    return FileResponse(Path("lnbits", "static", "favicon.ico"))
 
 
 @generic_router.get("/", response_class=HTMLResponse)

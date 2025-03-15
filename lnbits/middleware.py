@@ -134,9 +134,8 @@ class AuditMiddleware(BaseHTTPMiddleware):
             assert response
             return response
         finally:
-            if request_details:
-                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-                await self._log_audit(request, response, duration, request_details)
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+            await self._log_audit(request, response, duration, request_details)
 
     async def _log_audit(
         self,

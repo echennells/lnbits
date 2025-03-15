@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 import jinja2
 import jwt
 import shortuuid
+from fastapi import Request
 from fastapi.routing import APIRoute
 from packaging import version
 from pydantic.schema import field_schema
@@ -224,34 +225,18 @@ def create_access_token(data: dict, token_expire_minutes: Optional[int] = None) 
     return jwt.encode(to_encode, settings.auth_secret_key, "HS256")
 
 
-def encrypt_internal_message(
-    m: Optional[str] = None, urlsafe: bool = False
-) -> Optional[str]:
-    """
-    Encrypt message with the internal secret key
-
-    Args:
-        m: Message to encrypt
-        urlsafe: Whether to use URL-safe base64 encoding
-    """
+def encrypt_internal_message(m: Optional[str] = None) -> Optional[str]:
+    """Encrypt message with the internal secret key"""
     if not m:
         return None
-    return AESCipher(key=settings.auth_secret_key).encrypt(m.encode(), urlsafe=urlsafe)
+    return AESCipher(key=settings.auth_secret_key).encrypt(m.encode())
 
 
-def decrypt_internal_message(
-    m: Optional[str] = None, urlsafe: bool = False
-) -> Optional[str]:
-    """
-    Decrypt message with the internal secret key
-
-    Args:
-        m: Message to decrypt
-        urlsafe: Whether the message uses URL-safe base64 encoding
-    """
+def decrypt_internal_message(m: Optional[str] = None) -> Optional[str]:
+    """Decrypt message with the internal secret key"""
     if not m:
         return None
-    return AESCipher(key=settings.auth_secret_key).decrypt(m, urlsafe=urlsafe)
+    return AESCipher(key=settings.auth_secret_key).decrypt(m)
 
 
 def filter_dict_keys(data: dict, filter_keys: Optional[list[str]]) -> dict:
@@ -343,3 +328,7 @@ def path_segments(path: str) -> list[str]:
 def normalize_path(path: Optional[str]) -> str:
     path = path or ""
     return "/" + "/".join(path_segments(path))
+
+
+def normalized_path(request: Request) -> str:
+    return "/" + "/".join(path_segments(request.url.path))

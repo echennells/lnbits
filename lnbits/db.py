@@ -8,7 +8,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Generic, Literal, TypeVar, get_origin
+from typing import Any, Generic, Literal, Optional, TypeVar, Union, get_origin
 
 from loguru import logger
 from pydantic import BaseModel, ValidationError, root_validator
@@ -65,8 +65,8 @@ def get_placeholder(model: Any, field: str) -> str:
 
 
 class Compat:
-    type: str | None = "<inherited>"
-    schema: str | None = "<inherited>"
+    type: Optional[str] = "<inherited>"
+    schema: Optional[str] = "<inherited>"
 
     def interval_seconds(self, seconds: int) -> str:
         if self.type in {POSTGRES, COCKROACH}:
@@ -167,8 +167,8 @@ class Connection(Compat):
     async def fetchall(
         self,
         query: str,
-        values: dict | None = None,
-        model: type[TModel] | None = None,
+        values: Optional[dict] = None,
+        model: Optional[type[TModel]] = None,
     ) -> list[TModel]:
         params = self.rewrite_values(values) if values else {}
         result = await self.conn.execute(text(self.rewrite_query(query)), params)
@@ -183,8 +183,8 @@ class Connection(Compat):
     async def fetchone(
         self,
         query: str,
-        values: dict | None = None,
-        model: type[TModel] | None = None,
+        values: Optional[dict] = None,
+        model: Optional[type[TModel]] = None,
     ) -> TModel:
         params = self.rewrite_values(values) if values else {}
         result = await self.conn.execute(text(self.rewrite_query(query)), params)
@@ -211,11 +211,11 @@ class Connection(Compat):
     async def fetch_page(
         self,
         query: str,
-        where: list[str] | None = None,
-        values: dict | None = None,
-        filters: Filters | None = None,
-        model: type[TModel] | None = None,
-        group_by: list[str] | None = None,
+        where: Optional[list[str]] = None,
+        values: Optional[dict] = None,
+        filters: Optional[Filters] = None,
+        model: Optional[type[TModel]] = None,
+        group_by: Optional[list[str]] = None,
     ) -> Page[TModel]:
         if not filters:
             filters = Filters()
@@ -268,7 +268,7 @@ class Connection(Compat):
             total=count,
         )
 
-    async def execute(self, query: str, values: dict | None = None):
+    async def execute(self, query: str, values: Optional[dict] = None):
         params = self.rewrite_values(values) if values else {}
         result = await self.conn.execute(text(self.rewrite_query(query)), params)
         await self.conn.commit()
@@ -350,8 +350,8 @@ class Database(Compat):
     async def fetchall(
         self,
         query: str,
-        values: dict | None = None,
-        model: type[TModel] | None = None,
+        values: Optional[dict] = None,
+        model: Optional[type[TModel]] = None,
     ) -> list[TModel]:
         async with self.connect() as conn:
             return await conn.fetchall(query, values, model)
@@ -359,8 +359,8 @@ class Database(Compat):
     async def fetchone(
         self,
         query: str,
-        values: dict | None = None,
-        model: type[TModel] | None = None,
+        values: Optional[dict] = None,
+        model: Optional[type[TModel]] = None,
     ) -> TModel:
         async with self.connect() as conn:
             return await conn.fetchone(query, values, model)
@@ -378,16 +378,16 @@ class Database(Compat):
     async def fetch_page(
         self,
         query: str,
-        where: list[str] | None = None,
-        values: dict | None = None,
-        filters: Filters | None = None,
-        model: type[TModel] | None = None,
-        group_by: list[str] | None = None,
+        where: Optional[list[str]] = None,
+        values: Optional[dict] = None,
+        filters: Optional[Filters] = None,
+        model: Optional[type[TModel]] = None,
+        group_by: Optional[list[str]] = None,
     ) -> Page[TModel]:
         async with self.connect() as conn:
             return await conn.fetch_page(query, where, values, filters, model, group_by)
 
-    async def execute(self, query: str, values: dict | None = None):
+    async def execute(self, query: str, values: Optional[dict] = None):
         async with self.connect() as conn:
             return await conn.execute(query, values)
 
@@ -445,7 +445,7 @@ class Operator(Enum):
 
 class FilterModel(BaseModel):
     __search_fields__: list[str] = []
-    __sort_fields__: list[str] | None = None
+    __sort_fields__: Optional[list[str]] = None
 
 
 T = TypeVar("T")
@@ -461,8 +461,8 @@ class Page(BaseModel, Generic[T]):
 class Filter(BaseModel, Generic[TFilterModel]):
     field: str
     op: Operator = Operator.EQ
-    model: type[TFilterModel] | None
-    values: dict | None = None
+    model: Optional[type[TFilterModel]]
+    values: Optional[dict] = None
 
     @classmethod
     def parse_query(
@@ -517,15 +517,15 @@ class Filters(BaseModel, Generic[TFilterModel]):
     """
 
     filters: list[Filter[TFilterModel]] = []
-    search: str | None = None
+    search: Optional[str] = None
 
-    offset: int | None = None
-    limit: int | None = None
+    offset: Optional[int] = None
+    limit: Optional[int] = None
 
-    sortby: str | None = None
-    direction: Literal["asc", "desc"] | None = None
+    sortby: Optional[str] = None
+    direction: Optional[Literal["asc", "desc"]] = None
 
-    model: type[TFilterModel] | None = None
+    model: Optional[type[TFilterModel]] = None
 
     @root_validator(pre=True)
     def validate_sortby(cls, values):
@@ -547,7 +547,7 @@ class Filters(BaseModel, Generic[TFilterModel]):
             stmt += f"OFFSET {self.offset}"
         return stmt
 
-    def where(self, where_stmts: list[str] | None = None) -> str:
+    def where(self, where_stmts: Optional[list[str]] = None) -> str:
         if not where_stmts:
             where_stmts = []
         if self.filters:
@@ -567,7 +567,7 @@ class Filters(BaseModel, Generic[TFilterModel]):
             return f"ORDER BY {self.sortby} {self.direction or 'asc'}"
         return ""
 
-    def values(self, values: dict | None = None) -> dict:
+    def values(self, values: Optional[dict] = None) -> dict:
         if not values:
             values = {}
         if self.filters:
@@ -641,7 +641,7 @@ def model_to_dict(model: BaseModel) -> dict:
     return _dict
 
 
-def dict_to_submodel(model: type[TModel], value: dict | str) -> TModel | None:
+def dict_to_submodel(model: type[TModel], value: Union[dict, str]) -> Optional[TModel]:
     """convert a dictionary or JSON string to a Pydantic model"""
     if isinstance(value, str):
         if value == "null":

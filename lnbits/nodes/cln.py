@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from http import HTTPStatus
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import HTTPException
 
@@ -119,8 +119,8 @@ class CoreLightningNode(Node):
         self,
         peer_id: str,
         local_amount: int,
-        push_amount: int | None = None,
-        fee_rate: int | None = None,
+        push_amount: Optional[int] = None,
+        fee_rate: Optional[int] = None,
     ) -> ChannelPoint:
         try:
             result = await self.ln_rpc(
@@ -173,8 +173,8 @@ class CoreLightningNode(Node):
     @catch_rpc_errors
     async def close_channel(
         self,
-        short_id: str | None = None,
-        point: ChannelPoint | None = None,
+        short_id: Optional[str] = None,
+        point: Optional[ChannelPoint] = None,
         force: bool = False,
     ):
         if not short_id:
@@ -229,7 +229,7 @@ class CoreLightningNode(Node):
         await self.ln_rpc("setchannel", channel_id, feebase=base_msat, feeppm=ppm)
 
     @catch_rpc_errors
-    async def get_channel(self, channel_id: str) -> NodeChannel | None:
+    async def get_channel(self, channel_id: str) -> Optional[NodeChannel]:
         channels = await self.get_channels()
         for channel in channels:
             if channel.id == channel_id:
