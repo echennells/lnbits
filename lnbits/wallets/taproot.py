@@ -91,30 +91,24 @@ class TaprootAssetsWallet(Wallet):
         """
         # Extract asset_id from kwargs
         asset_id = kwargs.get("asset_id")
-        print(f"DEBUG:taproot:TaprootAssetsWallet.create_invoice called with amount={amount}, memo={memo}, asset_id={asset_id}")
-        print(f"DEBUG:taproot:kwargs: {kwargs}")
         
         if not asset_id:
-            print(f"DEBUG:taproot:Missing asset_id parameter in create_invoice")
+            logger.warning("Missing asset_id parameter in create_invoice")
             return InvoiceResponse(False, None, None, "Missing asset_id parameter", None)
         
         try:
             # Create a node instance
-            print(f"DEBUG:taproot:Creating TaprootAssetsNode instance")
             node = self.__node_cls__(wallet=self)
             
             # Create the invoice
-            print(f"DEBUG:taproot:Calling node.create_asset_invoice with asset_id={asset_id}, asset_amount={amount}")
             try:
                 invoice_result = await node.create_asset_invoice(
                     memo=memo or "Taproot Asset Transfer",
                     asset_id=asset_id,
                     asset_amount=amount
                 )
-                print(f"DEBUG:taproot:create_asset_invoice returned: {invoice_result}")
             except Exception as e:
-                print(f"DEBUG:taproot:Error in node.create_asset_invoice: {e}")
-                print(f"DEBUG:taproot:Error type: {type(e)}")
+                logger.warning(f"Error in node.create_asset_invoice: {e}")
                 raise
             
             await node.close()
@@ -122,34 +116,6 @@ class TaprootAssetsWallet(Wallet):
             # Extract the payment hash and payment request
             payment_hash = invoice_result["invoice_result"]["r_hash"]
             payment_request = invoice_result["invoice_result"]["payment_request"]
-            
-            # Log the invoice_result for debugging
-            print(f"DEBUG:taproot:invoice_result: {invoice_result}")
-            
-            # Check if accepted_buy_quote is present and not empty
-            if invoice_result.get("accepted_buy_quote") and invoice_result["accepted_buy_quote"]:
-                print(f"DEBUG:taproot:Got non-empty accepted_buy_quote: {invoice_result['accepted_buy_quote']}")
-            else:
-                print(f"DEBUG:taproot:accepted_buy_quote is empty or missing")
-                
-                # Try to get the accepted_buy_quote directly from the response
-                # This is a workaround in case the accepted_buy_quote is not being properly
-                # extracted in the tapd.py file
-                print(f"DEBUG:taproot:Attempting to get accepted_buy_quote directly from the response")
-                
-                # Create a node instance to query RFQ offers
-                try:
-                    rfq_node = self.__node_cls__(wallet=self)
-                    
-                    # Query RFQ offers for this asset
-                    print(f"DEBUG:taproot:Querying RFQ offers for asset: {asset_id}")
-                    
-                    # TODO: Add code to query RFQ offers directly
-                    # This would require adding a method to the TaprootAssetsNode class
-                    
-                    await rfq_node.close()
-                except Exception as e:
-                    print(f"DEBUG:taproot:Error querying RFQ offers: {e}")
             
             # Helper function to ensure all values are JSON serializable
             def ensure_serializable(obj):
@@ -182,16 +148,12 @@ class TaprootAssetsWallet(Wallet):
                     # Ensure the buy_quote is fully serializable
                     serializable_buy_quote = ensure_serializable(invoice_result["accepted_buy_quote"])
                     extra["buy_quote"] = serializable_buy_quote
-                    print(f"DEBUG:taproot:Added buy_quote to extra data: {serializable_buy_quote}")
-                else:
-                    print(f"DEBUG:taproot:Not adding empty buy_quote to extra data: {invoice_result['accepted_buy_quote']}")
             
-            # Log the invoice details for debugging
-            print(f"DEBUG:taproot:Created Taproot Asset invoice: asset_id={asset_id}, amount={amount}, payment_hash={payment_hash}")
+            logger.debug(f"Created Taproot Asset invoice: asset_id={asset_id}, amount={amount}")
             
             return InvoiceResponse(True, payment_hash, payment_request, None, extra)
         except Exception as exc:
-            print(f"DEBUG:taproot:Error creating Taproot Asset invoice: {exc}")
+            logger.warning(f"Error creating Taproot Asset invoice: {exc}")
             return InvoiceResponse(False, None, None, str(exc), None)
 
     async def pay_invoice(

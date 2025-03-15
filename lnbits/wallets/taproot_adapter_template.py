@@ -25,10 +25,6 @@ def create_taprootassets_client(channel):
     """Create a TaprootAssets service client."""
     return taprootassets_pb2_grpc.TaprootAssetsStub(channel)
 
-def create_rfq_client(channel):
-    """Create an RFQ service client."""
-    return rfq_pb2_grpc.RfqStub(channel)
-
 def create_tapchannel_client(channel):
     """Create a TapChannel service client."""
     return tapchannel_pb2_grpc.TapchannelStub(channel)

@@ -132,16 +132,16 @@ async def create_invoice(
         # Check if we already have a payment_request and payment_hash in extra
         # This means we're using a pre-generated invoice from tapd
         if extra.get("payment_request") and extra.get("payment_hash"):
-            print(f"DEBUG:payments:Using pre-generated invoice for Taproot asset: {extra.get('payment_request')}")
+            logger.debug(f"Using pre-generated invoice for Taproot asset: {extra.get('payment_request')}")
             # Parse the original BOLT11 invoice to get the correct satoshi amount
             from lnbits import bolt11
             try:
                 decoded_invoice = bolt11.decode(extra["payment_request"])
                 satoshi_amount_msat = decoded_invoice.amount_msat
                 amount_sat = satoshi_amount_msat // 1000 if satoshi_amount_msat is not None else amount_sat
-                print(f"DEBUG:payments:Decoded pre-generated invoice, satoshi_amount={amount_sat} sats ({satoshi_amount_msat} msats)")
+                logger.debug(f"Decoded pre-generated invoice, satoshi_amount={amount_sat} sats ({satoshi_amount_msat} msats)")
             except Exception as e:
-                print(f"DEBUG:payments:Error decoding pre-generated invoice: {e}")
+                logger.warning(f"Error decoding pre-generated invoice: {e}")
                 # Keep the original amount_sat if decoding fails
     else:
         # Normal flow for sats or fiat currencies
@@ -160,7 +160,7 @@ async def create_invoice(
 
     # For Taproot assets, check if we already have a payment_request and payment_hash
     if extra and extra.get("type") == "taproot_asset" and extra.get("payment_request") and extra.get("payment_hash"):
-        print(f"DEBUG:payments:Using pre-generated invoice for Taproot asset: {extra.get('payment_request')}")
+        logger.debug(f"Using pre-generated invoice for Taproot asset: {extra.get('payment_request')}")
         ok = True
         payment_request = extra.get("payment_request")
         checking_id = extra.get("payment_hash")

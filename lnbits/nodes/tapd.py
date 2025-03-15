@@ -198,7 +198,6 @@ class TaprootAssetsNode:
                         try:
                             # Decode the custom_channel_data as UTF-8 JSON
                             asset_data = json.loads(channel.custom_channel_data.decode('utf-8'))
-                            print(f"DEBUG:tapd:Taproot Assets for Chan ID {channel.chan_id}: {asset_data}")
                             
                             # Process each asset in the channel
                             for asset in asset_data.get("assets", []):
@@ -234,19 +233,14 @@ class TaprootAssetsNode:
                                 # Add to channel assets if it has an asset_id
                                 if asset_info["asset_id"]:
                                     channel_assets.append(asset_info)
-                                    print(f"DEBUG:tapd:Added asset {asset_info['asset_id']} to channel {channel.channel_point}")
                         except Exception as e:
-                            print(f"DEBUG:tapd:Failed to decode custom_channel_data for Chan ID {channel.chan_id}: {e}")
-                    else:
-                        print(f"DEBUG:tapd:Chan ID {channel.chan_id} has no Taproot assets")
+                            logger.debug(f"Failed to decode custom_channel_data for Chan ID {channel.chan_id}: {e}")
                 except Exception as e:
-                    print(f"DEBUG:tapd:Error processing channel {channel.channel_point}: {e}")
+                    logger.debug(f"Error processing channel {channel.channel_point}: {e}")
                     continue
-            
-            print(f"DEBUG:tapd:Returning {len(channel_assets)} channel assets")
             return channel_assets
         except Exception as e:
-            print(f"DEBUG:tapd:Error in list_channel_assets: {e}")
+            logger.debug(f"Error in list_channel_assets: {e}")
             raise Exception(f"Failed to list channel assets: {str(e)}")
             
     async def create_asset_invoice(self, memo: str, asset_id: str, asset_amount: int) -> Dict[str, Any]:
@@ -266,53 +260,23 @@ class TaprootAssetsNode:
             Dict containing the invoice information with accepted_buy_quote and invoice_result
         """
         try:
-            # First, check if there are any buy offers for this asset
-            print(f"DEBUG:tapd:Checking RFQ offers for asset: {asset_id}")
-            
             # Create RFQ client
             rfq_stub = rfq_pb2_grpc.RfqStub(self.channel)
             
             # Query peer accepted quotes
             try:
-                print(f"DEBUG:tapd:Creating QueryPeerAcceptedQuotesRequest")
                 rfq_request = rfq_pb2.QueryPeerAcceptedQuotesRequest()
-                print(f"DEBUG:tapd:QueryPeerAcceptedQuotesRequest created: {rfq_request}")
-                print(f"DEBUG:tapd:rfq_stub type: {type(rfq_stub)}")
-                print(f"DEBUG:tapd:rfq_stub methods: {dir(rfq_stub)}")
-                
-                print(f"DEBUG:tapd:Calling QueryPeerAcceptedQuotes")
                 rfq_response = await rfq_stub.QueryPeerAcceptedQuotes(rfq_request, timeout=10)
-                print(f"DEBUG:tapd:QueryPeerAcceptedQuotes response type: {type(rfq_response)}")
-                print(f"DEBUG:tapd:QueryPeerAcceptedQuotes response attributes: {dir(rfq_response)}")
-                print(f"DEBUG:tapd:Found {len(rfq_response.buy_quotes)} buy quotes and {len(rfq_response.sell_quotes)} sell quotes")
                 
-                # Log buy quotes
-                for i, quote in enumerate(rfq_response.buy_quotes):
-                    print(f"DEBUG:tapd:Buy Quote {i+1}:")
-                    print(f"DEBUG:tapd:  Quote type: {type(quote)}")
-                    print(f"DEBUG:tapd:  Quote attributes: {dir(quote)}")
-                    print(f"DEBUG:tapd:  Peer: {quote.peer}")
-                    print(f"DEBUG:tapd:  SCID: {quote.scid}")
-                    print(f"DEBUG:tapd:  Asset Max Amount: {quote.asset_max_amount}")
-                    
-                    # Check if the quote has an asset_id field
+                # Process buy quotes if needed
+                for quote in rfq_response.buy_quotes:
                     if hasattr(quote, 'asset_id'):
                         quote_asset_id = quote.asset_id.hex() if isinstance(quote.asset_id, bytes) else quote.asset_id
-                        print(f"DEBUG:tapd:  Asset ID: {quote_asset_id}")
                         # Check if this quote is for the requested asset
                         if quote_asset_id == asset_id:
-                            print(f"DEBUG:tapd:  This quote is for the requested asset: {asset_id}")
-                    
-                    if hasattr(quote, 'ask_asset_rate'):
-                        print(f"DEBUG:tapd:  Ask Asset Rate: {quote.ask_asset_rate.coefficient} (scale: {quote.ask_asset_rate.scale})")
-                
-                # Note: QueryAssetQuotesRequest is not available in the current protobuf definitions
-                # We'll rely on the AddInvoice method to find a buy quote for this asset
-                print(f"DEBUG:tapd:QueryAssetQuotesRequest is not available in the current protobuf definitions")
-                print(f"DEBUG:tapd:We'll rely on the AddInvoice method to find a buy quote for this asset")
+                            logger.debug(f"Found buy quote for asset: {asset_id}")
             except Exception as e:
-                print(f"DEBUG:tapd:Error querying RFQ service: {e}")
-                print(f"DEBUG:tapd:Error type: {type(e)}")
+                logger.debug(f"Error querying RFQ service: {e}")
             
             # Convert asset_id from hex to bytes if needed
             asset_id_bytes = bytes.fromhex(asset_id) if isinstance(asset_id, str) else asset_id
@@ -325,39 +289,18 @@ class TaprootAssetsNode:
             )
             
             # Create the AddInvoiceRequest using the tapchannel_pb2 definition
-            # This is the correct way to create an asset invoice
             try:
-                print(f"DEBUG:tapd:Creating AddInvoiceRequest with asset_id={asset_id}, asset_amount={asset_amount}")
-                print(f"DEBUG:tapd:asset_id_bytes type: {type(asset_id_bytes)}, length: {len(asset_id_bytes)}")
-                print(f"DEBUG:tapd:invoice type: {type(invoice)}")
-                print(f"DEBUG:tapd:invoice attributes: {dir(invoice)}")
-                
                 request = tapchannel_pb2.AddInvoiceRequest(
                     asset_id=asset_id_bytes,
                     asset_amount=asset_amount,
                     invoice_request=invoice
                 )
                 
-                # Debug the request
-                print(f"DEBUG:tapd:AddInvoiceRequest created successfully")
-                print(f"DEBUG:tapd:AddInvoiceRequest type: {type(request)}")
-                print(f"DEBUG:tapd:AddInvoiceRequest attributes: {dir(request)}")
-                
                 # Call the TaprootAssetChannels AddInvoice method
-                print(f"DEBUG:tapd:Calling TaprootAssetChannels.AddInvoice with asset_id={asset_id}, asset_amount={asset_amount}")
-                print(f"DEBUG:tapd:tapchannel_stub type: {type(self.tapchannel_stub)}")
-                print(f"DEBUG:tapd:tapchannel_stub methods: {dir(self.tapchannel_stub)}")
-                
                 response = await self.tapchannel_stub.AddInvoice(request, timeout=30)
-                print(f"DEBUG:tapd:AddInvoice call successful")
             except Exception as e:
-                print(f"DEBUG:tapd:Error creating or sending AddInvoiceRequest: {e}")
-                print(f"DEBUG:tapd:Error type: {type(e)}")
+                logger.debug(f"Error creating or sending AddInvoiceRequest: {e}")
                 raise
-            
-            # Debug response
-            print(f"DEBUG:tapd:AddInvoice response type: {type(response)}")
-            print(f"DEBUG:tapd:AddInvoice response attributes: {dir(response)}")
             
             # Extract the payment hash and payment request from the invoice_result
             # The AddInvoiceResponse has two fields: accepted_buy_quote and invoice_result
@@ -412,24 +355,16 @@ class TaprootAssetsNode:
             
             # Convert the accepted_buy_quote to a dictionary
             accepted_buy_quote = None
-            print(f"DEBUG:tapd:Checking for accepted_buy_quote in response")
-            print(f"DEBUG:tapd:Response has accepted_buy_quote attribute: {hasattr(response, 'accepted_buy_quote')}")
             
             if hasattr(response, 'accepted_buy_quote') and response.accepted_buy_quote:
-                print(f"DEBUG:tapd:accepted_buy_quote value: {response.accepted_buy_quote}")
-                print(f"DEBUG:tapd:accepted_buy_quote type: {type(response.accepted_buy_quote)}")
-                
                 try:
                     # Convert the protobuf message to a dictionary using our helper function
                     accepted_buy_quote = protobuf_to_dict(response.accepted_buy_quote)
-                    print(f"DEBUG:tapd:Got accepted_buy_quote from response: {accepted_buy_quote}")
                 except Exception as e:
-                    print(f"DEBUG:tapd:Error converting accepted_buy_quote to dictionary: {e}")
-                    print(f"DEBUG:tapd:Error type: {type(e)}")
+                    logger.debug(f"Error converting accepted_buy_quote to dictionary: {e}")
                     # Provide a fallback empty dict if conversion fails
                     accepted_buy_quote = {}
             else:
-                print(f"DEBUG:tapd:accepted_buy_quote is empty or None")
                 accepted_buy_quote = {}
             
             # Return the invoice information in the format expected by the client

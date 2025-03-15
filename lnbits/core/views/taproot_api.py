@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Optional
 from http import HTTPStatus
 from pydantic import BaseModel
+from loguru import logger
 
 from lnbits.decorators import require_admin_key
 from lnbits.core.models import WalletTypeInfo, Payment, CreateInvoice
@@ -73,7 +74,7 @@ async def create_taproot_invoice(
 ):
     """Create an invoice for a Taproot Asset."""
     try:
-        print(f"DEBUG:taproot_api:Creating Taproot Asset invoice for asset_id={data.asset_id}, amount={data.amount}")
+        logger.debug(f"Creating Taproot Asset invoice for asset_id={data.asset_id}, amount={data.amount}")
         
         # Create a TaprootAssetsWallet instance
         taproot_wallet = TaprootAssetsWallet()
@@ -94,8 +95,8 @@ async def create_taproot_invoice(
             original_payment_request = invoice_response.payment_request
             original_payment_hash = invoice_response.checking_id  # The payment_hash is stored in the checking_id field
             
-            print(f"DEBUG:taproot_api:Got original payment_request from tapd: {original_payment_request}")
-            print(f"DEBUG:taproot_api:Got original payment_hash from tapd: {original_payment_hash}")
+            logger.debug(f"Got original payment_request from tapd: {original_payment_request}")
+            logger.debug(f"Got original payment_hash from tapd: {original_payment_hash}")
             
             # Extract buy_quote if it exists
             buy_quote = {}
@@ -108,9 +109,9 @@ async def create_taproot_invoice(
                 decoded_invoice = bolt11.decode(original_payment_request)
                 satoshi_amount_msat = decoded_invoice.amount_msat
                 satoshi_amount = satoshi_amount_msat // 1000 if satoshi_amount_msat is not None else 0
-                print(f"DEBUG:taproot_api:Decoded original invoice, satoshi_amount={satoshi_amount} sats ({satoshi_amount_msat} msats)")
+                logger.debug(f"Decoded original invoice, satoshi_amount={satoshi_amount} sats ({satoshi_amount_msat} msats)")
             except Exception as e:
-                print(f"DEBUG:taproot_api:Error decoding original invoice: {e}")
+                logger.warning(f"Error decoding original invoice: {e}")
                 satoshi_amount = data.amount  # Fallback to asset amount if decoding fails
                 satoshi_amount_msat = data.amount * 1000
             
@@ -133,12 +134,10 @@ async def create_taproot_invoice(
                 expiry=data.expiry
             )
             
-            print(f"DEBUG:taproot_api:Payment created successfully: payment_hash={payment.payment_hash}")
-            print(f"DEBUG:taproot_api:Payment object: {payment}")
-            print(f"DEBUG:taproot_api:Payment extra data: {payment.extra}")
+            logger.debug(f"Payment created successfully: payment_hash={payment.payment_hash}")
+            logger.debug(f"Payment extra data: {payment.extra}")
         except Exception as e:
-            print(f"DEBUG:taproot_api:Error creating invoice: {e}")
-            print(f"DEBUG:taproot_api:Error type: {type(e)}")
+            logger.error(f"Error creating invoice: {e}")
             raise
         
         # Helper function to ensure all values are JSON serializable
@@ -166,14 +165,7 @@ async def create_taproot_invoice(
             # Ensure it's a serializable dict
             accepted_buy_quote = ensure_serializable(accepted_buy_quote)
             
-            print(f"DEBUG:taproot_api:Payment extra data: {payment.extra}")
-            print(f"DEBUG:taproot_api:Extracted accepted_buy_quote: {accepted_buy_quote}")
-            
-            # Check if we have a buy_quote in the extra data
-            if "buy_quote" in payment.extra:
-                print(f"DEBUG:taproot_api:buy_quote is present in extra data")
-            else:
-                print(f"DEBUG:taproot_api:buy_quote is NOT present in extra data")
+            logger.debug(f"Extracted accepted_buy_quote: {accepted_buy_quote}")
             
             # Create a response with all serializable values
             response_data = ensure_serializable({
@@ -186,7 +178,7 @@ async def create_taproot_invoice(
                 "checking_id": payment.checking_id
             })
         except Exception as e:
-            print(f"DEBUG:taproot_api:Error processing accepted_buy_quote: {e}")
+            logger.warning(f"Error processing accepted_buy_quote: {e}")
             # Fallback to a simpler response without the problematic field
             response_data = {
                 "payment_hash": payment.payment_hash,
@@ -197,7 +189,7 @@ async def create_taproot_invoice(
                 "checking_id": payment.checking_id
             }
         
-        print(f"DEBUG:taproot_api:Returning response: {response_data}")
+        logger.debug(f"Returning response: {response_data}")
         return response_data
     except Exception as e:
         raise HTTPException(
