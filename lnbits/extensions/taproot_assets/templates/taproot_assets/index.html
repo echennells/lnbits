@@ -1,0 +1,640 @@
+{% extends "base.html" %} 
+{% from "macros.jinja" import window_vars with context %}
+
+{% block page %}
+<div class="row q-col-gutter-md">
+  <div class="col-12 col-md-8 col-lg-7 q-gutter-y-md">
+    <q-card>
+      <q-card-section>
+        <div class="row items-center no-wrap q-mb-md">
+          <div class="col">
+            <h5 class="text-subtitle1 q-my-none">Taproot Assets</h5>
+          </div>
+          <div class="col-auto">
+            <q-btn flat color="grey" @click="exportCSV" icon="file_download">
+              Export to CSV
+            </q-btn>
+          </div>
+        </div>
+        <q-table
+          dense
+          flat
+          :data="assets"
+          :columns="assetsTable.columns"
+          :pagination.sync="assetsTable.pagination"
+          :loading="assetsTable.loading"
+          row-key="id"
+        >
+          <template v-slot:header="props">
+            <q-tr :props="props">
+              <q-th auto-width></q-th>
+              <q-th v-for="col in props.cols" :key="col.name" :props="props">
+                [[ col.label ]]
+              </q-th>
+              <q-th auto-width></q-th>
+            </q-tr>
+          </template>
+
+          <template v-slot:body="props">
+            <q-tr :props="props">
+              <q-td auto-width>
+                <q-btn
+                  unelevated
+                  dense
+                  size="xs"
+                  icon="send"
+                  :color="($q.dark.isActive) ? 'grey-7' : 'grey-5'"
+                  @click="sendAsset(props.row)"
+                  class="q-ml-xs"
+                >
+                  <q-tooltip>Send Asset</q-tooltip>
+                </q-btn>
+              </q-td>
+              <q-td v-for="col in props.cols" :key="col.name" :props="props">
+                [[ col.value ]]
+              </q-td>
+              <q-td auto-width>
+                <q-btn
+                  flat
+                  dense
+                  size="xs"
+                  @click="showAssetDetails(props.row)"
+                  icon="info"
+                  color="grey"
+                >
+                  <q-tooltip>View Details</q-tooltip>
+                </q-btn>
+              </q-td>
+            </q-tr>
+          </template>
+        </q-table>
+      </q-card-section>
+    </q-card>
+
+    <q-card>
+      <q-card-section>
+        <div class="row items-center no-wrap q-mb-md">
+          <div class="col">
+            <h5 class="text-subtitle1 q-my-none">Invoices</h5>
+          </div>
+          <div class="col-auto">
+            <q-btn flat color="grey" @click="exportInvoicesCSV" icon="file_download">
+              Export to CSV
+            </q-btn>
+          </div>
+        </div>
+        <q-table
+          dense
+          flat
+          :data="invoices"
+          :columns="invoicesTable.columns"
+          :pagination.sync="invoicesTable.pagination"
+          :loading="invoicesTable.loading"
+          row-key="id"
+        >
+          <template v-slot:header="props">
+            <q-tr :props="props">
+              <q-th auto-width></q-th>
+              <q-th v-for="col in props.cols" :key="col.name" :props="props">
+                [[ col.label ]]
+              </q-th>
+              <q-th auto-width></q-th>
+            </q-tr>
+          </template>
+
+          <template v-slot:body="props">
+            <q-tr :props="props">
+              <q-td auto-width>
+                <q-btn
+                  unelevated
+                  dense
+                  size="xs"
+                  icon="content_copy"
+                  :color="($q.dark.isActive) ? 'grey-7' : 'grey-5'"
+                  @click="copyInvoice(props.row)"
+                  class="q-ml-xs"
+                >
+                  <q-tooltip>Copy Invoice</q-tooltip>
+                </q-btn>
+              </q-td>
+              <q-td v-for="col in props.cols" :key="col.name" :props="props">
+                [[ col.value ]]
+              </q-td>
+              <q-td auto-width>
+                <q-btn
+                  flat
+                  dense
+                  size="xs"
+                  @click="showInvoiceDetails(props.row)"
+                  icon="info"
+                  color="grey"
+                >
+                  <q-tooltip>View Details</q-tooltip>
+                </q-btn>
+              </q-td>
+            </q-tr>
+          </template>
+        </q-table>
+      </q-card-section>
+    </q-card>
+  </div>
+
+  <div class="col-12 col-md-4 col-lg-5 q-gutter-y-md">
+    <q-card>
+      <q-card-section>
+        <h5 class="text-subtitle1 q-my-none">Create Invoice</h5>
+      </q-card-section>
+      <q-card-section>
+        <q-form @submit="createInvoice" class="q-gutter-md">
+          <q-select
+            filled
+            v-model="createInvoiceForm.asset"
+            :options="assetOptions"
+            label="Asset *"
+            :rules="[val => !!val || 'Asset is required']"
+          />
+          <q-input
+            filled
+            v-model.number="createInvoiceForm.amount"
+            type="number"
+            label="Amount *"
+            :rules="[val => val > 0 || 'Amount must be greater than 0']"
+          />
+          <q-input
+            filled
+            v-model="createInvoiceForm.memo"
+            label="Memo"
+          />
+          <q-input
+            filled
+            v-model.number="createInvoiceForm.expiry"
+            type="number"
+            label="Expiry (seconds)"
+            hint="Default: 3600 (1 hour)"
+          />
+          <div>
+            <q-btn
+              unelevated
+              color="primary"
+              type="submit"
+              :disable="createInvoiceForm.loading"
+            >
+              Create Invoice
+              <q-spinner v-if="createInvoiceForm.loading" class="q-ml-sm" />
+            </q-btn>
+          </div>
+        </q-form>
+      </q-card-section>
+    </q-card>
+
+    <q-card>
+      <q-card-section>
+        <h5 class="text-subtitle1 q-my-none">Send Asset</h5>
+      </q-card-section>
+      <q-card-section>
+        <q-form @submit="sendAssetSubmit" class="q-gutter-md">
+          <q-select
+            filled
+            v-model="sendAssetForm.asset"
+            :options="assetOptions"
+            label="Asset *"
+            :rules="[val => !!val || 'Asset is required']"
+          />
+          <q-input
+            filled
+            v-model.number="sendAssetForm.amount"
+            type="number"
+            label="Amount *"
+            :rules="[val => val > 0 || 'Amount must be greater than 0']"
+          />
+          <q-input
+            filled
+            v-model="sendAssetForm.invoice"
+            label="Invoice *"
+            :rules="[val => !!val || 'Invoice is required']"
+          />
+          <div>
+            <q-btn
+              unelevated
+              color="primary"
+              type="submit"
+              :disable="sendAssetForm.loading"
+            >
+              Send Asset
+              <q-spinner v-if="sendAssetForm.loading" class="q-ml-sm" />
+            </q-btn>
+          </div>
+        </q-form>
+      </q-card-section>
+    </q-card>
+  </div>
+</div>
+
+<!-- Asset Details Modal -->
+<q-dialog v-model="assetDetailsDialog.show">
+  <q-card style="min-width: 400px">
+    <q-card-section>
+      <div class="text-h6">Asset Details</div>
+    </q-card-section>
+    <q-card-section v-if="assetDetailsDialog.data">
+      <q-list>
+        <q-item>
+          <q-item-section>
+            <q-item-label caption>Name</q-item-label>
+            <q-item-label>[[ assetDetailsDialog.data.name ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item>
+          <q-item-section>
+            <q-item-label caption>Asset ID</q-item-label>
+            <q-item-label class="text-wrap">[[ assetDetailsDialog.data.asset_id ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item>
+          <q-item-section>
+            <q-item-label caption>Type</q-item-label>
+            <q-item-label>[[ assetDetailsDialog.data.type ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item>
+          <q-item-section>
+            <q-item-label caption>Amount</q-item-label>
+            <q-item-label>[[ assetDetailsDialog.data.amount ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item>
+          <q-item-section>
+            <q-item-label caption>Genesis Point</q-item-label>
+            <q-item-label class="text-wrap">[[ assetDetailsDialog.data.genesis_point ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item v-if="assetDetailsDialog.data.channel_info">
+          <q-item-section>
+            <q-item-label caption>Channel Info</q-item-label>
+            <q-item-label class="text-wrap">[[ JSON.stringify(assetDetailsDialog.data.channel_info, null, 2) ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+      </q-list>
+    </q-card-section>
+    <q-card-actions align="right">
+      <q-btn flat label="Close" color="primary" v-close-popup />
+    </q-card-actions>
+  </q-card>
+</q-dialog>
+
+<!-- Invoice Details Modal -->
+<q-dialog v-model="invoiceDetailsDialog.show">
+  <q-card style="min-width: 400px">
+    <q-card-section>
+      <div class="text-h6">Invoice Details</div>
+    </q-card-section>
+    <q-card-section v-if="invoiceDetailsDialog.data">
+      <q-list>
+        <q-item>
+          <q-item-section>
+            <q-item-label caption>Payment Hash</q-item-label>
+            <q-item-label class="text-wrap">[[ invoiceDetailsDialog.data.payment_hash ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item>
+          <q-item-section>
+            <q-item-label caption>Payment Request</q-item-label>
+            <q-item-label class="text-wrap">[[ invoiceDetailsDialog.data.payment_request ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item>
+          <q-item-section>
+            <q-item-label caption>Asset ID</q-item-label>
+            <q-item-label class="text-wrap">[[ invoiceDetailsDialog.data.asset_id ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item>
+          <q-item-section>
+            <q-item-label caption>Asset Amount</q-item-label>
+            <q-item-label>[[ invoiceDetailsDialog.data.asset_amount ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item>
+          <q-item-section>
+            <q-item-label caption>Satoshi Amount</q-item-label>
+            <q-item-label>[[ invoiceDetailsDialog.data.satoshi_amount ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item>
+          <q-item-section>
+            <q-item-label caption>Status</q-item-label>
+            <q-item-label>[[ invoiceDetailsDialog.data.status ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item v-if="invoiceDetailsDialog.data.memo">
+          <q-item-section>
+            <q-item-label caption>Memo</q-item-label>
+            <q-item-label>[[ invoiceDetailsDialog.data.memo ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item>
+          <q-item-section>
+            <q-item-label caption>Created At</q-item-label>
+            <q-item-label>[[ new Date(invoiceDetailsDialog.data.created_at * 1000).toLocaleString() ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item v-if="invoiceDetailsDialog.data.expires_at">
+          <q-item-section>
+            <q-item-label caption>Expires At</q-item-label>
+            <q-item-label>[[ new Date(invoiceDetailsDialog.data.expires_at * 1000).toLocaleString() ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item v-if="invoiceDetailsDialog.data.paid_at">
+          <q-item-section>
+            <q-item-label caption>Paid At</q-item-label>
+            <q-item-label>[[ new Date(invoiceDetailsDialog.data.paid_at * 1000).toLocaleString() ]]</q-item-label>
+          </q-item-section>
+        </q-item>
+      </q-list>
+    </q-card-section>
+    <q-card-actions align="right">
+      <q-btn flat label="Close" color="primary" v-close-popup />
+    </q-card-actions>
+  </q-card>
+</q-dialog>
+
+<!-- Invoice Created Modal -->
+<q-dialog v-model="invoiceCreatedDialog.show">
+  <q-card style="min-width: 400px">
+    <q-card-section>
+      <div class="text-h6">Invoice Created</div>
+    </q-card-section>
+    <q-card-section v-if="invoiceCreatedDialog.data">
+      <div class="text-center q-pa-md">
+        <q-responsive :ratio="1" class="q-mx-auto" style="max-width: 300px">
+          <qrcode
+            :value="invoiceCreatedDialog.data.payment_request"
+            :options="{width: 300}"
+            class="rounded-borders"
+          ></qrcode>
+        </q-responsive>
+        <div class="q-mt-md">
+          <q-btn
+            outline
+            color="primary"
+            @click="copyToClipboard(invoiceCreatedDialog.data.payment_request)"
+          >
+            Copy Invoice
+          </q-btn>
+        </div>
+        <div class="q-mt-sm text-caption">
+          <div>Asset: [[ invoiceCreatedDialog.data.asset_id ]]</div>
+          <div>Amount: [[ invoiceCreatedDialog.data.asset_amount ]]</div>
+          <div>Satoshi Amount: [[ invoiceCreatedDialog.data.satoshi_amount ]]</div>
+        </div>
+      </div>
+    </q-card-section>
+    <q-card-actions align="right">
+      <q-btn flat label="Close" color="primary" v-close-popup />
+    </q-card-actions>
+  </q-card>
+</q-dialog>
+{% endblock %}
+
+{% block scripts %}
+{{ window_vars(user) }}
+<script>
+  new Vue({
+    el: '#vue',
+    mixins: [windowMixin],
+    delimiters: ['[[', ']]'],
+    data: function () {
+      return {
+        assets: [],
+        invoices: [],
+        assetsTable: {
+          columns: [
+            {
+              name: 'name',
+              align: 'left',
+              label: 'Name',
+              field: 'name'
+            },
+            {
+              name: 'type',
+              align: 'left',
+              label: 'Type',
+              field: 'type'
+            },
+            {
+              name: 'amount',
+              align: 'right',
+              label: 'Amount',
+              field: 'amount'
+            }
+          ],
+          pagination: {
+            rowsPerPage: 10
+          },
+          loading: false
+        },
+        invoicesTable: {
+          columns: [
+            {
+              name: 'asset_id',
+              align: 'left',
+              label: 'Asset ID',
+              field: row => row.asset_id.substring(0, 10) + '...'
+            },
+            {
+              name: 'asset_amount',
+              align: 'right',
+              label: 'Asset Amount',
+              field: 'asset_amount'
+            },
+            {
+              name: 'satoshi_amount',
+              align: 'right',
+              label: 'Sats',
+              field: 'satoshi_amount'
+            },
+            {
+              name: 'status',
+              align: 'left',
+              label: 'Status',
+              field: 'status'
+            },
+            {
+              name: 'created_at',
+              align: 'left',
+              label: 'Created',
+              field: row => new Date(row.created_at * 1000).toLocaleString()
+            }
+          ],
+          pagination: {
+            rowsPerPage: 10
+          },
+          loading: false
+        },
+        createInvoiceForm: {
+          asset: null,
+          amount: null,
+          memo: '',
+          expiry: 3600,
+          loading: false
+        },
+        sendAssetForm: {
+          asset: null,
+          amount: null,
+          invoice: '',
+          loading: false
+        },
+        assetDetailsDialog: {
+          show: false,
+          data: null
+        },
+        invoiceDetailsDialog: {
+          show: false,
+          data: null
+        },
+        invoiceCreatedDialog: {
+          show: false,
+          data: null
+        }
+      }
+    },
+    computed: {
+      assetOptions() {
+        return this.assets.map(asset => ({
+          label: `${asset.name} (${asset.amount})`,
+          value: asset.asset_id
+        }))
+      }
+    },
+    methods: {
+      fetchAssets() {
+        this.assetsTable.loading = true
+        LNbits.api.request(
+          'GET',
+          '/taproot_assets/api/v1/assets',
+          this.g.user.wallets[0].adminkey
+        )
+          .then(response => {
+            this.assets = response.data
+            this.assetsTable.loading = false
+          })
+          .catch(error => {
+            this.$q.notify({
+              color: 'negative',
+              message: 'Failed to fetch assets: ' + error.message,
+              icon: 'report_problem'
+            })
+            this.assetsTable.loading = false
+          })
+      },
+      fetchInvoices() {
+        this.invoicesTable.loading = true
+        LNbits.api.request(
+          'GET',
+          '/taproot_assets/api/v1/invoices',
+          this.g.user.wallets[0].adminkey
+        )
+          .then(response => {
+            this.invoices = response.data
+            this.invoicesTable.loading = false
+          })
+          .catch(error => {
+            this.$q.notify({
+              color: 'negative',
+              message: 'Failed to fetch invoices: ' + error.message,
+              icon: 'report_problem'
+            })
+            this.invoicesTable.loading = false
+          })
+      },
+      createInvoice() {
+        this.createInvoiceForm.loading = true
+        LNbits.api.request(
+          'POST',
+          '/taproot_assets/api/v1/invoice',
+          this.g.user.wallets[0].inkey,
+          {
+            asset_id: this.createInvoiceForm.asset,
+            amount: this.createInvoiceForm.amount,
+            memo: this.createInvoiceForm.memo || undefined,
+            expiry: this.createInvoiceForm.expiry || undefined
+          }
+        )
+          .then(response => {
+            this.createInvoiceForm.loading = false
+            this.invoiceCreatedDialog.data = response.data
+            this.invoiceCreatedDialog.show = true
+            this.fetchInvoices()
+          })
+          .catch(error => {
+            this.createInvoiceForm.loading = false
+            this.$q.notify({
+              color: 'negative',
+              message: 'Failed to create invoice: ' + error.message,
+              icon: 'report_problem'
+            })
+          })
+      },
+      sendAsset(asset) {
+        this.sendAssetForm.asset = asset.asset_id
+        this.sendAssetForm.amount = null
+      },
+      sendAssetSubmit() {
+        this.sendAssetForm.loading = true
+        // Implementation depends on the API
+        this.$q.notify({
+          color: 'info',
+          message: 'Send asset functionality not implemented yet',
+          icon: 'info'
+        })
+        this.sendAssetForm.loading = false
+      },
+      showAssetDetails(asset) {
+        this.assetDetailsDialog.data = asset
+        this.assetDetailsDialog.show = true
+      },
+      showInvoiceDetails(invoice) {
+        this.invoiceDetailsDialog.data = invoice
+        this.invoiceDetailsDialog.show = true
+      },
+      copyInvoice(invoice) {
+        this.copyToClipboard(invoice.payment_request)
+      },
+      copyToClipboard(text) {
+        navigator.clipboard.writeText(text).then(
+          () => {
+            this.$q.notify({
+              color: 'positive',
+              message: 'Copied to clipboard',
+              icon: 'check'
+            })
+          },
+          () => {
+            this.$q.notify({
+              color: 'negative',
+              message: 'Failed to copy to clipboard',
+              icon: 'report_problem'
+            })
+          }
+        )
+      },
+      exportCSV() {
+        LNbits.utils.exportCSV(
+          this.assets,
+          'taproot-assets-' + Date.now() + '.csv'
+        )
+      },
+      exportInvoicesCSV() {
+        LNbits.utils.exportCSV(
+          this.invoices,
+          'taproot-invoices-' + Date.now() + '.csv'
+        )
+      }
+    },
+    created() {
+      this.fetchAssets()
+      this.fetchInvoices()
+    }
+  })
+</script>
+{% endblock %}

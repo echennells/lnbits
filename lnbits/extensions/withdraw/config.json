@@ -1,0 +1,79 @@
+{
+  "name": "Withdraw Links",
+  "short_description": "Make LNURL withdraw links",
+  "tile": "/withdraw/static/image/lnurl-withdraw.png",
+  "min_lnbits_version": "1.0.0",
+  "contributors": [
+    {
+      "name": "arcbtc",
+      "uri": "https://github.com/arcbtc",
+      "role": "Developer"
+    },
+    {
+      "name": "talvasconcelos",
+      "uri": "https://github.com/talvasconcelos",
+      "role": "Developer"
+    },
+    {
+      "name": "eillarra",
+      "uri": "https://github.com/eillarra",
+      "role": "Developer"
+    },
+    {
+      "name": "dni",
+      "uri": "https://github.com/dni",
+      "role": "Developer"
+    },
+    {
+      "name": "motorina0",
+      "uri": "https://github.com/motorina0",
+      "role": "Developer"
+    },
+    {
+      "name": "prusnak",
+      "uri": "https://github.com/prusnak",
+      "role": "Developer"
+    },
+    {
+      "name": "callebtc",
+      "uri": "https://github.com/callebtc",
+      "role": "Developer"
+    },
+    {
+      "name": "Liongrass",
+      "uri": "https://github.com/Liongrass",
+      "role": "Developer"
+    },
+    {
+      "name": "supiiik",
+      "uri": "https://github.com/supiiik",
+      "role": "Developer"
+    },
+    {
+      "name": "Jakub-Dv",
+      "uri": "https://github.com/Jakub-Dv",
+      "role": "Developer"
+    }
+  ],
+  "images": [
+    {
+      "uri": "https://raw.githubusercontent.com/lnbits/withdraw/main/static/image/1.jpg",
+      "link": "https://www.youtube.com/embed/TUmsHpJtveQ?si=3_l1cg0JC8CXHtYf"
+    },
+    {
+      "uri": "https://raw.githubusercontent.com/lnbits/withdraw/main/static/image/1.png"
+    },
+    {
+      "uri": "https://raw.githubusercontent.com/lnbits/withdraw/main/static/image/2.png"
+    },
+    {
+      "uri": "https://raw.githubusercontent.com/lnbits/withdraw/main/static/image/3.png"
+    },
+    {
+      "uri": "https://raw.githubusercontent.com/lnbits/withdraw/main/static/image/4.png"
+    }
+  ],
+  "description_md": "https://raw.githubusercontent.com/lnbits/withdraw/main/description.md",
+  "terms_and_conditions_md": "https://raw.githubusercontent.com/withdraw/lnurldevice/main/toc.md",
+  "license": "MIT"
+}

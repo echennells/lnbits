@@ -1,0 +1,186 @@
+{% extends "base.html" %} 
+{% from "macros.jinja" import window_vars with context %}
+
+{% block page %}
+<div class="row q-col-gutter-md">
+  <div class="col-12 col-md-8 col-lg-7 q-gutter-y-md">
+    <q-card>
+      <q-card-section>
+        <div class="row items-center no-wrap q-mb-md">
+          <div class="col">
+            <h5 class="text-subtitle1 q-my-none">Taproot Assets Settings</h5>
+          </div>
+        </div>
+        <q-form @submit="saveSettings" class="q-gutter-md">
+          <q-input
+            filled
+            v-model="settings.tapd_host"
+            label="TAPD Host *"
+            hint="e.g., localhost:10009 or lit:10009"
+            :rules="[val => !!val || 'TAPD Host is required']"
+          />
+          <q-input
+            filled
+            v-model="settings.tapd_network"
+            label="TAPD Network *"
+            hint="e.g., signet, testnet, mainnet"
+            :rules="[val => !!val || 'TAPD Network is required']"
+          />
+          <q-input
+            filled
+            v-model="settings.tapd_tls_cert_path"
+            label="TAPD TLS Certificate Path *"
+            hint="e.g., /root/.lnd/tls.cert"
+            :rules="[val => !!val || 'TAPD TLS Certificate Path is required']"
+          />
+          <q-input
+            filled
+            v-model="settings.tapd_macaroon_path"
+            label="TAPD Macaroon Path *"
+            hint="e.g., /root/.tapd/data/signet/admin.macaroon"
+            :rules="[val => !!val || 'TAPD Macaroon Path is required']"
+          />
+          <q-input
+            filled
+            v-model="settings.tapd_macaroon_hex"
+            label="TAPD Macaroon Hex"
+            hint="Hex-encoded macaroon (alternative to path)"
+            type="textarea"
+          />
+          <q-input
+            filled
+            v-model="settings.lnd_macaroon_path"
+            label="LND Macaroon Path *"
+            hint="e.g., /root/.lnd/data/chain/bitcoin/signet/admin.macaroon"
+            :rules="[val => !!val || 'LND Macaroon Path is required']"
+          />
+          <q-input
+            filled
+            v-model="settings.lnd_macaroon_hex"
+            label="LND Macaroon Hex"
+            hint="Hex-encoded macaroon (alternative to path)"
+            type="textarea"
+          />
+          <div>
+            <q-btn
+              unelevated
+              color="primary"
+              type="submit"
+              :disable="saveSettingsLoading"
+            >
+              Save Settings
+              <q-spinner v-if="saveSettingsLoading" class="q-ml-sm" />
+            </q-btn>
+          </div>
+        </q-form>
+      </q-card-section>
+    </q-card>
+  </div>
+
+  <div class="col-12 col-md-4 col-lg-5 q-gutter-y-md">
+    <q-card>
+      <q-card-section>
+        <h5 class="text-subtitle1 q-my-none">About Taproot Assets</h5>
+      </q-card-section>
+      <q-card-section>
+        <p>
+          Taproot Assets is a protocol for issuing assets on the Bitcoin blockchain.
+          It leverages the Taproot upgrade to enable more efficient and private asset transfers.
+        </p>
+        <p>
+          This extension allows you to:
+        </p>
+        <ul>
+          <li>View your Taproot Assets</li>
+          <li>Create invoices for receiving assets</li>
+          <li>Send assets to others</li>
+        </ul>
+        <p>
+          <strong>Requirements:</strong>
+        </p>
+        <ul>
+          <li>A running TAPD node</li>
+          <li>Access to the TAPD and LND macaroons</li>
+        </ul>
+        <p>
+          <a href="https://docs.lightning.engineering/lightning-network-tools/taproot-assets" target="_blank">
+            Learn more about Taproot Assets
+          </a>
+        </p>
+      </q-card-section>
+    </q-card>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ window_vars(user) }}
+<script>
+  new Vue({
+    el: '#vue',
+    mixins: [windowMixin],
+    delimiters: ['[[', ']]'],
+    data: function () {
+      return {
+        settings: {
+          tapd_host: '',
+          tapd_network: '',
+          tapd_tls_cert_path: '',
+          tapd_macaroon_path: '',
+          tapd_macaroon_hex: '',
+          lnd_macaroon_path: '',
+          lnd_macaroon_hex: ''
+        },
+        saveSettingsLoading: false
+      }
+    },
+    methods: {
+      fetchSettings() {
+        LNbits.api.request(
+          'GET',
+          '/taproot_assets/api/v1/settings',
+          this.g.user.wallets[0].adminkey
+        )
+          .then(response => {
+            this.settings = response.data
+          })
+          .catch(error => {
+            this.$q.notify({
+              color: 'negative',
+              message: 'Failed to fetch settings: ' + error.message,
+              icon: 'report_problem'
+            })
+          })
+      },
+      saveSettings() {
+        this.saveSettingsLoading = true
+        LNbits.api.request(
+          'PUT',
+          '/taproot_assets/api/v1/settings',
+          this.g.user.wallets[0].adminkey,
+          this.settings
+        )
+          .then(response => {
+            this.saveSettingsLoading = false
+            this.$q.notify({
+              color: 'positive',
+              message: 'Settings saved successfully',
+              icon: 'check'
+            })
+          })
+          .catch(error => {
+            this.saveSettingsLoading = false
+            this.$q.notify({
+              color: 'negative',
+              message: 'Failed to save settings: ' + error.message,
+              icon: 'report_problem'
+            })
+          })
+      }
+    },
+    created() {
+      this.fetchSettings()
+    }
+  })
+</script>
+{% endblock %}

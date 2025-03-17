@@ -5,6 +5,7 @@ import grpc
 import grpc.aio
 import json
 import base64
+from loguru import logger
 from lnbits import bolt11
 
 # Import the adapter module for Taproot Asset gRPC interfaces

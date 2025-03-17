@@ -1,0 +1,6 @@
+{
+  "name": "Taproot Assets",
+  "short_description": "Manage Taproot Assets on Bitcoin",
+  "icon": "account_balance_wallet",
+  "contributors": ["lnbits"]
+}
