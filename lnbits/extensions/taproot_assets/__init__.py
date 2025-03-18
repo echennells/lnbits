@@ -25,13 +25,15 @@ taproot_assets_static_files = [
 scheduled_tasks: list[asyncio.Task] = []
 
 def taproot_assets_start():
-    """Start any scheduled tasks."""
-    # Add your scheduled tasks here if needed
-    # For example:
-    # from lnbits.tasks import create_permanent_unique_task
-    # task = create_permanent_unique_task("taproot_assets_task", some_periodic_function)
-    # scheduled_tasks.append(task)
-    logger.info("Taproot Assets extension started")
+    """Start scheduled tasks including the invoice payment listener."""
+    from lnbits.tasks import create_permanent_unique_task
+    from .tasks import wait_for_paid_invoices
+    
+    # Create and start the invoice payment listener task
+    task = create_permanent_unique_task("taproot_assets_payment_listener", wait_for_paid_invoices)
+    scheduled_tasks.append(task)
+    
+    logger.info("Taproot Assets extension started with payment listener")
 
 def taproot_assets_stop():
     """Stop any scheduled tasks."""
@@ -40,6 +42,8 @@ def taproot_assets_stop():
             task.cancel()
         except Exception as ex:
             logger.warning(ex)
+    
+    logger.info("Taproot Assets extension stopped")
 
 # Make sure db is properly exposed
 def taproot_assets_createdb():
