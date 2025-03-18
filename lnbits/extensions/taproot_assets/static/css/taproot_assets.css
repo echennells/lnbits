@@ -1,1 +1,149 @@
 /* Additional styles for the Taproot Assets extension */
+
+.asset-card {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: white;
+  padding: 15px;
+  border-radius: 8px;
+  margin-bottom: 15px;
+}
+
+.asset-name {
+  font-weight: bold;
+  font-size: 16px;
+  color: white;
+}
+
+.asset-detail {
+  color: rgba(255, 255, 255, 0.8);
+  margin-top: 5px;
+}
+
+.invoice-form-container {
+  position: relative;
+  padding: 16px;
+}
+
+.invoice-form {
+  background-color: rgba(255, 255, 255, 0.05);
+  padding: 15px;
+  border-radius: 8px;
+  margin-bottom: 15px;
+}
+
+.create-invoice-btn {
+  background-color: #6a36e5;
+  color: white;
+  font-weight: bold;
+  padding: 8px 16px;
+  border: none;
+  cursor: pointer;
+  border-radius: 4px 4px 0 0;
+  width: 100%;
+  text-align: center;
+}
+
+.cancel-btn {
+  background-color: #6a36e5;
+  color: white;
+  padding: 8px 16px;
+  border: none;
+  cursor: pointer;
+  border-radius: 0 0 4px 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  width: 100%;
+  text-align: center;
+}
+
+.invoice-input {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: white;
+  padding: 10px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.invoice-input-label {
+  display: block;
+  color: rgba(255, 255, 255, 0.8);
+  margin-bottom: 5px;
+  font-size: 14px;
+}
+
+.invoice-button-container {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-top: 15px;
+}
+
+.selected-asset-info {
+  background-color: rgba(255, 255, 255, 0.08);
+  padding: 10px;
+  border-radius: 6px;
+  margin-bottom: 15px;
+}
+
+.invoice-form-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.invoice-form-col {
+  flex: 1;
+}
+
+/* Make sure any text is readable */
+.text-white {
+  color: white !important;
+}
+
+.text-light {
+  color: rgba(255, 255, 255, 0.8) !important;
+}
+
+/* New styles for the invoice display */
+.invoice-created-container {
+  padding: 10px 5px;
+}
+
+.invoice-info {
+  margin-bottom: 20px;
+}
+
+.invoice-label {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 5px;
+}
+
+.invoice-value {
+  font-size: 16px;
+  color: white;
+  font-weight: 500;
+  margin-bottom: 10px;
+}
+
+.invoice-amount-row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+}
+
+.full-invoice {
+  background-color: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 15px;
+  word-break: break-all;
+  font-family: monospace;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.9);
+  margin-top: 8px;
+}
+
+.mt-4 {
+  margin-top: 20px;
+}

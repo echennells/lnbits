@@ -18,12 +18,12 @@ window.app = Vue.createApp({
         lnd_macaroon_hex: ''
       },
       showSettings: false,
-      showInvoiceForm: false,
+      showInvoiceForm: false,  // Start with the form hidden
       showInvoiceModal: false,
       assets: [], // Initialize as empty array
       invoices: [], // Initialize as empty array
+      selectedAsset: null, // Track the selected asset object
       invoiceForm: {
-        asset_id: '',
         amount: 1,
         memo: '',
         expiry: 3600
@@ -36,31 +36,25 @@ window.app = Vue.createApp({
       this.showSettings = !this.showSettings
     },
     getSettings() {
-      if (!this.g.user.wallets.length) {
-        console.log('No wallets found, skipping getSettings');
-        return;
-      }
+      if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
-      console.log('Fetching settings with wallet:', wallet);
+      
       LNbits.api
         .request('GET', '/taproot_assets/api/v1/taproot/settings', wallet.adminkey)
         .then(response => {
           this.settings = response.data;
-          console.log('Settings data:', this.settings);
         })
         .catch(err => {
           console.error('Failed to fetch settings:', err);
           if (LNbits && LNbits.utils && LNbits.utils.notifyApiError) {
             LNbits.utils.notifyApiError(err);
           }
-        })
+        });
     },
     saveSettings() {
-      if (!this.g.user.wallets.length) {
-        console.log('No wallets found, skipping saveSettings');
-        return;
-      }
+      if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
+      
       LNbits.api
         .request('PUT', '/taproot_assets/api/v1/taproot/settings', wallet.adminkey, this.settings)
         .then(response => {
@@ -68,8 +62,6 @@ window.app = Vue.createApp({
           this.showSettings = false;
           if (LNbits && LNbits.utils && LNbits.utils.notifySuccess) {
             LNbits.utils.notifySuccess('Settings saved successfully');
-          } else {
-            console.log('Settings saved successfully');
           }
         })
         .catch(err => {
@@ -77,20 +69,18 @@ window.app = Vue.createApp({
           if (LNbits && LNbits.utils && LNbits.utils.notifyApiError) {
             LNbits.utils.notifyApiError(err);
           }
-        })
+        });
     },
     getAssets() {
-      if (!this.g.user.wallets.length) {
-        console.log('No wallets found, skipping getAssets');
-        return;
-      }
+      if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
-      console.log('Fetching assets with wallet:', wallet);
+      
       LNbits.api
         .request('GET', '/taproot_assets/api/v1/taproot/listassets', wallet.adminkey)
         .then(response => {
-          this.assets = response.data || []; // Ensure it's an array
-          console.log('Assets data:', this.assets); // Debug the asset structure
+          // Ensure we have a proper array
+          this.assets = Array.isArray(response.data) ? response.data : [];
+          console.log('Loaded assets:', this.assets);
         })
         .catch(err => {
           console.error('Failed to fetch assets:', err);
@@ -98,55 +88,80 @@ window.app = Vue.createApp({
             LNbits.utils.notifyApiError(err);
           }
           this.assets = []; // Fallback to empty array on error
-        })
+        });
     },
     getInvoices() {
-      if (!this.g.user.wallets.length) {
-        console.log('No wallets found, skipping getInvoices');
-        return;
-      }
+      if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
-      console.log('Fetching invoices with wallet:', wallet);
+      
       LNbits.api
         .request('GET', '/taproot_assets/api/v1/taproot/invoices', wallet.adminkey)
         .then(response => {
           this.invoices = response.data || []; // Ensure it's an array
-          console.log('Invoices data:', this.invoices); // Debug the invoice structure
         })
         .catch(err => {
           console.error('Failed to fetch invoices:', err);
           if (LNbits && LNbits.utils && LNbits.utils.notifyApiError) {
             LNbits.utils.notifyApiError(err);
           }
-          this.invoices = []; // Fallback to empty array on error
-        })
+          this.invoices = []; 
+        });
     },
-    createInvoice(assetId) {
-      this.setAssetName(assetId);
+    createInvoice(asset) {
+      // Store the entire asset object
+      this.selectedAsset = asset;
+      console.log('Selected asset:', asset);
+      
+      // Show the invoice form
       this.showInvoiceForm = true;
+      
+      // Reset form values
+      this.invoiceForm.amount = 1;
+      this.invoiceForm.memo = '';
+      this.invoiceForm.expiry = 3600;
     },
-    setAssetName(assetId) {
-      const asset = this.assets.find(a => a.id === assetId);
-      this.invoiceForm.asset_id = asset ? (asset.name || `Unknown (${asset.type})`) : '';
+    resetForm() {
+      console.log('Form reset');
+      this.selectedAsset = null;
+      this.invoiceForm.amount = 1;
+      this.invoiceForm.memo = '';
+      this.invoiceForm.expiry = 3600;
+      this.createdInvoice = null;
+      
+      // Hide the form
+      this.showInvoiceForm = false;
     },
     submitInvoice() {
-      if (!this.g.user.wallets.length) return
-      const wallet = this.g.user.wallets[0]
-      // Map the name back to ID for the API if needed
-      const asset = this.assets.find(a => (a.name || `Unknown (${a.type})`) === this.invoiceForm.asset_id);
-      this.invoiceForm.asset_id = asset ? asset.id : this.invoiceForm.asset_id;
+      if (!this.g.user.wallets.length) return;
+      const wallet = this.g.user.wallets[0];
+      
+      // Check if we have a selected asset
+      if (!this.selectedAsset) {
+        if (LNbits && LNbits.utils && LNbits.utils.notifyError) {
+          LNbits.utils.notifyError('Please select an asset first by clicking RECEIVE on one of your assets.');
+        }
+        return;
+      }
+      
+      // Find the asset_id
+      let assetId = this.selectedAsset.asset_id || '';
+      
+      // Create the payload with the found asset ID
+      const payload = {
+        asset_id: assetId,
+        amount: this.invoiceForm.amount,
+        memo: this.invoiceForm.memo,
+        expiry: this.invoiceForm.expiry
+      };
+      
+      console.log('Submitting invoice:', payload);
+      
       LNbits.api
-        .request('POST', '/taproot_assets/api/v1/taproot/invoice', wallet.adminkey, this.invoiceForm)
+        .request('POST', '/taproot_assets/api/v1/taproot/invoice', wallet.adminkey, payload)
         .then(response => {
-          this.createdInvoice = response.data
-          console.log('createdInvoice:', this.createdInvoice); // Debug the invoice structure
-          this.showInvoiceForm = false
-          this.showInvoiceModal = false
-          this.getInvoices()
+          this.createdInvoice = response.data;
           if (LNbits && LNbits.utils && LNbits.utils.notifySuccess) {
             LNbits.utils.notifySuccess('Invoice created successfully');
-          } else {
-            console.log('Invoice created successfully');
           }
         })
         .catch(err => {
@@ -154,24 +169,18 @@ window.app = Vue.createApp({
           if (LNbits && LNbits.utils && LNbits.utils.notifyApiError) {
             LNbits.utils.notifyApiError(err);
           }
-        })
+        });
     },
     copyInvoice(invoice) {
-      console.log('LNbits.utils:', LNbits.utils);
-      console.log('Received invoice:', invoice);
-
       const textToCopy = typeof invoice === 'string'
         ? invoice
         : (invoice.payment_request || invoice.id || JSON.stringify(invoice) || 'No invoice data available');
-      console.log('Attempting to copy:', textToCopy);
 
       if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
         navigator.clipboard.writeText(textToCopy)
           .then(() => {
             if (LNbits && LNbits.utils && LNbits.utils.notifySuccess) {
               LNbits.utils.notifySuccess('Invoice copied to clipboard');
-            } else {
-              console.log('Invoice copied to clipboard');
             }
           })
           .catch(err => {
@@ -179,7 +188,6 @@ window.app = Vue.createApp({
             this.fallbackCopy(textToCopy);
           });
       } else {
-        console.warn('navigator.clipboard not available, using fallback');
         this.fallbackCopy(textToCopy);
       }
     },
@@ -193,8 +201,6 @@ window.app = Vue.createApp({
 
       if (LNbits && LNbits.utils && LNbits.utils.notifySuccess) {
         LNbits.utils.notifySuccess('Invoice copied to clipboard (fallback)');
-      } else {
-        console.log('Invoice copied to clipboard (fallback)');
       }
     },
     formatDate(timestamp) {
@@ -218,14 +224,10 @@ window.app = Vue.createApp({
     }
   },
   created() {
-    console.log('LNbits.utils on app created:', LNbits.utils);
-
     if (this.g.user.wallets.length) {
       this.getSettings();
       this.getAssets();
       this.getInvoices();
-    } else {
-      console.log('No wallets found, skipping API calls');
     }
   }
 })

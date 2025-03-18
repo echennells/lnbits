@@ -155,9 +155,10 @@ class TaprootAssetsNodeExtension:
                     }
                 else:
                     # This is a channel-only asset, add it to the map
+                    # FIXED: Use the name from channel_asset instead of hardcoding "Unknown (Channel Asset)"
                     asset_map[asset_id] = {
                         "asset_id": asset_id,
-                        "name": "Unknown (Channel Asset)",
+                        "name": channel_asset["name"] or "Unknown (Channel Asset)",
                         "type": "CHANNEL_ONLY",
                         "amount": str(channel_asset["capacity"]),
                         "channel_info": {
@@ -367,7 +368,7 @@ class TaprootAssetsNodeExtension:
                 try:
                     # Convert the protobuf message to a dictionary using our helper function
                     accepted_buy_quote = protobuf_to_dict(response.accepted_buy_quote)
-                    
+
                     # Ensure accepted_buy_quote is a dictionary, not a tuple or other type
                     if not isinstance(accepted_buy_quote, dict):
                         logger.warning(f"accepted_buy_quote is not a dict after conversion: {type(accepted_buy_quote)}")
@@ -391,10 +392,10 @@ class TaprootAssetsNodeExtension:
                     "payment_addr": payment_addr
                 }
             }
-            
+
             logger.debug(f"Final result from create_asset_invoice: {result}")
             logger.debug(f"accepted_buy_quote type in result: {type(result['accepted_buy_quote'])}")
-            
+
             return result
         except Exception as e:
             raise Exception(f"Failed to create asset invoice: {str(e)}")

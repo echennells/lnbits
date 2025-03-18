@@ -4,6 +4,7 @@
 {% block scripts %}
 {{ window_vars(user) }}
 <script src="{{ static_url_for('taproot_assets/static', path='js/index.js') }}"></script>
+<link rel="stylesheet" href="{{ static_url_for('taproot_assets/static', path='css/taproot_assets.css') }}" />
 {% endblock %}
 
 {% block page %}
@@ -24,7 +25,7 @@
         </div>
         <q-separator></q-separator>
       </q-card-section>
-
+      
       <q-card-section>
         <div v-if="assets && assets.length === 0" class="text-center text-grey-6">
           No assets found. Connect to a Taproot Assets daemon in the settings.
@@ -32,22 +33,27 @@
         <div v-if="assets && assets.length > 0">
           <h6 class="text-subtitle1 q-my-none">Your Assets</h6>
           <q-separator class="q-my-sm"></q-separator>
-          <div v-for="asset in assets" :key="asset.id" class="q-card-section">
+          <div v-for="asset in assets" :key="asset.name || asset.type" class="asset-card">
             <div class="row items-center no-wrap">
               <div class="col">
-                <span>{% raw %}{{ asset.name ? asset.name : 'Unknown (' + asset.type + ')' }}{% endraw %}</span>
+                <span class="asset-name">{% raw %}{{ asset.name ? asset.name : 'Unknown' }}{% endraw %}</span>
               </div>
               <div class="col-auto">
-                <q-btn flat color="primary" @click="createInvoice(asset.id)">
+                <q-btn flat color="primary" @click="createInvoice(asset)">
                   <q-icon left name="arrow_upward"></q-icon>
                   RECEIVE
                 </q-btn>
               </div>
             </div>
-            <div class="text-grey-6 q-mt-sm">
-              Asset ID: {% raw %}{{ asset.id }}{% endraw %}<br>
-              Amount: {% raw %}{{ asset.amount }}{% endraw %}<br>
-              Type: {% raw %}{{ asset.type }}{% endraw %}
+            <div class="asset-detail">
+              <!-- Display balance information if available -->
+              <span v-if="asset.channel_info">
+                Balance: {% raw %}{{ asset.channel_info.local_balance }}{% endraw %}<br>
+                Channel Capacity: {% raw %}{{ asset.channel_info.capacity }}{% endraw %}
+              </span>
+              <span v-else>
+                Amount: {% raw %}{{ asset.amount }}{% endraw %}
+              </span>
             </div>
           </div>
         </div>
@@ -81,40 +87,93 @@
   </div>
 
   <div class="col-12 col-md-4 col-lg-5">
-    <q-card>
+    <q-card v-if="showInvoiceForm">
       <q-card-section>
-        <h6 class="text-subtitle1 q-my-none">Create Invoice</h6>
+        <h6 class="text-subtitle1 q-my-none text-white">Create Invoice</h6>
         <q-separator class="q-my-sm"></q-separator>
-        <q-form @submit="submitInvoice" class="q-gutter-md">
-          <q-select v-model="invoiceForm.asset_id" label="Asset" :options="{% raw %}assets.map(a => ({ label: a.name || 'Unknown (' + a.type + ')', value: a.id })){% endraw %}" outlined @input="setAssetName($event)" required>
-            <template v-slot:append>
-              <q-tooltip>Select the asset by name</q-tooltip>
-            </template>
-          </q-select>
-          <q-input v-model.number="invoiceForm.amount" type="number" label="Amount" outlined required />
-          <q-input v-model="invoiceForm.memo" label="Memo (optional)" outlined />
-          <q-input v-model.number="invoiceForm.expiry" type="number" label="Expiry (seconds)" outlined value="3600" />
-          <div class="row q-mt-lg">
-            <q-btn type="submit" color="primary" label="CREATE INVOICE" />
-            <q-btn flat color="grey" label="CANCEL" class="q-ml-sm" @click="showInvoiceForm = false" />
+        
+        <div class="invoice-form-container">
+          <div class="selected-asset-info" v-if="selectedAsset">
+            <div class="text-white">
+              <div>Selected asset:</div>
+              <div class="asset-name">{% raw %}{{ selectedAsset.name || 'Unknown' }}{% endraw %}</div>
+              <div class="asset-detail">
+                <!-- Show balance information if it's a channel asset -->
+                <span v-if="selectedAsset.channel_info">
+                  Balance: {% raw %}{{ selectedAsset.channel_info.local_balance }}{% endraw %}<br>
+                  Channel Capacity: {% raw %}{{ selectedAsset.channel_info.capacity }}{% endraw %}
+                </span>
+                <span v-else>
+                  Amount: {% raw %}{{ selectedAsset.amount }}{% endraw %}
+                </span>
+              </div>
+            </div>
           </div>
-        </q-form>
+          <div v-else class="text-light q-pa-sm">
+            No asset selected. Please click RECEIVE on an asset.
+          </div>
+          
+          <form @submit.prevent="submitInvoice" class="invoice-form">
+            <div class="invoice-form-row">
+              <div class="invoice-form-col">
+                <label class="invoice-input-label">Amount</label>
+                <input v-model.number="invoiceForm.amount" type="number" class="invoice-input" required 
+                       :max="selectedAsset && selectedAsset.channel_info ? selectedAsset.channel_info.local_balance : selectedAsset ? selectedAsset.amount : 0" />
+              </div>
+              <div class="invoice-form-col">
+                <label class="invoice-input-label">Memo (optional)</label>
+                <input v-model="invoiceForm.memo" type="text" class="invoice-input" />
+              </div>
+              <div class="invoice-form-col">
+                <label class="invoice-input-label">Expiry (seconds)</label>
+                <input v-model.number="invoiceForm.expiry" type="number" class="invoice-input" />
+              </div>
+            </div>
+            
+            <div class="invoice-button-container">
+              <div class="invoice-buttons">
+                <button type="submit" class="create-invoice-btn" :disabled="!selectedAsset || (selectedAsset.channel_info && invoiceForm.amount > selectedAsset.channel_info.local_balance)">CREATE INVOICE</button>
+                <button type="button" class="cancel-btn" @click="resetForm()">CANCEL</button>
+              </div>
+            </div>
+          </form>
+        </div>
       </q-card-section>
     </q-card>
 
     <q-card v-if="createdInvoice" class="q-mt-md">
       <q-card-section>
-        <h6 class="text-subtitle1 q-my-none">Invoice Created</h6>
+        <h6 class="text-subtitle1 q-my-none text-white">Invoice Created</h6>
         <q-separator class="q-my-sm"></q-separator>
-        <div>
-          <q-btn flat round dense icon="content_copy" @click="copyInvoice(createdInvoice.payment_request || createdInvoice.id)" />
-          <span class="q-ml-sm">Amount: {% raw %}{{ createdInvoice.amount }} ({{ createdInvoice.unit }}){% endraw %}</span><br>
-          <span>Satoshi Amount: {% raw %}{{ createdInvoice.satoshi_amount }}{% endraw %} sats</span>
-        </div>
-        <div class="text-grey-6 q-mt-sm">
-          Asset ID: {% raw %}{{ createdInvoice.asset_id }}{% endraw %}<br>
-          Status: <span :class="'text-' + getStatusColor(createdInvoice.status)">{% raw %}{{ createdInvoice.status }}{% endraw %}</span><br>
-          Created: {% raw %}{{ formatDate(createdInvoice.created) }}{% endraw %}
+        
+        <div class="invoice-created-container">
+          <div class="row items-center">
+            <div class="col">
+              <div class="invoice-label">Asset:</div>
+              <div class="invoice-value">{% raw %}{{ createdInvoice.asset_name || selectedAsset.name }}{% endraw %}</div>
+            </div>
+            <div class="col-auto">
+              <q-btn flat round dense icon="content_copy" size="lg" color="purple-3" @click="copyInvoice(createdInvoice.payment_request || createdInvoice.id)" />
+            </div>
+          </div>
+          
+          <div class="invoice-amount-row">
+            <div>
+              <div class="invoice-label">Asset Amount:</div>
+              <div class="invoice-value">{% raw %}{{ invoiceForm.amount || createdInvoice.amount }}{% endraw %}</div>
+            </div>
+            <div>
+              <div class="invoice-label">Sat Amount:</div>
+              <div class="invoice-value">{% raw %}{{ createdInvoice.satoshi_amount }}{% endraw %} sats</div>
+            </div>
+          </div>
+          
+          <div class="mt-4">
+            <div class="invoice-label">Invoice:</div>
+            <div class="full-invoice">
+              {% raw %}{{ createdInvoice.payment_request || createdInvoice.id }}{% endraw %}
+            </div>
+          </div>
         </div>
       </q-card-section>
     </q-card>
