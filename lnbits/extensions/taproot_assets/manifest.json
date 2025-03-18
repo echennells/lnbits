@@ -1,6 +1,7 @@
 {
   "name": "Taproot Assets",
-  "short_description": "Manage Taproot Assets on Bitcoin",
-  "icon": "account_balance_wallet",
-  "contributors": ["lnbits"]
+  "short_description": "Manage Taproot Assets on the Bitcoin network",
+  "icon": "static/image/taproot-assets-icon.png",
+  "code": "taproot_assets",
+  "min_lnbits_version": "0.9.0"
 }

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 class TaprootSettings(BaseModel):
     """Settings for the Taproot Assets extension."""
-    tapd_host: str = "localhost:10009"
+    tapd_host: str = "lit:10009"
     tapd_network: str = "signet"
     tapd_tls_cert_path: str = "/root/.lnd/tls.cert"
     tapd_macaroon_path: str = "/root/.tapd/data/signet/admin.macaroon"
