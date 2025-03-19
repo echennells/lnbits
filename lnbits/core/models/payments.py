@@ -72,19 +72,6 @@ class Payment(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     extra: dict = {}
-    
-    # Helper properties for Taproot Assets
-    @property
-    def asset_id(self) -> Optional[str]:
-        return self.extra.get("asset_id")
-    
-    @property
-    def asset_amount(self) -> Optional[int]:
-        return self.extra.get("asset_amount")
-    
-    @property
-    def buy_quote(self) -> Optional[dict]:
-        return self.extra.get("buy_quote")
 
     @property
     def pending(self) -> bool:
@@ -219,7 +206,6 @@ class CreateInvoice(BaseModel):
     webhook: Optional[str] = None
     bolt11: Optional[str] = None
     lnurl_callback: Optional[str] = None
-    asset_id: Optional[str] = None
 
     @validator("unit")
     @classmethod
@@ -227,10 +213,6 @@ class CreateInvoice(BaseModel):
         # If the unit is 'sat' or a valid fiat currency, it's valid
         if v == "sat" or v in allowed_currencies():
             return v
-            
-        # Otherwise, we'll assume it's a Taproot asset name
-        # The actual validation happens when creating the invoice
-        # where we check if the asset exists
         return v
 
 
