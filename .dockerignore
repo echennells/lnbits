@@ -20,6 +20,4 @@ lnbits/static/bundle.css
 LICENSE
 Makefile
 mypy.ini
-package-lock.json
-package.json
 pytest.ini
