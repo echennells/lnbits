@@ -1,3 +1,4 @@
+# Full file: /home/ubuntu/lnbits/lnbits/extensions/taproot_assets/wallets/taproot_wallet.py
 import asyncio
 from typing import AsyncGenerator, Dict, List, Optional, Any
 
@@ -203,19 +204,19 @@ class TaprootWalletExtension:
                     asset_amount=amount
                 )
                 logger.debug(f"TRACE 2: Got invoice_result, type: {type(invoice_result)}")
-                
+
                 # AGGRESSIVE DEBUGGING: Dump the entire invoice_result
                 logger.debug(f"TRACE 3: Full invoice_result: {invoice_result}")
-                
+
                 # Check if invoice_result is a dictionary or something else
                 if not isinstance(invoice_result, dict):
                     logger.debug(f"TRACE 4: invoice_result is not a dict! Converting from {type(invoice_result)}")
                     invoice_result = {"invoice_result": {"r_hash": "", "payment_request": ""}, "accepted_buy_quote": {}}
-                
+
                 # Check each key in the invoice_result
                 for key in invoice_result:
                     logger.debug(f"TRACE 5: Key {key} has type {type(invoice_result[key])}")
-                    
+
                     # If the key is accepted_buy_quote, ensure it's a dictionary
                     if key == "accepted_buy_quote":
                         if not isinstance(invoice_result[key], dict):
@@ -225,7 +226,7 @@ class TaprootWalletExtension:
                             else:
                                 invoice_result[key] = {"value": str(invoice_result[key])}
                             logger.debug(f"TRACE 7: Converted accepted_buy_quote: {invoice_result[key]}")
-                            
+
             except Exception as e:
                 logger.warning(f"TRACE ERROR: Error in create_asset_invoice: {e}", exc_info=True)
                 raise
@@ -238,7 +239,7 @@ class TaprootWalletExtension:
             except (KeyError, TypeError) as e:
                 logger.error(f"TRACE ERROR: Failed to extract payment_hash: {e}", exc_info=True)
                 payment_hash = ""
-                
+
             try:
                 payment_request = invoice_result["invoice_result"]["payment_request"]
                 logger.debug(f"TRACE 10: Extracted payment_request: {payment_request[:30]}...")
@@ -258,11 +259,11 @@ class TaprootWalletExtension:
             # Only add buy_quote if it exists, is not empty, and can be safely converted
             if "accepted_buy_quote" in invoice_result and invoice_result["accepted_buy_quote"]:
                 logger.debug(f"TRACE 12: Processing accepted_buy_quote of type {type(invoice_result['accepted_buy_quote'])}")
-                
+
                 try:
                     # Get the buy_quote and ensure it's a dictionary
                     buy_quote = invoice_result["accepted_buy_quote"]
-                    
+
                     # Force conversion to dictionary regardless of type
                     if not isinstance(buy_quote, dict):
                         logger.debug(f"TRACE 13: Converting buy_quote from {type(buy_quote)} to dict")
@@ -270,7 +271,7 @@ class TaprootWalletExtension:
                             buy_quote = {"items": list(buy_quote)}
                         else:
                             buy_quote = {"value": str(buy_quote)}
-                    
+
                     # Set the buy_quote in the extra data
                     extra["buy_quote"] = buy_quote
                     logger.debug(f"TRACE 14: Final buy_quote in extra: {extra['buy_quote']}")
@@ -332,7 +333,7 @@ class TaprootWalletExtension:
             # Debug the response
             logger.debug(f"Response from node.create_asset_invoice: {response}")
             logger.debug(f"Response type: {type(response)}")
-            
+
             # Ensure response is a dictionary
             if not isinstance(response, dict):
                 logger.warning(f"Response is not a dictionary, converting from {type(response)}")
@@ -347,7 +348,7 @@ class TaprootWalletExtension:
                         "accepted_buy_quote": {},
                         "invoice_result": {"r_hash": "", "payment_request": ""}
                     }
-            
+
             # Ensure accepted_buy_quote is a dictionary
             if "accepted_buy_quote" in response and not isinstance(response["accepted_buy_quote"], dict):
                 logger.warning(f"accepted_buy_quote is not a dictionary, converting from {type(response['accepted_buy_quote'])}")
@@ -360,5 +361,55 @@ class TaprootWalletExtension:
         except Exception as e:
             logger.error(f"Failed to create asset invoice: {str(e)}", exc_info=True)
             raise Exception(f"Failed to create asset invoice: {str(e)}")
+        finally:
+            await self.cleanup()
+
+    async def pay_asset_invoice(
+        self,
+        invoice: str,
+        fee_limit_sats: Optional[int] = None,
+        **kwargs,
+    ) -> PaymentResponse:
+        """
+        Pay a Taproot Asset invoice.
+        
+        Args:
+            invoice: The payment request (BOLT11 invoice)
+            fee_limit_sats: Optional fee limit in satoshis
+            **kwargs: Additional parameters
+            
+        Returns:
+            PaymentResponse: Contains information about the payment
+        """
+        try:
+            await self._init_connection()
+            
+            logger.debug(f"Sending payment for invoice: {invoice[:30]}...")
+            
+            # Call the node's pay_asset_invoice method
+            payment_result = await self.node.pay_asset_invoice(
+                payment_request=invoice,
+                fee_limit_sats=fee_limit_sats
+            )
+            
+            logger.debug(f"Payment result: {payment_result}")
+            
+            # Extract payment details
+            payment_hash = payment_result.get("payment_hash", "")
+            preimage = payment_result.get("payment_preimage", "")
+            fee_msat = payment_result.get("fee_sats", 0) * 1000  # Convert sats to msats
+            
+            return PaymentResponse(
+                ok=True,
+                checking_id=payment_hash,
+                fee_msat=fee_msat,
+                preimage=preimage
+            )
+        except Exception as e:
+            logger.error(f"Failed to pay invoice: {str(e)}", exc_info=True)
+            return PaymentResponse(
+                ok=False,
+                error_message=f"Failed to pay invoice: {str(e)}"
+            )
         finally:
             await self.cleanup()

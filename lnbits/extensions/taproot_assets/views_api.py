@@ -23,7 +23,7 @@ from .crud import (
     get_user_invoices,
     update_invoice_status,
 )
-from .models import TaprootSettings, TaprootAsset, TaprootInvoice, TaprootInvoiceRequest
+from .models import TaprootSettings, TaprootAsset, TaprootInvoice, TaprootInvoiceRequest, TaprootPaymentRequest
 from .wallets.taproot_wallet import TaprootWalletExtension
 from .tapd_settings import taproot_settings
 
@@ -88,10 +88,10 @@ async def api_update_tapd_settings(
     for key, value in data.dict(exclude_unset=True).items():
         if hasattr(taproot_settings, key) and value is not None:
             setattr(taproot_settings, key, value)
-    
+
     # Save the updated settings
     taproot_settings.save()
-    
+
     return {
         "success": True,
         "settings": {key: getattr(taproot_settings, key) for key in data.dict(exclude_unset=True) if hasattr(taproot_settings, key)}
@@ -106,13 +106,13 @@ async def api_get_tapd_settings(user: User = Depends(check_user_exists)):
             status_code=HTTPStatus.FORBIDDEN,
             detail="Only admin users can view Taproot daemon settings",
         )
-    
+
     # Convert settings to a dictionary
     settings_dict = {}
     for key in dir(taproot_settings):
         if not key.startswith('_') and not callable(getattr(taproot_settings, key)) and key not in ['extension_dir', 'config_path', 'config']:
             settings_dict[key] = getattr(taproot_settings, key)
-    
+
     return settings_dict
 
 
@@ -362,6 +362,79 @@ async def api_create_invoice(
         detail = f"Failed to create Taproot Asset invoice: {str(e)}"
         if isinstance(e, grpc.RpcError) and "no asset channel balance found for asset" in str(e):
             detail = f"No channel balance found for asset {data.asset_id}. You need to create a channel with this asset first."
+
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail=detail,
+        )
+
+
+@taproot_assets_api_router.post("/pay", status_code=HTTPStatus.OK)
+async def api_pay_invoice(
+    data: TaprootPaymentRequest,
+    wallet: WalletTypeInfo = Depends(require_admin_key),
+):
+    """Pay a Taproot Asset invoice."""
+    logger.info(f"API: Paying invoice payment_request={data.payment_request[:30]}...")
+    try:
+        # Create a wallet instance to communicate with tapd
+        logger.debug("API: Before creating wallet instance")
+        taproot_wallet = None
+        try:
+            taproot_wallet = TaprootWalletExtension()
+            logger.debug("API: Successfully created TaprootWalletExtension instance")
+        except Exception as e:
+            logger.error(f"API ERROR: Failed to create TaprootWalletExtension: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=f"Failed to initialize Taproot wallet: {str(e)}",
+            )
+
+        # Pay the invoice using the TaprootWalletExtension
+        logger.debug(f"API: Before calling pay_asset_invoice")
+        payment_response = None
+        try:
+            payment_response = await taproot_wallet.pay_asset_invoice(
+                invoice=data.payment_request,
+                fee_limit_sats=data.fee_limit_sats,
+            )
+            logger.debug("API: After calling pay_asset_invoice")
+            logger.debug(f"API: payment_response: {payment_response}")
+        except Exception as e:
+            logger.error(f"API ERROR: Failed in taproot_wallet.pay_asset_invoice: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=f"Failed to pay invoice: {str(e)}",
+            )
+
+        if not payment_response.ok:
+            logger.error(f"API ERROR: Payment failed: {payment_response.error_message}")
+            raise HTTPException(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=f"Failed to pay invoice: {payment_response.error_message}",
+            )
+
+        # Prepare final response
+        logger.debug("API: Preparing final response")
+        response_data = {
+            "success": True,
+            "payment_hash": payment_response.checking_id,
+            "preimage": payment_response.preimage,
+            "fee_msat": payment_response.fee_msat,
+        }
+        logger.info(f"API: Successfully paid invoice")
+        return response_data
+    except Exception as e:
+        # Get full traceback
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        stack_trace = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        logger.error(f"API ERROR: Unhandled exception in api_pay_invoice: {str(e)}")
+        logger.error(f"API ERROR: Full traceback: {''.join(stack_trace)}")
+
+        # Provide a user-friendly message for common errors
+        detail = f"Failed to pay Taproot Asset invoice: {str(e)}"
+        if isinstance(e, grpc.RpcError) and "no asset channel balance found for asset" in str(e):
+            detail = "Insufficient channel balance for this asset."
 
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,

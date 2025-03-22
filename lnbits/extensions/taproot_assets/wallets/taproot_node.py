@@ -1,3 +1,4 @@
+# Full file: /home/ubuntu/lnbits/lnbits/extensions/taproot_assets/wallets/taproot_node.py
 import os
 import time
 from typing import Optional, Dict, Any, List
@@ -399,6 +400,190 @@ class TaprootAssetsNodeExtension:
             return result
         except Exception as e:
             raise Exception(f"Failed to create asset invoice: {str(e)}")
+
+    async def pay_asset_invoice(self, payment_request: str, fee_limit_sats: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Pay a Taproot Asset invoice.
+        
+        Args:
+            payment_request: The BOLT11 invoice payment request
+            fee_limit_sats: Optional fee limit in satoshis
+            
+        Returns:
+            Dict containing the payment information
+        """
+        try:
+            logger.debug(f"Paying asset invoice (full): {payment_request}")
+            
+            # If fee_limit_sats is not provided, use a default
+            if fee_limit_sats is None:
+                fee_limit_sats = 1000  # Default to 1000 sats fee limit
+            
+            # Get payment hash from the invoice
+            payment_hash = ""
+            try:
+                from lnbits import bolt11
+                decoded = bolt11.decode(payment_request)
+                payment_hash = decoded.payment_hash
+                logger.debug(f"Decoded invoice: payment_hash={payment_hash}, amount_msat={decoded.amount_msat}")
+            except Exception as e:
+                logger.warning(f"Failed to decode invoice to get payment hash: {e}")
+            
+            # We need to use the piratecoin asset ID when sending payments
+            piratecoin_asset_id = "b9ad8b868631ffe50fb09ff15e737fba9d4a34688a77ad608d3f6ee5db5eae44"
+            logger.debug(f"Using piratecoin asset_id: {piratecoin_asset_id}")
+            
+            # Convert asset_id to bytes
+            asset_id_bytes = bytes.fromhex(piratecoin_asset_id)
+            
+            # Try to pay the invoice with Lightning directly first
+            try:
+                # Import the router pb2 module
+                from lnbits.wallets.lnd_grpc_files.routerrpc import router_pb2
+                
+                # Create the router payment request
+                router_payment_request = router_pb2.SendPaymentRequest(
+                    payment_request=payment_request,
+                    fee_limit_sat=fee_limit_sats,
+                    timeout_seconds=60,  # 1 minute timeout
+                    no_inflight_updates=False
+                )
+                
+                # Create the SendPayment request
+                request = tapchannel_pb2.SendPaymentRequest(
+                    payment_request=router_payment_request,
+                    asset_id=asset_id_bytes,  # Include the asset ID
+                    allow_overpay=True  # Allow payment even if it's uneconomical
+                )
+                
+                logger.debug(f"Calling tapchannel_stub.SendPayment with asset_id={piratecoin_asset_id}")
+                
+                # Important: Do not await the initial call to SendPayment
+                # Just get the stream object
+                response_stream = self.tapchannel_stub.SendPayment(request)
+                
+                # Prepare variables to hold payment result information
+                payment_status = "pending"
+                preimage = ""
+                fee_sat = 0
+                
+                # Process the stream responses
+                try:
+                    # Now we use async for to iterate through the stream responses
+                    async for response in response_stream:
+                        logger.debug(f"Got payment response: {response}")
+                        
+                        # Check if we got a sell order acceptance or payment result
+                        if hasattr(response, 'accepted_sell_order') and response.HasField('accepted_sell_order'):
+                            logger.debug("Received accepted sell order response")
+                            # This is just an intermediate step, continue to next response
+                            continue
+                            
+                        elif hasattr(response, 'payment_result') and response.HasField('payment_result'):
+                            payment_result = response.payment_result
+                            
+                            # Check payment status
+                            if payment_result.status == 1:  # SUCCEEDED
+                                payment_status = "success"
+                                
+                                if hasattr(payment_result, 'payment_preimage'):
+                                    preimage = payment_result.payment_preimage.hex() if isinstance(payment_result.payment_preimage, bytes) else str(payment_result.payment_preimage)
+                                
+                                if hasattr(payment_result, 'fee_msat'):
+                                    fee_sat = payment_result.fee_msat // 1000
+                                
+                                logger.debug(f"Payment succeeded: hash={payment_hash}, preimage={preimage}, fee={fee_sat} sat")
+                                break
+                                
+                            elif payment_result.status == 3:  # FAILED
+                                payment_status = "failed"
+                                failure_reason = "Unknown failure"
+                                
+                                if hasattr(payment_result, 'failure_reason'):
+                                    failure_reason = payment_result.failure_reason
+                                    
+                                logger.error(f"Payment failed: {failure_reason}")
+                                raise Exception(f"Payment failed: {failure_reason}")
+                    
+                    # Check final payment status
+                    if payment_status != "success":
+                        raise Exception("Payment did not succeed or timed out")
+                        
+                except grpc.aio.AioRpcError as e:
+                    # Handle gRPC errors from the streaming call
+                    logger.error(f"gRPC error in payment stream: {e.code()}: {e.details()}")
+                    raise Exception(f"gRPC error: {e.code()}: {e.details()}")
+                    
+                except Exception as e:
+                    # Handle other errors
+                    logger.error(f"Error processing payment stream: {e}")
+                    raise
+                
+                # Prepare successful response
+                result = {
+                    "payment_hash": payment_hash,
+                    "payment_preimage": preimage,
+                    "fee_sats": fee_sat,
+                    "status": "success",
+                    "payment_request": payment_request
+                }
+                
+                logger.debug(f"Payment successful: {result}")
+                return result
+                
+            except Exception as e:
+                logger.error(f"Failed to pay using Taproot channel: {e}")
+                
+                # If the Taproot-specific payment failed, fall back to standard Lightning payment
+                try:
+                    logger.debug("Falling back to standard Lightning payment")
+                    
+                    # Create payment request with fee limit
+                    fee_limit_obj = lightning_pb2.FeeLimit(fixed=fee_limit_sats * 1000)  # Convert to millisatoshis
+                    
+                    request = lightning_pb2.SendRequest(
+                        payment_request=payment_request,
+                        fee_limit=fee_limit_obj,
+                        allow_self_payment=True
+                    )
+                    
+                    # Make the SendPaymentSync call
+                    response = await self.ln_stub.SendPaymentSync(request)
+                    
+                    # Check for errors
+                    if hasattr(response, 'payment_error') and response.payment_error:
+                        logger.error(f"Payment failed: {response.payment_error}")
+                        raise Exception(f"Payment failed: {response.payment_error}")
+                    
+                    # Extract payment details
+                    preimage = ""
+                    fee_sat = 0
+                    
+                    if hasattr(response, 'payment_preimage'):
+                        preimage = response.payment_preimage.hex() if isinstance(response.payment_preimage, bytes) else str(response.payment_preimage)
+                    
+                    if hasattr(response, 'payment_route') and hasattr(response.payment_route, 'total_fees_msat'):
+                        fee_sat = response.payment_route.total_fees_msat // 1000
+                    
+                    # Prepare successful response
+                    result = {
+                        "payment_hash": payment_hash,
+                        "payment_preimage": preimage,
+                        "fee_sats": fee_sat,
+                        "status": "success",
+                        "payment_request": payment_request
+                    }
+                    
+                    logger.debug(f"Standard Lightning payment successful: {result}")
+                    return result
+                    
+                except Exception as fallback_error:
+                    logger.error(f"Fallback Lightning payment also failed: {fallback_error}")
+                    raise Exception(f"All payment methods failed. Last error: {str(fallback_error)}")
+                
+        except Exception as e:
+            logger.error(f"Payment failed: {str(e)}", exc_info=True)
+            raise Exception(f"Failed to pay asset invoice: {str(e)}")
 
     async def close(self):
         """Close the gRPC channels."""

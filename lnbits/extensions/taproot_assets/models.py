@@ -1,3 +1,4 @@
+# /home/ubuntu/lnbits/lnbits/extensions/taproot_assets/models.py
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -39,6 +40,12 @@ class TaprootInvoiceRequest(BaseModel):
     amount: int
     memo: Optional[str] = None
     expiry: Optional[int] = None
+
+
+class TaprootPaymentRequest(BaseModel):
+    """Request model for paying a Taproot Asset invoice."""
+    payment_request: str
+    fee_limit_sats: Optional[int] = 1000  # Default to 1000 sats fee limit
 
 
 class TaprootInvoice(BaseModel):

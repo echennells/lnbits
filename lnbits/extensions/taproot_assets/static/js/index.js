@@ -21,14 +21,58 @@ window.app = Vue.createApp({
       showInvoiceForm: false,  // Start with the form hidden
       showInvoiceModal: false,
       assets: [], // Initialize as empty array
-      invoices: [], // Initialize as empty array
+      invoices: [], // Keep this to prevent undefined errors
       selectedAsset: null, // Track the selected asset object
       invoiceForm: {
         amount: 1,
         memo: '',
         expiry: 3600
       },
-      createdInvoice: null
+      createdInvoice: null,
+
+      // For Send functionality
+      showPayModal: false,
+      paymentRequest: '',
+      feeLimit: 1000,
+      paymentInProgress: false,
+      showPaymentSuccessModal: false
+    }
+  },
+  computed: {
+    // Add a computed property to determine max invoice amount (inbound liquidity)
+    maxInvoiceAmount() {
+      if (!this.selectedAsset) return 0;
+      
+      // For channel assets, calculate remote capacity (inbound liquidity)
+      if (this.selectedAsset.channel_info) {
+        const totalCapacity = parseFloat(this.selectedAsset.channel_info.capacity);
+        const localBalance = parseFloat(this.selectedAsset.channel_info.local_balance);
+        // Remote capacity = Total capacity - Local balance
+        return totalCapacity - localBalance;
+      }
+      
+      // For non-channel assets, use amount
+      return parseFloat(this.selectedAsset.amount);
+    },
+    // Add validation status
+    isInvoiceAmountValid() {
+      if (!this.selectedAsset) return false;
+      return parseFloat(this.invoiceForm.amount) <= this.maxInvoiceAmount;
+    }
+  },
+  watch: {
+    // Add a watcher to ensure amount stays within limits
+    'invoiceForm.amount': function(newAmount) {
+      const amount = parseFloat(newAmount);
+      const max = this.maxInvoiceAmount;
+      
+      // If amount exceeds max, cap it at max
+      if (amount > max) {
+        this.invoiceForm.amount = max;
+        if (LNbits && LNbits.utils && LNbits.utils.notifyWarning) {
+          LNbits.utils.notifyWarning(`Amount capped at maximum receivable: ${max}`);
+        }
+      }
     }
   },
   methods: {
@@ -38,7 +82,7 @@ window.app = Vue.createApp({
     getSettings() {
       if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
-      
+
       LNbits.api
         .request('GET', '/taproot_assets/api/v1/taproot/settings', wallet.adminkey)
         .then(response => {
@@ -54,7 +98,7 @@ window.app = Vue.createApp({
     saveSettings() {
       if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
-      
+
       LNbits.api
         .request('PUT', '/taproot_assets/api/v1/taproot/settings', wallet.adminkey, this.settings)
         .then(response => {
@@ -74,7 +118,7 @@ window.app = Vue.createApp({
     getAssets() {
       if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
-      
+
       LNbits.api
         .request('GET', '/taproot_assets/api/v1/taproot/listassets', wallet.adminkey)
         .then(response => {
@@ -91,34 +135,33 @@ window.app = Vue.createApp({
         });
     },
     getInvoices() {
-      if (!this.g.user.wallets.length) return;
-      const wallet = this.g.user.wallets[0];
-      
-      LNbits.api
-        .request('GET', '/taproot_assets/api/v1/taproot/invoices', wallet.adminkey)
-        .then(response => {
-          this.invoices = response.data || []; // Ensure it's an array
-        })
-        .catch(err => {
-          console.error('Failed to fetch invoices:', err);
-          if (LNbits && LNbits.utils && LNbits.utils.notifyApiError) {
-            LNbits.utils.notifyApiError(err);
-          }
-          this.invoices = []; 
-        });
+      // Keep this method but make it do nothing (just set empty array)
+      this.invoices = [];
     },
     createInvoice(asset) {
       // Store the entire asset object
       this.selectedAsset = asset;
       console.log('Selected asset:', asset);
-      
+
       // Show the invoice form
       this.showInvoiceForm = true;
-      
+
       // Reset form values
       this.invoiceForm.amount = 1;
       this.invoiceForm.memo = '';
       this.invoiceForm.expiry = 3600;
+    },
+    showSendForm(asset) {
+      // Store the entire asset object
+      this.selectedAsset = asset;
+      console.log('Selected asset for sending:', asset);
+
+      // Reset payment form
+      this.paymentRequest = '';
+      this.feeLimit = 1000;
+
+      // Show the payment modal
+      this.showPayModal = true;
     },
     resetForm() {
       console.log('Form reset');
@@ -127,14 +170,14 @@ window.app = Vue.createApp({
       this.invoiceForm.memo = '';
       this.invoiceForm.expiry = 3600;
       this.createdInvoice = null;
-      
+
       // Hide the form
       this.showInvoiceForm = false;
     },
     submitInvoice() {
       if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
-      
+
       // Check if we have a selected asset
       if (!this.selectedAsset) {
         if (LNbits && LNbits.utils && LNbits.utils.notifyError) {
@@ -142,20 +185,32 @@ window.app = Vue.createApp({
         }
         return;
       }
+
+      // Validate amount against maximum inbound liquidity (double-check)
+      const amount = parseFloat(this.invoiceForm.amount);
+      const max = this.maxInvoiceAmount;
       
+      if (amount > max) {
+        if (LNbits && LNbits.utils && LNbits.utils.notifyError) {
+          LNbits.utils.notifyError(`Amount exceeds maximum receivable. Maximum: ${max}`);
+        }
+        this.invoiceForm.amount = max; // Force cap the amount
+        return;
+      }
+
       // Find the asset_id
       let assetId = this.selectedAsset.asset_id || '';
-      
+
       // Create the payload with the found asset ID
       const payload = {
         asset_id: assetId,
-        amount: this.invoiceForm.amount,
+        amount: parseFloat(this.invoiceForm.amount), // Ensure it's a number
         memo: this.invoiceForm.memo,
         expiry: this.invoiceForm.expiry
       };
-      
+
       console.log('Submitting invoice:', payload);
-      
+
       LNbits.api
         .request('POST', '/taproot_assets/api/v1/taproot/invoice', wallet.adminkey, payload)
         .then(response => {
@@ -170,6 +225,45 @@ window.app = Vue.createApp({
             LNbits.utils.notifyApiError(err);
           }
         });
+    },
+    async payInvoice() {
+      if (!this.g.user.wallets.length) return;
+      const wallet = this.g.user.wallets[0];
+
+      // Check if we have a payment request
+      if (!this.paymentRequest) {
+        LNbits.utils.notifyError('Please enter an invoice to pay');
+        return;
+      }
+
+      try {
+        this.paymentInProgress = true;
+
+        const response = await LNbits.api.request(
+          'POST',
+          '/taproot_assets/api/v1/taproot/pay',
+          wallet.adminkey,
+          {
+            payment_request: this.paymentRequest,
+            fee_limit_sats: this.feeLimit
+          }
+        );
+
+        this.paymentInProgress = false;
+        this.showPayModal = false;
+        this.showPaymentSuccessModal = true;
+
+        // Reset form
+        this.paymentRequest = '';
+
+        // Refresh asset list to show updated balances
+        await this.getAssets();
+
+        console.log('Payment successful:', response);
+      } catch (error) {
+        this.paymentInProgress = false;
+        LNbits.utils.notifyApiError(error);
+      }
     },
     copyInvoice(invoice) {
       const textToCopy = typeof invoice === 'string'
@@ -227,7 +321,7 @@ window.app = Vue.createApp({
     if (this.g.user.wallets.length) {
       this.getSettings();
       this.getAssets();
-      this.getInvoices();
+      this.getInvoices(); // Keep this call, but the method now just sets an empty array
     }
   }
 })
