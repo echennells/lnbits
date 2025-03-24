@@ -8,6 +8,7 @@ from lnbits.settings import settings
 
 from .taproot_node import TaprootAssetsNodeExtension
 from ..crud import get_or_create_settings
+from ..tapd_settings import taproot_settings
 
 
 class InvoiceResponse:
@@ -364,6 +365,56 @@ class TaprootWalletExtension:
         finally:
             await self.cleanup()
 
+    async def update_taproot_assets_after_payment(
+        self,
+        invoice: str,
+        payment_hash: str,
+        fee_limit_sats: Optional[int] = None,
+    ) -> PaymentResponse:
+        """
+        Update Taproot Assets after payment has been made from LNbits wallet.
+        
+        This function is called after a successful payment through the LNbits wallet system
+        to update the Taproot Assets daemon about the payment.
+
+        Args:
+            invoice: The payment request (BOLT11 invoice)
+            payment_hash: The payment hash of the completed payment
+            fee_limit_sats: Optional fee limit in satoshis
+
+        Returns:
+            PaymentResponse: Contains confirmation of the asset update
+        """
+        try:
+            await self._init_connection()
+            
+            logger.debug(f"Notifying Taproot Assets daemon about payment: {payment_hash}")
+            
+            # Call the node's update_after_payment method
+            update_result = await self.node.update_after_payment(
+                payment_request=invoice,
+                payment_hash=payment_hash,
+                fee_limit_sats=fee_limit_sats
+            )
+            
+            logger.debug(f"Update result: {update_result}")
+            
+            return PaymentResponse(
+                ok=True,
+                checking_id=payment_hash,
+                fee_msat=0,  # No additional fee as it was already paid via LNbits
+                preimage=update_result.get("preimage", "")
+            )
+        except Exception as e:
+            logger.error(f"Failed to update Taproot Assets after payment: {str(e)}", exc_info=True)
+            return PaymentResponse(
+                ok=False,
+                checking_id=payment_hash,
+                error_message=f"Failed to update Taproot Assets: {str(e)}"
+            )
+        finally:
+            await self.cleanup()
+
     async def pay_asset_invoice(
         self,
         invoice: str,
@@ -373,32 +424,36 @@ class TaprootWalletExtension:
         """
         Pay a Taproot Asset invoice.
         
+        WARNING: This method is now deprecated for direct use.
+        Use update_taproot_assets_after_payment instead after making the payment with LNbits wallet.
+
         Args:
             invoice: The payment request (BOLT11 invoice)
             fee_limit_sats: Optional fee limit in satoshis
             **kwargs: Additional parameters
-            
+
         Returns:
             PaymentResponse: Contains information about the payment
         """
+        logger.warning("pay_asset_invoice is deprecated - payments should be made through LNbits wallet system")
         try:
             await self._init_connection()
-            
+
             logger.debug(f"Sending payment for invoice: {invoice[:30]}...")
-            
+
             # Call the node's pay_asset_invoice method
             payment_result = await self.node.pay_asset_invoice(
                 payment_request=invoice,
                 fee_limit_sats=fee_limit_sats
             )
-            
+
             logger.debug(f"Payment result: {payment_result}")
-            
+
             # Extract payment details
             payment_hash = payment_result.get("payment_hash", "")
             preimage = payment_result.get("payment_preimage", "")
             fee_msat = payment_result.get("fee_sats", 0) * 1000  # Convert sats to msats
-            
+
             return PaymentResponse(
                 ok=True,
                 checking_id=payment_hash,

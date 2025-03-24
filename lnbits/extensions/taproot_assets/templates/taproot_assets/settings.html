@@ -1,13 +1,10 @@
-{% extends "base.html" %} {% from "macros.jinja" import window_vars with context %}
-
-{% block scripts %} 
-{{ window_vars(user) }}
-<script src="{{ static_url_for('taproot_assets/static', path='js/index.js') }}"></script>
-{% endblock %} 
+<!-- /home/ubuntu/lnbits/lnbits/extensions/taproot_assets/templates/taproot_assets/settings.html -->
+{% extends "base.html" %}
+{% from "macros.jinja" import window_vars with context %}
 
 {% block page %}
 <div class="row q-col-gutter-md">
-  <div class="col-12 col-md-8 col-lg-7 q-gutter-y-md">
+  <div class="col-12 q-gutter-y-md">
     <q-card>
       <q-card-section>
         <div class="row items-center no-wrap q-mb-sm">
@@ -25,72 +22,136 @@
       </q-card-section>
 
       <q-card-section>
-        <q-form @submit="saveSettings" class="q-gutter-md">
-          <q-input v-model="settings.tapd_host" label="Taproot Assets Daemon Host" outlined hint="e.g., localhost:10009"></q-input>
-          <q-select
-            v-model="settings.tapd_network"
-            :options="['mainnet', 'testnet', 'signet', 'regtest']"
-            label="Network"
-            outlined
-          ></q-select>
-          <q-input v-model="settings.tapd_tls_cert_path" label="TLS Certificate Path" outlined hint="Full path to tapd TLS certificate"></q-input>
-          <q-input v-model="settings.tapd_macaroon_path" label="Taproot Macaroon Path" outlined hint="Full path to tapd admin macaroon"></q-input>
-          <q-input 
-            v-model="settings.tapd_macaroon_hex" 
-            label="Taproot Macaroon (Hex)" 
-            outlined 
-            hint="Hex-encoded macaroon (alternative to file path)"
-            type="textarea"
-            autogrow
-          ></q-input>
-          <q-input v-model="settings.lnd_macaroon_path" label="LND Macaroon Path" outlined hint="Full path to LND admin macaroon"></q-input>
-          <q-input 
-            v-model="settings.lnd_macaroon_hex" 
-            label="LND Macaroon (Hex)" 
-            outlined 
-            hint="Hex-encoded macaroon (alternative to file path)"
-            type="textarea"
-            autogrow
-          ></q-input>
-          
+        <q-form class="q-gutter-md" @submit="saveSettings">
+          <div class="row q-col-gutter-md">
+            <div class="col-12 col-md-6">
+              <q-input
+                filled
+                v-model="settings.tapd_host"
+                label="Taproot Assets Daemon Host"
+                hint="Example: 127.0.0.1:10009"
+              ></q-input>
+            </div>
+            <div class="col-12 col-md-6">
+              <q-select
+                filled
+                v-model="settings.tapd_network"
+                :options="['signet', 'testnet', 'mainnet']"
+                label="Taproot Assets Network"
+              ></q-select>
+            </div>
+            <div class="col-12">
+              <q-input
+                filled
+                v-model="settings.tapd_tls_cert_path"
+                label="TLS Certificate Path"
+                hint="Path to the tapd TLS certificate"
+              ></q-input>
+            </div>
+            <div class="col-12">
+              <q-input
+                filled
+                v-model="settings.tapd_macaroon_path"
+                label="Taproot Assets Macaroon Path"
+                hint="Path to the tapd admin macaroon"
+              ></q-input>
+            </div>
+            <div class="col-12">
+              <q-input
+                filled
+                v-model="settings.tapd_macaroon_hex"
+                label="Taproot Assets Macaroon Hex (optional)"
+                hint="Hex-encoded admin macaroon (alternative to path)"
+              ></q-input>
+            </div>
+            <div class="col-12">
+              <q-input
+                filled
+                v-model="settings.lnd_macaroon_path"
+                label="LND Macaroon Path"
+                hint="Path to the LND admin macaroon"
+              ></q-input>
+            </div>
+            <div class="col-12">
+              <q-input
+                filled
+                v-model="settings.lnd_macaroon_hex"
+                label="LND Macaroon Hex (optional)"
+                hint="Hex-encoded LND admin macaroon (alternative to path)"
+              ></q-input>
+            </div>
+            <div class="col-12 col-md-6">
+              <q-input
+                filled
+                v-model.number="settings.default_sat_fee"
+                type="number"
+                min="1"
+                label="Default Satoshi Fee"
+                hint="Minimal satoshi amount required for Taproot Asset transfers"
+              ></q-input>
+            </div>
+          </div>
+
           <div class="row q-mt-lg">
-            <q-btn type="submit" color="primary" label="Save"></q-btn>
+            <q-btn
+              type="submit"
+              color="primary"
+              label="Save Settings"
+            ></q-btn>
           </div>
         </q-form>
       </q-card-section>
     </q-card>
   </div>
-
-  <div class="col-12 col-md-4 col-lg-5">
-    <q-card>
-      <q-card-section>
-        <h6 class="text-subtitle1 q-my-none">Help</h6>
-        <q-separator class="q-my-sm"></q-separator>
-        <p>
-          This extension connects to a Taproot Assets daemon (tapd) to manage and transact with Taproot Assets.
-        </p>
-        <p>
-          <strong>Requirements:</strong>
-        </p>
-        <ul>
-          <li>A running tapd instance</li>
-          <li>Access to the tapd admin macaroon</li>
-          <li>Access to the LND admin macaroon (for invoice creation)</li>
-        </ul>
-        <p>
-          <strong>Settings:</strong>
-        </p>
-        <ul>
-          <li><strong>Taproot Assets Daemon Host:</strong> The host and port where your tapd instance is running</li>
-          <li><strong>Network:</strong> The Bitcoin network your tapd instance is connected to</li>
-          <li><strong>TLS Certificate Path:</strong> Path to the TLS certificate for secure communication</li>
-          <li><strong>Taproot Macaroon Path:</strong> Path to the tapd admin macaroon file</li>
-          <li><strong>Taproot Macaroon (Hex):</strong> Alternative to providing a file path, you can paste the hex-encoded macaroon</li>
-          <li><strong>LND Macaroon Path:</strong> Path to the LND admin macaroon file</li>
-          <li><strong>LND Macaroon (Hex):</strong> Alternative to providing a file path, you can paste the hex-encoded macaroon</li>
-        </ul>
-      </q-card-section>
-    </q-card>
-  </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{{ window_vars(user) }}
+<script>
+  new Vue({
+    el: '#vue',
+    mixins: [windowMixin],
+    data() {
+      return {
+        settings: {
+          tapd_host: '',
+          tapd_network: 'signet',
+          tapd_tls_cert_path: '',
+          tapd_macaroon_path: '',
+          tapd_macaroon_hex: '',
+          lnd_macaroon_path: '',
+          lnd_macaroon_hex: '',
+          default_sat_fee: 1
+        }
+      }
+    },
+    methods: {
+      getSettings() {
+        LNbits.api
+          .request('GET', '/taproot_assets/api/v1/taproot/settings', this.g.user.wallets[0].adminkey)
+          .then(response => {
+            this.settings = response.data
+          })
+          .catch(err => {
+            LNbits.utils.notifyApiError(err)
+          })
+      },
+      saveSettings() {
+        LNbits.api
+          .request('PUT', '/taproot_assets/api/v1/taproot/settings', this.g.user.wallets[0].adminkey, this.settings)
+          .then(response => {
+            this.settings = response.data
+            LNbits.utils.notifySuccess('Settings saved successfully')
+          })
+          .catch(err => {
+            LNbits.utils.notifyApiError(err)
+          })
+      }
+    },
+    created() {
+      this.getSettings()
+    }
+  })
+</script>
 {% endblock %}

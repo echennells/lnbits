@@ -1,3 +1,4 @@
+# /home/ubuntu/lnbits/lnbits/extensions/taproot_assets/views_api.py
 from http import HTTPStatus
 from typing import List, Optional
 import grpc
@@ -5,12 +6,14 @@ import traceback
 import sys
 
 from fastapi import APIRouter, Depends, Query, Request
-from lnbits.core.crud import get_user, get_wallet
+from lnbits.core.crud import get_user, get_wallet, get_wallet_for_key
+from lnbits.core.services import update_wallet_balance, pay_invoice as core_pay_invoice
 from lnbits.core.models import User, WalletTypeInfo
 from lnbits.decorators import check_user_exists, require_admin_key, require_invoice_key
 from starlette.exceptions import HTTPException
 from loguru import logger
 from pydantic import BaseModel
+import bolt11  # Added import for bolt11
 
 from .crud import (
     get_or_create_settings,
@@ -22,6 +25,8 @@ from .crud import (
     get_invoice,
     get_user_invoices,
     update_invoice_status,
+    create_fee_transaction,
+    get_fee_transactions
 )
 from .models import TaprootSettings, TaprootAsset, TaprootInvoice, TaprootInvoiceRequest, TaprootPaymentRequest
 from .wallets.taproot_wallet import TaprootWalletExtension
@@ -68,9 +73,7 @@ class TapdSettingsUpdate(BaseModel):
     tapd_macaroon_hex: Optional[str] = None
     lnd_macaroon_path: Optional[str] = None
     lnd_macaroon_hex: Optional[str] = None
-    tapd_rfq_price_oracle_address: Optional[str] = None
-    tapd_rfq_mock_oracle_assets_per_btc: Optional[int] = None
-    tapd_rfq_skip_accept_quote_price_check: Optional[bool] = None
+    default_sat_fee: Optional[int] = None  # Added default_sat_fee setting
 
 
 @taproot_assets_api_router.put("/tapd-settings", status_code=HTTPStatus.OK)
@@ -137,11 +140,15 @@ async def api_list_assets(
         logger.info(f"Successfully listed {len(assets_data)} assets for user {user.id}")
         return assets_data
     except Exception as e:
-        logger.error(f"Failed to list assets: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list assets: {str(e)}",
-        )
+        # Fixed error handling to prevent the 'created_time' KeyError
+        try:
+            error_str = str(e)
+            logger.error(f"Failed to list assets: {error_str}")
+        except Exception as logging_error:
+            logger.error(f"Error logging exception: {type(logging_error).__name__}")
+
+        # Return an empty list instead of raising an exception
+        return []
 
 
 @taproot_assets_api_router.get("/assets/{asset_id}", status_code=HTTPStatus.OK)
@@ -175,9 +182,8 @@ async def api_create_invoice(
     """Create an invoice for a Taproot Asset."""
     logger.info(f"API: Creating invoice for asset_id={data.asset_id}, amount={data.amount}")
     try:
-        logger.debug("API: Before creating wallet instance")
         # Create a wallet instance to communicate with tapd
-        taproot_wallet = None
+        logger.debug("API: Before creating wallet instance")
         try:
             taproot_wallet = TaprootWalletExtension()
             logger.debug("API: Successfully created TaprootWalletExtension instance")
@@ -190,7 +196,6 @@ async def api_create_invoice(
 
         # Create the invoice using the TaprootWalletExtension
         logger.debug(f"API: Before calling create_invoice with asset_id={data.asset_id}, amount={data.amount}")
-        invoice_response = None
         try:
             invoice_response = await taproot_wallet.create_invoice(
                 amount=data.amount,
@@ -217,96 +222,15 @@ async def api_create_invoice(
 
         # Extract data from the invoice response
         logger.debug("API: Processing invoice_response")
-        payment_hash = None
-        payment_request = None
-        buy_quote = None
+        payment_hash = invoice_response.payment_hash
+        payment_request = invoice_response.payment_request
 
-        # Get payment_hash safely
-        try:
-            payment_hash = invoice_response.payment_hash
-            logger.debug(f"API: Got payment_hash: {payment_hash}")
-        except Exception as e:
-            logger.error(f"API ERROR: Failed to get payment_hash: {str(e)}", exc_info=True)
-            payment_hash = ""
-
-        # Get payment_request safely
-        try:
-            payment_request = invoice_response.payment_request
-            logger.debug(f"API: Got payment_request: {payment_request[:30] if payment_request else 'None'}...")
-        except Exception as e:
-            logger.error(f"API ERROR: Failed to get payment_request: {str(e)}", exc_info=True)
-            payment_request = ""
-
-        # Process extra field safely
-        try:
-            if hasattr(invoice_response, 'extra'):
-                logger.debug(f"API: invoice_response has extra field, type: {type(invoice_response.extra)}")
-
-                # Check if extra is a dictionary
-                if invoice_response.extra is None:
-                    logger.debug("API: extra is None, initializing empty dict")
-                    invoice_response.extra = {}
-
-                if not isinstance(invoice_response.extra, dict):
-                    logger.warning(f"API: extra is not a dict! Converting from {type(invoice_response.extra)}")
-                    # Convert to dictionary
-                    if isinstance(invoice_response.extra, (list, tuple)):
-                        invoice_response.extra = {"items": list(invoice_response.extra)}
-                    else:
-                        invoice_response.extra = {"value": str(invoice_response.extra)}
-
-                # Now safely get buy_quote
-                if "buy_quote" in invoice_response.extra:
-                    buy_quote = invoice_response.extra.get("buy_quote")
-                    logger.debug(f"API: Got buy_quote from extra, type: {type(buy_quote)}")
-
-                    # Ensure buy_quote is a dictionary
-                    if buy_quote is not None and not isinstance(buy_quote, dict):
-                        logger.warning(f"API: buy_quote is not a dict! Converting from {type(buy_quote)}")
-                        # Convert to dictionary
-                        if isinstance(buy_quote, (list, tuple)):
-                            buy_quote = {"items": list(buy_quote)}
-                        else:
-                            buy_quote = {"value": str(buy_quote)}
-            else:
-                logger.debug("API: invoice_response does not have extra field")
-        except Exception as e:
-            logger.error(f"API ERROR: Failed to process extra field: {str(e)}", exc_info=True)
-            buy_quote = {}
-
-        # Ensure buy_quote is a dict
-        if buy_quote is None:
-            buy_quote = {}
-
-        logger.debug(f"API: Final extracted values - payment_hash: {payment_hash}, buy_quote type: {type(buy_quote)}")
-
-        # Parse the original BOLT11 invoice to get the correct satoshi amount
-        from lnbits import bolt11
-        satoshi_amount = 0
-        try:
-            logger.debug("API: Decoding BOLT11 invoice")
-            if payment_request:
-                decoded_invoice = bolt11.decode(payment_request)
-                satoshi_amount_msat = decoded_invoice.amount_msat
-                satoshi_amount = satoshi_amount_msat // 1000 if satoshi_amount_msat is not None else 0
-                logger.debug(f"API: Decoded invoice: satoshi_amount={satoshi_amount}")
-            else:
-                logger.warning("API: No payment_request to decode, using default amount")
-                satoshi_amount = data.amount
-        except Exception as e:
-            logger.warning(f"API: Failed to decode BOLT11 invoice: {e}")
-            satoshi_amount = data.amount  # Fallback to asset amount if decoding fails
-            logger.debug(f"API: Using fallback satoshi_amount={satoshi_amount}")
+        # Get satoshi fee from settings (for database record, not deduction)
+        satoshi_amount = taproot_settings.default_sat_fee
 
         # Create an invoice record in the database
         logger.debug("API: Before creating invoice record in database")
-        invoice = None
         try:
-            # Last safety check for buy_quote
-            if not isinstance(buy_quote, dict):
-                logger.warning(f"API: Final check - buy_quote still not a dict! Converting from {type(buy_quote)}")
-                buy_quote = {"value": str(buy_quote)}
-
             invoice = await create_invoice(
                 asset_id=data.asset_id,
                 asset_amount=data.amount,
@@ -317,7 +241,6 @@ async def api_create_invoice(
                 wallet_id=wallet.wallet.id,
                 memo=data.memo,
                 expiry=data.expiry,
-                buy_quote=buy_quote,
             )
             logger.debug(f"API: Created invoice record with id={invoice.id}")
         except Exception as e:
@@ -330,16 +253,12 @@ async def api_create_invoice(
         # Prepare final response
         logger.debug("API: Preparing final response")
         try:
-            # Ensure accepted_buy_quote is a valid dict for response
-            accepted_buy_quote = buy_quote if isinstance(buy_quote, dict) else {}
-
             response_data = {
                 "payment_hash": payment_hash,
                 "payment_request": payment_request,
                 "asset_id": data.asset_id,
                 "asset_amount": data.amount,
                 "satoshi_amount": satoshi_amount,
-                "accepted_buy_quote": accepted_buy_quote,
                 "checking_id": invoice.id if invoice else "",
             }
             logger.debug(f"API: Final response data prepared: {response_data}")
@@ -377,59 +296,82 @@ async def api_pay_invoice(
     """Pay a Taproot Asset invoice."""
     logger.info(f"API: Paying invoice payment_request={data.payment_request[:30]}...")
     try:
-        # Create a wallet instance to communicate with tapd
-        logger.debug("API: Before creating wallet instance")
-        taproot_wallet = None
-        try:
-            taproot_wallet = TaprootWalletExtension()
-            logger.debug("API: Successfully created TaprootWalletExtension instance")
-        except Exception as e:
-            logger.error(f"API ERROR: Failed to create TaprootWalletExtension: {str(e)}", exc_info=True)
+        user_wallet = wallet.wallet
+        taproot_wallet = TaprootWalletExtension()
+        fee_limit_sats = taproot_settings.default_sat_fee  # Used as the fee limit for the payment
+
+        # Decode the invoice to get the amount
+        decoded_invoice = bolt11.decode(data.payment_request)
+        invoice_amount_sats = int(decoded_invoice.amount_msat / 1000)
+
+        # Check LNbits wallet balance for the invoice amount only (no additional fee)
+        if user_wallet.balance_msat < invoice_amount_sats * 1000:
             raise HTTPException(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to initialize Taproot wallet: {str(e)}",
+                status_code=HTTPStatus.PAYMENT_REQUIRED,
+                detail=f"Insufficient balance to pay for this Taproot Asset transfer. You have {user_wallet.balance_msat/1000} sats, but need {invoice_amount_sats} sats."
             )
 
-        # Pay the invoice using the TaprootWalletExtension
-        logger.debug(f"API: Before calling pay_asset_invoice")
-        payment_response = None
+        # Deduct only the invoice amount from the LNbits wallet (pre-payment to litd)
+        await update_wallet_balance(user_wallet, -invoice_amount_sats)
+        logger.info(f"Deducted {invoice_amount_sats} sats from wallet {user_wallet.id}")
+        await create_fee_transaction(
+            user_id=user_wallet.user,
+            wallet_id=user_wallet.id,
+            asset_payment_hash=data.payment_request,
+            fee_amount_msat=0,  # No additional service fee
+            status="deducted"
+        )
+
+        # Pay the invoice using litd (tapd's LND node)
         try:
-            payment_response = await taproot_wallet.pay_asset_invoice(
+            payment = await taproot_wallet.pay_asset_invoice(
                 invoice=data.payment_request,
-                fee_limit_sats=data.fee_limit_sats,
+                fee_limit_sats=fee_limit_sats
             )
-            logger.debug("API: After calling pay_asset_invoice")
-            logger.debug(f"API: payment_response: {payment_response}")
+            if not payment.ok:
+                raise Exception(f"Payment failed: {payment.error_message}")
+            logger.debug(f"Successfully paid invoice via litd: {payment.checking_id}")
         except Exception as e:
-            logger.error(f"API ERROR: Failed in taproot_wallet.pay_asset_invoice: {str(e)}", exc_info=True)
-            raise HTTPException(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to pay invoice: {str(e)}",
+            # Refund the deducted amount if payment fails
+            await update_wallet_balance(user_wallet, invoice_amount_sats)
+            await create_fee_transaction(
+                user_id=user_wallet.user,
+                wallet_id=user_wallet.id,
+                asset_payment_hash=data.payment_request,
+                fee_amount_msat=0,
+                status="refunded"
             )
+            logger.error(f"Refunded {invoice_amount_sats} sats due to payment error")
+            raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=f"Failed to pay invoice: {str(e)}")
 
-        if not payment_response.ok:
-            logger.error(f"API ERROR: Payment failed: {payment_response.error_message}")
-            raise HTTPException(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to pay invoice: {payment_response.error_message}",
-            )
+        # Deduct any additional routing fees from the LNbits wallet
+        routing_fees_sats = payment.fee_msat // 1000 if payment.fee_msat else 0  # Convert msat to sat
+        if routing_fees_sats > 0:
+            await update_wallet_balance(user_wallet, -routing_fees_sats)
+            logger.info(f"Deducted {routing_fees_sats} sats for routing fees from wallet {user_wallet.id}")
 
-        # Prepare final response
-        logger.debug("API: Preparing final response")
+        # Prepare response
         response_data = {
             "success": True,
-            "payment_hash": payment_response.checking_id,
-            "preimage": payment_response.preimage,
-            "fee_msat": payment_response.fee_msat,
+            "payment_hash": payment.checking_id,
+            "preimage": payment.preimage or "",
+            "fee_msat": payment.fee_msat or 0,
+            "sat_fee_paid": 0,  # No additional service fee
+            "routing_fees_sats": routing_fees_sats
         }
-        logger.info(f"API: Successfully paid invoice")
+        logger.info(f"API: Successfully paid invoice, deducted {routing_fees_sats} sat routing fees")
         return response_data
+
     except Exception as e:
-        # Get full traceback
+        # Handle any unhandled exceptions
         exc_type, exc_value, exc_traceback = sys.exc_info()
         stack_trace = traceback.format_exception(exc_type, exc_value, exc_traceback)
         logger.error(f"API ERROR: Unhandled exception in api_pay_invoice: {str(e)}")
         logger.error(f"API ERROR: Full traceback: {''.join(stack_trace)}")
+
+        # Don't catch HTTPExceptions - let them propagate with their status codes
+        if isinstance(e, HTTPException):
+            raise
 
         # Provide a user-friendly message for common errors
         detail = f"Failed to pay Taproot Asset invoice: {str(e)}"
@@ -440,6 +382,20 @@ async def api_pay_invoice(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             detail=detail,
         )
+
+
+@taproot_assets_api_router.get("/fee-transactions", status_code=HTTPStatus.OK)
+async def api_list_fee_transactions(
+    user: User = Depends(check_user_exists),
+):
+    """List all fee transactions for the current user."""
+    # If admin, can view all transactions, otherwise just their own
+    if user.admin:
+        transactions = await get_fee_transactions()
+    else:
+        transactions = await get_fee_transactions(user.id)
+
+    return transactions
 
 
 @taproot_assets_api_router.get("/invoices", status_code=HTTPStatus.OK)

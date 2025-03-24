@@ -1,3 +1,4 @@
+// /home/ubuntu/lnbits/lnbits/extensions/taproot_assets/static/js/index.js
 // Helper function to map objects if needed
 const mapObject = obj => {
   return obj
@@ -42,7 +43,7 @@ window.app = Vue.createApp({
     // Add a computed property to determine max invoice amount (inbound liquidity)
     maxInvoiceAmount() {
       if (!this.selectedAsset) return 0;
-      
+
       // For channel assets, calculate remote capacity (inbound liquidity)
       if (this.selectedAsset.channel_info) {
         const totalCapacity = parseFloat(this.selectedAsset.channel_info.capacity);
@@ -50,7 +51,7 @@ window.app = Vue.createApp({
         // Remote capacity = Total capacity - Local balance
         return totalCapacity - localBalance;
       }
-      
+
       // For non-channel assets, use amount
       return parseFloat(this.selectedAsset.amount);
     },
@@ -65,7 +66,7 @@ window.app = Vue.createApp({
     'invoiceForm.amount': function(newAmount) {
       const amount = parseFloat(newAmount);
       const max = this.maxInvoiceAmount;
-      
+
       // If amount exceeds max, cap it at max
       if (amount > max) {
         this.invoiceForm.amount = max;
@@ -189,7 +190,7 @@ window.app = Vue.createApp({
       // Validate amount against maximum inbound liquidity (double-check)
       const amount = parseFloat(this.invoiceForm.amount);
       const max = this.maxInvoiceAmount;
-      
+
       if (amount > max) {
         if (LNbits && LNbits.utils && LNbits.utils.notifyError) {
           LNbits.utils.notifyError(`Amount exceeds maximum receivable. Maximum: ${max}`);

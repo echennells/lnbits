@@ -14,6 +14,7 @@ class TaprootSettings(BaseModel):
     tapd_macaroon_hex: Optional[str] = None
     lnd_macaroon_path: str = "/root/.lnd/data/chain/bitcoin/signet/admin.macaroon"
     lnd_macaroon_hex: Optional[str] = None
+    default_sat_fee: int = 1  # Default satoshi fee for Taproot Asset transfers
 
 
 class TaprootAsset(BaseModel):
@@ -55,7 +56,7 @@ class TaprootInvoice(BaseModel):
     payment_request: str
     asset_id: str
     asset_amount: int
-    satoshi_amount: int
+    satoshi_amount: int  # Satoshi amount for protocol requirements (from settings)
     memo: Optional[str] = None
     status: str = "pending"
     user_id: str
@@ -63,4 +64,14 @@ class TaprootInvoice(BaseModel):
     created_at: datetime
     expires_at: Optional[datetime] = None
     paid_at: Optional[datetime] = None
-    buy_quote: Optional[Dict[str, Any]] = None
+
+
+class FeeTransaction(BaseModel):
+    """Model for tracking satoshi fee transactions."""
+    id: str
+    user_id: str
+    wallet_id: str
+    asset_payment_hash: str
+    fee_amount_msat: int
+    status: str  # "deducted", "refunded", or "failed"
+    created_at: datetime

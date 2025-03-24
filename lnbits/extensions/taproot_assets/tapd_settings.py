@@ -1,61 +1,82 @@
+# /home/ubuntu/lnbits/lnbits/extensions/taproot_assets/tapd_settings.py
 import json
 import os
-from pathlib import Path
-from typing import Dict, Any, Optional
+from loguru import logger
 
-class TaprootSettings:
-    """Settings for Taproot Assets extension that were previously in global settings."""
-    
+class TapdSettingsManager:
+    """
+    Manager for Taproot Assets daemon settings.
+    """
+
     def __init__(self):
-        self.extension_dir = Path(os.path.dirname(os.path.realpath(__file__)))
-        self.config_path = self.extension_dir / "tapd_config.json"
+        # Get the extension directory
+        self.extension_dir = os.path.dirname(os.path.abspath(__file__))
         
-        # Default configuration values
-        default_config = {
-            "tapd_host": "lit:10009",
-            "tapd_network": "signet",
-            "tapd_tls_cert_path": "/root/.lnd/tls.cert",
-            "tapd_macaroon_path": "/root/.tapd/data/signet/admin.macaroon",
-            "tapd_macaroon_hex": "",
-            "lnd_macaroon_path": "/root/.lnd/data/chain/bitcoin/signet/admin.macaroon",
-            "lnd_macaroon_hex": "",
-            "tapd_rfq_price_oracle_address": "use_mock_price_oracle_service_promise_to_not_use_on_mainnet",
-            "tapd_rfq_mock_oracle_assets_per_btc": 100000,
-            "tapd_rfq_skip_accept_quote_price_check": False
-        }
+        # Configuration file path
+        self.config_path = os.path.join(self.extension_dir, "tapd_config.json")
         
-        # Load existing configuration or create with defaults
-        self.config = self._load_config(default_config)
+        # Default settings
+        self.tapd_host = "lit:10009"
+        self.tapd_network = "signet"
+        self.tapd_tls_cert_path = "/root/.lnd/tls.cert"
+        self.tapd_macaroon_path = "/root/.tapd/data/signet/admin.macaroon"
+        self.tapd_macaroon_hex = None
+        self.lnd_macaroon_path = "/root/.lnd/data/chain/bitcoin/signet/admin.macaroon" 
+        self.lnd_macaroon_hex = None
+        self.default_sat_fee = 1  # Default to 1 sat fee
         
-        # Set attributes from config
-        for key, value in self.config.items():
-            setattr(self, key, value)
-    
-    def _load_config(self, default_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Load configuration from file or create with defaults."""
-        if self.config_path.exists():
-            try:
-                with open(self.config_path, "r") as f:
-                    return json.load(f)
-            except Exception as e:
-                print(f"Error loading config, using defaults: {e}")
-                return default_config
-        else:
-            # Create config file with defaults
-            with open(self.config_path, "w") as f:
-                json.dump(default_config, f, indent=2)
-            return default_config
-    
-    def save(self):
-        """Save current settings to config file."""
-        config = {}
-        # Get all attributes that don't start with underscore
-        for key in dir(self):
-            if not key.startswith('_') and not callable(getattr(self, key)):
-                config[key] = getattr(self, key)
-        
-        with open(self.config_path, "w") as f:
-            json.dump(config, f, indent=2)
+        # Load settings from config file if it exists
+        self.load()
 
-# Create a singleton instance
-taproot_settings = TaprootSettings()
+    def load(self):
+        """
+        Load settings from the config file.
+        """
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, "r") as f:
+                    self.config = json.load(f)
+                    
+                    # Load each setting from the config if it exists
+                    self.tapd_host = self.config.get("tapd_host", self.tapd_host)
+                    self.tapd_network = self.config.get("tapd_network", self.tapd_network)
+                    self.tapd_tls_cert_path = self.config.get("tapd_tls_cert_path", self.tapd_tls_cert_path)
+                    self.tapd_macaroon_path = self.config.get("tapd_macaroon_path", self.tapd_macaroon_path)
+                    self.tapd_macaroon_hex = self.config.get("tapd_macaroon_hex", self.tapd_macaroon_hex)
+                    self.lnd_macaroon_path = self.config.get("lnd_macaroon_path", self.lnd_macaroon_path)
+                    self.lnd_macaroon_hex = self.config.get("lnd_macaroon_hex", self.lnd_macaroon_hex)
+                    self.default_sat_fee = self.config.get("default_sat_fee", self.default_sat_fee)
+            else:
+                self.config = {}
+                logger.debug(f"Taproot Assets daemon config file not found at {self.config_path}")
+        except Exception as e:
+            self.config = {}
+            logger.error(f"Failed to load Taproot Assets daemon config: {str(e)}")
+
+    def save(self):
+        """
+        Save settings to the config file.
+        """
+        try:
+            # Create settings dictionary
+            self.config = {
+                "tapd_host": self.tapd_host,
+                "tapd_network": self.tapd_network,
+                "tapd_tls_cert_path": self.tapd_tls_cert_path,
+                "tapd_macaroon_path": self.tapd_macaroon_path,
+                "tapd_macaroon_hex": self.tapd_macaroon_hex,
+                "lnd_macaroon_path": self.lnd_macaroon_path,
+                "lnd_macaroon_hex": self.lnd_macaroon_hex,
+                "default_sat_fee": self.default_sat_fee
+            }
+            
+            # Save to file
+            with open(self.config_path, "w") as f:
+                json.dump(self.config, f, indent=4)
+                
+            logger.debug(f"Saved Taproot Assets daemon config to {self.config_path}")
+        except Exception as e:
+            logger.error(f"Failed to save Taproot Assets daemon config: {str(e)}")
+
+# Create a singleton instance of the settings manager
+taproot_settings = TapdSettingsManager()

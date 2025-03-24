@@ -1,3 +1,4 @@
+# /home/ubuntu/lnbits/lnbits/extensions/taproot_assets/crud.py
 import json
 import uuid
 from datetime import datetime, timedelta
@@ -7,7 +8,7 @@ from loguru import logger
 from lnbits.db import Connection, Database
 from lnbits.helpers import urlsafe_short_hash
 
-from .models import TaprootSettings, TaprootAsset, TaprootInvoice
+from .models import TaprootSettings, TaprootAsset, TaprootInvoice, FeeTransaction
 
 # Create a database instance for the extension
 db = Database("ext_taproot_assets")
@@ -28,11 +29,11 @@ async def get_or_create_settings() -> TaprootSettings:
             INSERT INTO taproot_assets.settings (
                 id, tapd_host, tapd_network, tapd_tls_cert_path,
                 tapd_macaroon_path, tapd_macaroon_hex,
-                lnd_macaroon_path, lnd_macaroon_hex
+                lnd_macaroon_path, lnd_macaroon_hex, default_sat_fee
             )
             VALUES (:id, :tapd_host, :tapd_network, :tapd_tls_cert_path,
                     :tapd_macaroon_path, :tapd_macaroon_hex,
-                    :lnd_macaroon_path, :lnd_macaroon_hex)
+                    :lnd_macaroon_path, :lnd_macaroon_hex, :default_sat_fee)
             """,
             {
                 "id": settings_id,
@@ -43,6 +44,7 @@ async def get_or_create_settings() -> TaprootSettings:
                 "tapd_macaroon_hex": settings.tapd_macaroon_hex,
                 "lnd_macaroon_path": settings.lnd_macaroon_path,
                 "lnd_macaroon_hex": settings.lnd_macaroon_hex,
+                "default_sat_fee": settings.default_sat_fee,
             },
         )
         return settings
@@ -59,11 +61,11 @@ async def update_settings(settings: TaprootSettings) -> TaprootSettings:
             INSERT OR REPLACE INTO taproot_assets.settings (
                 id, tapd_host, tapd_network, tapd_tls_cert_path,
                 tapd_macaroon_path, tapd_macaroon_hex,
-                lnd_macaroon_path, lnd_macaroon_hex
+                lnd_macaroon_path, lnd_macaroon_hex, default_sat_fee
             )
             VALUES (:id, :tapd_host, :tapd_network, :tapd_tls_cert_path,
                     :tapd_macaroon_path, :tapd_macaroon_hex,
-                    :lnd_macaroon_path, :lnd_macaroon_hex)
+                    :lnd_macaroon_path, :lnd_macaroon_hex, :default_sat_fee)
             """,
             {
                 "id": settings_id,
@@ -74,6 +76,7 @@ async def update_settings(settings: TaprootSettings) -> TaprootSettings:
                 "tapd_macaroon_hex": settings.tapd_macaroon_hex,
                 "lnd_macaroon_path": settings.lnd_macaroon_path,
                 "lnd_macaroon_hex": settings.lnd_macaroon_hex,
+                "default_sat_fee": settings.default_sat_fee,
             },
         )
         return settings
@@ -214,7 +217,6 @@ async def create_invoice(
     wallet_id: str,
     memo: Optional[str] = None,
     expiry: Optional[int] = None,
-    buy_quote: Optional[Dict[str, Any]] = None,
 ) -> TaprootInvoice:
     """Create a new Taproot Asset invoice."""
     async with db.connect() as conn:
@@ -222,33 +224,18 @@ async def create_invoice(
         now = datetime.now()
         expires_at = now + timedelta(seconds=expiry) if expiry else None
 
-        # Convert buy_quote to JSON string if present
-        try:
-            # Ensure buy_quote is a dictionary
-            if buy_quote and not isinstance(buy_quote, dict):
-                logger.warning(f"buy_quote is not a dict, converting from {type(buy_quote)}")
-                if isinstance(buy_quote, (list, tuple)):
-                    buy_quote = {"items": list(buy_quote)}
-                else:
-                    buy_quote = {"value": str(buy_quote)}
-
-            buy_quote_json = json.dumps(buy_quote) if buy_quote else None
-        except Exception as e:
-            logger.warning(f"Error serializing buy_quote: {e}")
-            buy_quote_json = None
-
-        # CHANGED: Use named parameters with a dictionary instead of positional parameters
+        # Changed to not include buy_quote field
         await conn.execute(
             """
             INSERT INTO taproot_assets.invoices (
                 id, payment_hash, payment_request, asset_id, asset_amount,
                 satoshi_amount, memo, status, user_id, wallet_id,
-                created_at, expires_at, buy_quote
+                created_at, expires_at
             )
             VALUES (
                 :id, :payment_hash, :payment_request, :asset_id, :asset_amount,
                 :satoshi_amount, :memo, :status, :user_id, :wallet_id,
-                :created_at, :expires_at, :buy_quote
+                :created_at, :expires_at
             )
             """,
             {
@@ -264,7 +251,6 @@ async def create_invoice(
                 "wallet_id": wallet_id,
                 "created_at": now,
                 "expires_at": expires_at,
-                "buy_quote": buy_quote_json,
             },
         )
 
@@ -282,7 +268,6 @@ async def create_invoice(
             wallet_id=wallet_id,
             created_at=now,
             expires_at=expires_at,
-            buy_quote=buy_quote,
         )
 
 
@@ -298,9 +283,6 @@ async def get_invoice(invoice_id: str) -> Optional[TaprootInvoice]:
         if not row:
             return None
 
-        # Parse buy_quote JSON if present
-        buy_quote = json.loads(row["buy_quote"]) if row["buy_quote"] else None
-
         return TaprootInvoice(
             id=row["id"],
             payment_hash=row["payment_hash"],
@@ -315,7 +297,6 @@ async def get_invoice(invoice_id: str) -> Optional[TaprootInvoice]:
             created_at=row["created_at"],
             expires_at=row["expires_at"],
             paid_at=row["paid_at"],
-            buy_quote=buy_quote,
         )
 
 
@@ -331,9 +312,6 @@ async def get_invoice_by_payment_hash(payment_hash: str) -> Optional[TaprootInvo
         if not row:
             return None
 
-        # Parse buy_quote JSON if present
-        buy_quote = json.loads(row["buy_quote"]) if row["buy_quote"] else None
-
         return TaprootInvoice(
             id=row["id"],
             payment_hash=row["payment_hash"],
@@ -348,7 +326,6 @@ async def get_invoice_by_payment_hash(payment_hash: str) -> Optional[TaprootInvo
             created_at=row["created_at"],
             expires_at=row["expires_at"],
             paid_at=row["paid_at"],
-            buy_quote=buy_quote,
         )
 
 
@@ -384,9 +361,6 @@ async def get_user_invoices(user_id: str) -> List[TaprootInvoice]:
 
         invoices = []
         for row in rows:
-            # Parse buy_quote JSON if present
-            buy_quote = json.loads(row["buy_quote"]) if row["buy_quote"] else None
-
             invoice = TaprootInvoice(
                 id=row["id"],
                 payment_hash=row["payment_hash"],
@@ -401,8 +375,77 @@ async def get_user_invoices(user_id: str) -> List[TaprootInvoice]:
                 created_at=row["created_at"],
                 expires_at=row["expires_at"],
                 paid_at=row["paid_at"],
-                buy_quote=buy_quote,
             )
             invoices.append(invoice)
 
         return invoices
+
+async def create_fee_transaction(
+    user_id: str,
+    wallet_id: str,
+    asset_payment_hash: str,
+    fee_amount_msat: int,
+    status: str
+) -> FeeTransaction:
+    """Create a record of a satoshi fee transaction."""
+    async with db.connect() as conn:
+        transaction_id = urlsafe_short_hash()
+        now = datetime.now()
+
+        await conn.execute(
+            """
+            INSERT INTO taproot_assets.fee_transactions (
+                id, user_id, wallet_id, asset_payment_hash, fee_amount_msat, status, created_at
+            )
+            VALUES (
+                :id, :user_id, :wallet_id, :asset_payment_hash, :fee_amount_msat, :status, :created_at
+            )
+            """,
+            {
+                "id": transaction_id,
+                "user_id": user_id,
+                "wallet_id": wallet_id,
+                "asset_payment_hash": asset_payment_hash,
+                "fee_amount_msat": fee_amount_msat,
+                "status": status,
+                "created_at": now
+            },
+        )
+
+        return FeeTransaction(
+            id=transaction_id,
+            user_id=user_id,
+            wallet_id=wallet_id,
+            asset_payment_hash=asset_payment_hash,
+            fee_amount_msat=fee_amount_msat,
+            status=status,
+            created_at=now
+        )
+
+async def get_fee_transactions(user_id: Optional[str] = None) -> List[FeeTransaction]:
+    """Get fee transactions, optionally filtered by user ID."""
+    async with db.connect() as conn:
+        if user_id:
+            rows = await conn.fetchall(
+                "SELECT * FROM taproot_assets.fee_transactions WHERE user_id = :user_id ORDER BY created_at DESC",
+                {"user_id": user_id},
+            )
+        else:
+            rows = await conn.fetchall(
+                "SELECT * FROM taproot_assets.fee_transactions ORDER BY created_at DESC"
+            )
+
+        transactions = []
+        for row in rows:
+            transaction = FeeTransaction(
+                id=row["id"],
+                user_id=row["user_id"],
+                wallet_id=row["wallet_id"],
+                asset_payment_hash=row["asset_payment_hash"],
+                fee_amount_msat=row["fee_amount_msat"],
+                status=row["status"],
+                created_at=row["created_at"]
+            )
+            transactions.append(transaction)
+
+        return transactions

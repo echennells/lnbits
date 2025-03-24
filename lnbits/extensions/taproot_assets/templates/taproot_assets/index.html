@@ -1,3 +1,4 @@
+<!-- /home/ubuntu/lnbits/lnbits/extensions/taproot_assets/templates/taproot_assets/index.html -->
 {% extends "base.html" %}
 {% from "macros.jinja" import window_vars with context %}
 
@@ -119,7 +120,7 @@
 
             <div class="invoice-button-container">
               <div class="invoice-buttons">
-                <button type="submit" class="create-invoice-btn" 
+                <button type="submit" class="create-invoice-btn"
                         :disabled="!selectedAsset || !isInvoiceAmountValid">
                   CREATE INVOICE
                 </button>
@@ -153,7 +154,7 @@
               <div class="invoice-value">{% raw %}{{ invoiceForm.amount || createdInvoice.amount }}{% endraw %}</div>
             </div>
             <div>
-              <div class="invoice-label">Sat Amount:</div>
+              <div class="invoice-label">Protocol Fee:</div>
               <div class="invoice-value">{% raw %}{{ createdInvoice.satoshi_amount }}{% endraw %} sats</div>
             </div>
           </div>
