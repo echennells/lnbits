@@ -180,22 +180,22 @@ async def api_create_invoice(
     wallet: WalletTypeInfo = Depends(require_admin_key),
 ):
     """Create an invoice for a Taproot Asset."""
-    logger.info(f"API: Creating invoice for asset_id={data.asset_id}, amount={data.amount}")
+    logger.info(f"DEBUG: API: Creating invoice for asset_id={data.asset_id}, amount={data.amount}")
     try:
         # Create a wallet instance to communicate with tapd
-        logger.debug("API: Before creating wallet instance")
+        logger.info("DEBUG: API: Before creating wallet instance")
         try:
             taproot_wallet = TaprootWalletExtension()
-            logger.debug("API: Successfully created TaprootWalletExtension instance")
+            logger.info("DEBUG: API: Successfully created TaprootWalletExtension instance")
         except Exception as e:
-            logger.error(f"API ERROR: Failed to create TaprootWalletExtension: {str(e)}", exc_info=True)
+            logger.error(f"DEBUG: API ERROR: Failed to create TaprootWalletExtension: {str(e)}", exc_info=True)
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Failed to initialize Taproot wallet: {str(e)}",
             )
 
         # Create the invoice using the TaprootWalletExtension
-        logger.debug(f"API: Before calling create_invoice with asset_id={data.asset_id}, amount={data.amount}")
+        logger.info(f"DEBUG: API: Before calling create_invoice with asset_id={data.asset_id}, amount={data.amount}")
         try:
             invoice_response = await taproot_wallet.create_invoice(
                 amount=data.amount,
@@ -203,33 +203,51 @@ async def api_create_invoice(
                 asset_id=data.asset_id,
                 expiry=data.expiry,
             )
-            logger.debug("API: After calling create_invoice")
-            logger.debug(f"API: invoice_response type: {type(invoice_response)}")
-            logger.debug(f"API: invoice_response: {invoice_response}")
+            logger.info("DEBUG: API: After calling create_invoice")
+            logger.info(f"DEBUG: API: invoice_response type: {type(invoice_response)}")
+            logger.info(f"DEBUG: API: invoice_response: {invoice_response}")
+            
+            # Check if extra data contains channel_count
+            if hasattr(invoice_response, 'extra') and invoice_response.extra:
+                if 'channel_count' in invoice_response.extra:
+                    channel_count = invoice_response.extra['channel_count']
+                    logger.info(f"DEBUG: API: Channel count from invoice_response: {channel_count}")
+                
+                # Check if buy_quote contains created_time
+                if 'buy_quote' in invoice_response.extra and isinstance(invoice_response.extra['buy_quote'], dict):
+                    buy_quote = invoice_response.extra['buy_quote']
+                    if 'created_time' in buy_quote:
+                        logger.info(f"DEBUG: API: buy_quote has created_time: {buy_quote['created_time']}")
+                    else:
+                        logger.info("DEBUG: API: buy_quote does NOT have created_time field")
         except Exception as e:
-            logger.error(f"API ERROR: Failed in taproot_wallet.create_invoice: {str(e)}", exc_info=True)
+            logger.error(f"DEBUG: API ERROR: Failed in taproot_wallet.create_invoice: {str(e)}", exc_info=True)
+            # Log the full exception traceback
+            import traceback
+            logger.error(f"DEBUG: API ERROR: Full traceback: {traceback.format_exc()}")
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Failed to create invoice in wallet: {str(e)}",
             )
 
         if not invoice_response.ok:
-            logger.error(f"API ERROR: Invoice creation failed: {invoice_response.error_message}")
+            logger.error(f"DEBUG: API ERROR: Invoice creation failed: {invoice_response.error_message}")
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Failed to create invoice: {invoice_response.error_message}",
             )
 
         # Extract data from the invoice response
-        logger.debug("API: Processing invoice_response")
+        logger.info("DEBUG: API: Processing invoice_response")
         payment_hash = invoice_response.payment_hash
         payment_request = invoice_response.payment_request
 
         # Get satoshi fee from settings (for database record, not deduction)
         satoshi_amount = taproot_settings.default_sat_fee
+        logger.info(f"DEBUG: API: Using satoshi_amount={satoshi_amount} from settings")
 
         # Create an invoice record in the database
-        logger.debug("API: Before creating invoice record in database")
+        logger.info("DEBUG: API: Before creating invoice record in database")
         try:
             invoice = await create_invoice(
                 asset_id=data.asset_id,
@@ -242,17 +260,25 @@ async def api_create_invoice(
                 memo=data.memo,
                 expiry=data.expiry,
             )
-            logger.debug(f"API: Created invoice record with id={invoice.id}")
+            logger.info(f"DEBUG: API: Created invoice record with id={invoice.id}")
         except Exception as e:
-            logger.error(f"API ERROR: Failed to create invoice record: {str(e)}", exc_info=True)
+            logger.error(f"DEBUG: API ERROR: Failed to create invoice record: {str(e)}", exc_info=True)
+            # Log the full exception traceback
+            import traceback
+            logger.error(f"DEBUG: API ERROR: Full traceback: {traceback.format_exc()}")
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Failed to store invoice in database: {str(e)}",
             )
 
         # Prepare final response
-        logger.debug("API: Preparing final response")
+        logger.info("DEBUG: API: Preparing final response")
         try:
+            # Include channel_count in the response if available
+            channel_count = None
+            if hasattr(invoice_response, 'extra') and invoice_response.extra and 'channel_count' in invoice_response.extra:
+                channel_count = invoice_response.extra['channel_count']
+            
             response_data = {
                 "payment_hash": payment_hash,
                 "payment_request": payment_request,
@@ -260,12 +286,16 @@ async def api_create_invoice(
                 "asset_amount": data.amount,
                 "satoshi_amount": satoshi_amount,
                 "checking_id": invoice.id if invoice else "",
+                "debug_channel_count": channel_count  # Include for debugging
             }
-            logger.debug(f"API: Final response data prepared: {response_data}")
-            logger.info(f"API: Successfully created invoice for asset_id={data.asset_id}")
+            logger.info(f"DEBUG: API: Final response data prepared: {response_data}")
+            logger.info(f"DEBUG: API: Successfully created invoice for asset_id={data.asset_id}")
             return response_data
         except Exception as e:
-            logger.error(f"API ERROR: Failed to prepare response: {str(e)}", exc_info=True)
+            logger.error(f"DEBUG: API ERROR: Failed to prepare response: {str(e)}", exc_info=True)
+            # Log the full exception traceback
+            import traceback
+            logger.error(f"DEBUG: API ERROR: Full traceback: {traceback.format_exc()}")
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Failed to format response: {str(e)}",
@@ -274,13 +304,22 @@ async def api_create_invoice(
         # Get full traceback
         exc_type, exc_value, exc_traceback = sys.exc_info()
         stack_trace = traceback.format_exception(exc_type, exc_value, exc_traceback)
-        logger.error(f"API ERROR: Unhandled exception in api_create_invoice: {str(e)}")
-        logger.error(f"API ERROR: Full traceback: {''.join(stack_trace)}")
+        logger.error(f"DEBUG: API ERROR: Unhandled exception in api_create_invoice: {str(e)}")
+        logger.error(f"DEBUG: API ERROR: Full traceback: {''.join(stack_trace)}")
 
-        # Provide a user-friendly message for common errors
-        detail = f"Failed to create Taproot Asset invoice: {str(e)}"
-        if isinstance(e, grpc.RpcError) and "no asset channel balance found for asset" in str(e):
-            detail = f"No channel balance found for asset {data.asset_id}. You need to create a channel with this asset first."
+        # Check if the error is related to 'created_time'
+        if "'created_time'" in str(e):
+            logger.error(f"DEBUG: API ERROR: Detected 'created_time' error: {str(e)}")
+            # Log additional context about the error
+            logger.error("DEBUG: API ERROR: This appears to be the 'created_time' error we're investigating")
+            
+            # Provide a more detailed error message
+            detail = f"'created_time' error detected: {str(e)}. This error occurs in multi-channel scenarios."
+        else:
+            # Provide a user-friendly message for common errors
+            detail = f"Failed to create Taproot Asset invoice: {str(e)}"
+            if isinstance(e, grpc.RpcError) and "no asset channel balance found for asset" in str(e):
+                detail = f"No channel balance found for asset {data.asset_id}. You need to create a channel with this asset first."
 
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,

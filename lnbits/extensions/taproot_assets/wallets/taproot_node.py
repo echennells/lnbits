@@ -263,23 +263,64 @@ class TaprootAssetsNodeExtension:
             Dict containing the invoice information with accepted_buy_quote and invoice_result
         """
         try:
+            # DEBUG: Log the start of invoice creation with parameters
+            logger.info(f"DEBUG: Starting asset invoice creation for asset_id={asset_id}, amount={asset_amount}")
+            
+            # Get channel assets to check if we have multiple channels for this asset
+            channel_assets = await self.list_channel_assets()
+            asset_channels = [ca for ca in channel_assets if ca.get("asset_id") == asset_id]
+            channel_count = len(asset_channels)
+            
+            logger.info(f"DEBUG: Found {channel_count} channels for asset_id={asset_id}")
+            for idx, channel in enumerate(asset_channels):
+                logger.info(f"DEBUG: Channel {idx+1}: channel_point={channel.get('channel_point')}, local_balance={channel.get('local_balance')}")
+            
             # Create RFQ client
             rfq_stub = rfq_pb2_grpc.RfqStub(self.channel)
 
             # Query peer accepted quotes
             try:
+                logger.info("DEBUG: Querying peer accepted quotes")
                 rfq_request = rfq_pb2.QueryPeerAcceptedQuotesRequest()
+                
+                # Log the full RFQ request
+                logger.info(f"DEBUG: RFQ Request: {rfq_request}")
+                
                 rfq_response = await rfq_stub.QueryPeerAcceptedQuotes(rfq_request, timeout=10)
-
+                
+                # Log the full RFQ response
+                logger.info(f"DEBUG: RFQ Response type: {type(rfq_response)}")
+                logger.info(f"DEBUG: RFQ Response fields: {[f.name for f in rfq_response.DESCRIPTOR.fields]}")
+                
+                # Check if created_time exists in any response objects
+                if hasattr(rfq_response, 'created_time'):
+                    logger.info(f"DEBUG: RFQ Response has created_time field: {rfq_response.created_time}")
+                else:
+                    logger.info("DEBUG: RFQ Response does NOT have created_time field at top level")
+                
                 # Process buy quotes if needed
-                for quote in rfq_response.buy_quotes:
+                logger.info(f"DEBUG: Found {len(rfq_response.buy_quotes)} buy quotes")
+                for i, quote in enumerate(rfq_response.buy_quotes):
+                    logger.info(f"DEBUG: Buy quote {i+1} fields: {[f.name for f in quote.DESCRIPTOR.fields]}")
+                    
+                    # Check if created_time exists in the quote
+                    if hasattr(quote, 'created_time'):
+                        logger.info(f"DEBUG: Buy quote {i+1} has created_time field: {quote.created_time}")
+                    else:
+                        logger.info(f"DEBUG: Buy quote {i+1} does NOT have created_time field")
+                    
                     if hasattr(quote, 'asset_id'):
                         quote_asset_id = quote.asset_id.hex() if isinstance(quote.asset_id, bytes) else quote.asset_id
                         # Check if this quote is for the requested asset
                         if quote_asset_id == asset_id:
-                            logger.debug(f"Found buy quote for asset: {asset_id}")
+                            logger.info(f"DEBUG: Found buy quote for asset: {asset_id}")
+                            
+                            # Log all fields in the quote
+                            for field_name in quote.DESCRIPTOR.fields_by_name:
+                                value = getattr(quote, field_name)
+                                logger.info(f"DEBUG: Quote field {field_name} = {value}")
             except Exception as e:
-                logger.debug(f"Error querying RFQ service: {e}")
+                logger.error(f"DEBUG: Error querying RFQ service: {e}", exc_info=True)
 
             # Convert asset_id from hex to bytes if needed
             asset_id_bytes = bytes.fromhex(asset_id) if isinstance(asset_id, str) else asset_id
@@ -290,31 +331,76 @@ class TaprootAssetsNodeExtension:
                 value=0,  # The value will be determined by the RFQ process
                 private=True
             )
+            
+            # Log the invoice object
+            logger.info(f"DEBUG: Invoice object fields: {[f.name for f in invoice.DESCRIPTOR.fields]}")
+            if hasattr(invoice, 'created_time'):
+                logger.info(f"DEBUG: Invoice has created_time field: {invoice.created_time}")
+            else:
+                logger.info("DEBUG: Invoice does NOT have created_time field")
 
             # Create the AddInvoiceRequest using the tapchannel_pb2 definition
             try:
+                # Check if we need to add created_time for multi-channel scenarios
+                if channel_count > 1:
+                    logger.info("DEBUG: Multi-channel scenario detected, checking if we need to add created_time")
+                    # Check if the Invoice object has a created_time field
+                    if hasattr(invoice, 'created_time'):
+                        # Set created_time to current Unix timestamp
+                        current_time = int(time.time())
+                        logger.info(f"DEBUG: Setting created_time to {current_time}")
+                        invoice.created_time = current_time
+                
                 request = tapchannel_pb2.AddInvoiceRequest(
                     asset_id=asset_id_bytes,
                     asset_amount=asset_amount,
                     invoice_request=invoice
                 )
+                
+                # Log the full request
+                logger.info(f"DEBUG: AddInvoiceRequest fields: {[f.name for f in request.DESCRIPTOR.fields]}")
+                logger.info(f"DEBUG: AddInvoiceRequest asset_id: {request.asset_id.hex() if isinstance(request.asset_id, bytes) else request.asset_id}")
+                logger.info(f"DEBUG: AddInvoiceRequest asset_amount: {request.asset_amount}")
+                
+                # Check if the request has created_time
+                if hasattr(request, 'created_time'):
+                    logger.info(f"DEBUG: AddInvoiceRequest has created_time field: {request.created_time}")
+                else:
+                    logger.info("DEBUG: AddInvoiceRequest does NOT have created_time field")
 
                 # Call the TaprootAssetChannels AddInvoice method
+                logger.info("DEBUG: Calling TaprootAssetChannels.AddInvoice")
                 response = await self.tapchannel_stub.AddInvoice(request, timeout=30)
+                logger.info("DEBUG: Successfully received response from AddInvoice")
             except Exception as e:
-                logger.debug(f"Error creating or sending AddInvoiceRequest: {e}")
+                logger.error(f"DEBUG: Error creating or sending AddInvoiceRequest: {e}", exc_info=True)
                 raise
 
-            # Just log the response for debugging
-            logger.debug(f"Raw response from AddInvoice: {response}")
-            logger.debug(f"Response type: {type(response)}")
+            # Log the full response for debugging
+            logger.info(f"DEBUG: Raw response from AddInvoice: {response}")
+            logger.info(f"DEBUG: Response type: {type(response)}")
+            logger.info(f"DEBUG: Response fields: {[f.name for f in response.DESCRIPTOR.fields]}")
+            
+            # Check if the response has created_time
+            if hasattr(response, 'created_time'):
+                logger.info(f"DEBUG: Response has created_time field: {response.created_time}")
+            else:
+                logger.info("DEBUG: Response does NOT have created_time field at top level")
+            
+            # Check if invoice_result has created_time
+            if hasattr(response.invoice_result, 'created_time'):
+                logger.info(f"DEBUG: invoice_result has created_time field: {response.invoice_result.created_time}")
+            else:
+                logger.info("DEBUG: invoice_result does NOT have created_time field")
 
             # Extract the payment hash and payment request from the invoice_result
             payment_hash = response.invoice_result.r_hash
             if isinstance(payment_hash, bytes):
                 payment_hash = payment_hash.hex()
+            logger.info(f"DEBUG: Extracted payment_hash: {payment_hash}")
 
             payment_request = response.invoice_result.payment_request
+            logger.info(f"DEBUG: Extracted payment_request: {payment_request[:30]}...")
 
             # Helper function to convert protobuf message to a JSON-serializable dict
             def protobuf_to_dict(pb_obj):
@@ -327,6 +413,9 @@ class TaprootAssetsNodeExtension:
                 # Get all fields from the protobuf object
                 for field_name in pb_obj.DESCRIPTOR.fields_by_name:
                     value = getattr(pb_obj, field_name)
+                    
+                    # Log each field for debugging
+                    logger.info(f"DEBUG: Processing field {field_name} with value type {type(value)}")
 
                     # Handle different types of values
                     if isinstance(value, bytes):
@@ -334,9 +423,11 @@ class TaprootAssetsNodeExtension:
                         result[field_name] = value.hex()
                     elif hasattr(value, 'DESCRIPTOR'):
                         # Recursively convert nested protobuf objects
+                        logger.info(f"DEBUG: Converting nested protobuf object for field {field_name}")
                         result[field_name] = protobuf_to_dict(value)
                     elif isinstance(value, (list, tuple)):
                         # Handle repeated fields - ensure we convert tuples to dictionaries
+                        logger.info(f"DEBUG: Converting list/tuple for field {field_name} with {len(value)} items")
                         result[field_name] = [
                             protobuf_to_dict(item) if hasattr(item, 'DESCRIPTOR') else item
                             for item in value
@@ -352,19 +443,31 @@ class TaprootAssetsNodeExtension:
 
             if hasattr(response, 'accepted_buy_quote') and response.accepted_buy_quote:
                 try:
+                    logger.info(f"DEBUG: Processing accepted_buy_quote of type {type(response.accepted_buy_quote)}")
+                    
+                    # Check if accepted_buy_quote has created_time
+                    if hasattr(response.accepted_buy_quote, 'created_time'):
+                        logger.info(f"DEBUG: accepted_buy_quote has created_time field: {response.accepted_buy_quote.created_time}")
+                    else:
+                        logger.info("DEBUG: accepted_buy_quote does NOT have created_time field")
+                    
+                    # Log all fields in accepted_buy_quote
+                    logger.info(f"DEBUG: accepted_buy_quote fields: {[f.name for f in response.accepted_buy_quote.DESCRIPTOR.fields]}")
+                    
                     # Convert the protobuf message to a dictionary using our helper function
                     accepted_buy_quote = protobuf_to_dict(response.accepted_buy_quote)
+                    logger.info(f"DEBUG: Converted accepted_buy_quote to dict with keys: {list(accepted_buy_quote.keys())}")
 
                     # Ensure accepted_buy_quote is a dictionary, not a tuple or other type
                     if not isinstance(accepted_buy_quote, dict):
-                        logger.warning(f"accepted_buy_quote is not a dict after conversion: {type(accepted_buy_quote)}")
+                        logger.warning(f"DEBUG: accepted_buy_quote is not a dict after conversion: {type(accepted_buy_quote)}")
                         # Convert to dictionary if it's a tuple or other non-dict type
                         if isinstance(accepted_buy_quote, (list, tuple)):
                             accepted_buy_quote = {"items": list(accepted_buy_quote)}
                         else:
                             accepted_buy_quote = {"value": str(accepted_buy_quote)}
                 except Exception as e:
-                    logger.error(f"Error converting accepted_buy_quote to dictionary: {e}", exc_info=True)
+                    logger.error(f"DEBUG: Error converting accepted_buy_quote to dictionary: {e}", exc_info=True)
                     # Provide a fallback empty dict if conversion fails
                     accepted_buy_quote = {}
 
@@ -377,18 +480,28 @@ class TaprootAssetsNodeExtension:
                 }
             }
 
-            logger.debug(f"Final result from create_asset_invoice: {result}")
-            logger.debug(f"accepted_buy_quote type in result: {type(result['accepted_buy_quote'])}")
+            # Check if created_time exists in the final result
+            if "created_time" in accepted_buy_quote:
+                logger.info(f"DEBUG: Final result has created_time in accepted_buy_quote: {accepted_buy_quote['created_time']}")
+            else:
+                logger.info("DEBUG: Final result does NOT have created_time in accepted_buy_quote")
+
+            logger.info(f"DEBUG: Final result from create_asset_invoice: {result}")
+            logger.info(f"DEBUG: accepted_buy_quote type in result: {type(result['accepted_buy_quote'])}")
 
             return result
         except Exception as e:
-            logger.error(f"Failed to create asset invoice: {str(e)}", exc_info=True)
+            logger.error(f"DEBUG: Failed to create asset invoice: {str(e)}", exc_info=True)
+            # Log the full exception traceback
+            import traceback
+            logger.error(f"DEBUG: Full exception traceback: {traceback.format_exc()}")
             raise Exception(f"Failed to create asset invoice: {str(e)}")
 
     async def pay_asset_invoice(
         self,
         payment_request: str,
-        fee_limit_sats: Optional[int] = None
+        fee_limit_sats: Optional[int] = None,
+        asset_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Pay a Taproot Asset invoice.
@@ -396,6 +509,8 @@ class TaprootAssetsNodeExtension:
         Args:
             payment_request: The payment request (BOLT11 invoice)
             fee_limit_sats: Optional fee limit in satoshis
+            asset_id: Optional asset ID to use for payment. If not provided, 
+                      will attempt to extract from invoice metadata.
 
         Returns:
             Dict with payment details
@@ -407,22 +522,48 @@ class TaprootAssetsNodeExtension:
             if fee_limit_sats is None:
                 fee_limit_sats = 1000  # Default to 1000 sats fee limit
             
-            # Get payment hash from the invoice
+            # Get payment hash and try to extract asset ID from the invoice
             payment_hash = ""
             try:
                 from lnbits import bolt11
                 decoded = bolt11.decode(payment_request)
                 payment_hash = decoded.payment_hash
                 logger.debug(f"Decoded invoice: payment_hash={payment_hash}, amount_msat={decoded.amount_msat}")
+                
+                # Try to extract asset ID from invoice metadata if not provided
+                if not asset_id and decoded.tags:
+                    for tag in decoded.tags:
+                        # Look for asset ID in description or other tags
+                        if tag[0] == 'd' and 'asset_id=' in tag[1]:
+                            # Extract asset ID from description
+                            import re
+                            asset_id_match = re.search(r'asset_id=([a-fA-F0-9]{64})', tag[1])
+                            if asset_id_match:
+                                asset_id = asset_id_match.group(1)
+                                logger.debug(f"Extracted asset_id from invoice: {asset_id}")
+                                break
             except Exception as e:
-                logger.warning(f"Failed to decode invoice to get payment hash: {e}")
+                logger.warning(f"Failed to decode invoice: {e}")
             
-            # We need to use the piratecoin asset ID when sending payments
-            piratecoin_asset_id = "b9ad8b868631ffe50fb09ff15e737fba9d4a34688a77ad608d3f6ee5db5eae44"
-            logger.debug(f"Using piratecoin asset_id: {piratecoin_asset_id}")
+            # If asset_id is still not available, try to get it from available assets
+            if not asset_id:
+                try:
+                    logger.debug("Asset ID not found in invoice, checking available assets")
+                    assets = await self.list_assets()
+                    if assets and len(assets) > 0:
+                        # Use the first available asset as fallback
+                        asset_id = assets[0]["asset_id"]
+                        logger.debug(f"Using first available asset: {asset_id}")
+                    else:
+                        raise Exception("No asset ID provided and no assets available")
+                except Exception as e:
+                    logger.error(f"Failed to get assets: {e}")
+                    raise Exception("No asset ID provided and failed to get available assets")
+            
+            logger.debug(f"Using asset_id: {asset_id}")
             
             # Convert asset_id to bytes
-            asset_id_bytes = bytes.fromhex(piratecoin_asset_id)
+            asset_id_bytes = bytes.fromhex(asset_id)
             
             # Try to pay the invoice with Lightning directly first
             try:
@@ -444,7 +585,7 @@ class TaprootAssetsNodeExtension:
                     allow_overpay=True  # Allow payment even if it's uneconomical
                 )
                 
-                logger.debug(f"Calling tapchannel_stub.SendPayment with asset_id={piratecoin_asset_id}")
+                logger.debug(f"Calling tapchannel_stub.SendPayment with asset_id={asset_id}")
                 
                 # Important: Do not await the initial call to SendPayment
                 # Just get the stream object
@@ -577,7 +718,8 @@ class TaprootAssetsNodeExtension:
         self,
         payment_request: str,
         payment_hash: str,
-        fee_limit_sats: Optional[int] = None
+        fee_limit_sats: Optional[int] = None,
+        asset_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Update Taproot Assets after a payment has been made through the LNbits wallet.
@@ -590,15 +732,49 @@ class TaprootAssetsNodeExtension:
             payment_request: The original BOLT11 invoice
             payment_hash: The payment hash of the completed payment
             fee_limit_sats: Optional fee limit in satoshis (not used for actual payment now)
+            asset_id: Optional asset ID to use for the update. If not provided, 
+                      will attempt to extract from invoice metadata.
 
         Returns:
             Dict containing the update confirmation
         """
         try:
-            # Extract asset_id from the payment_request
-            # This typically would be done by parsing metadata in the invoice
-            # For now, we'll use the piratecoin asset ID as a default
-            asset_id = "b9ad8b868631ffe50fb09ff15e737fba9d4a34688a77ad608d3f6ee5db5eae44"
+            # Try to extract asset_id from the payment_request if not provided
+            if not asset_id:
+                try:
+                    from lnbits import bolt11
+                    decoded = bolt11.decode(payment_request)
+                    
+                    # Try to extract asset ID from invoice metadata
+                    if decoded.tags:
+                        for tag in decoded.tags:
+                            # Look for asset ID in description or other tags
+                            if tag[0] == 'd' and 'asset_id=' in tag[1]:
+                                # Extract asset ID from description
+                                import re
+                                asset_id_match = re.search(r'asset_id=([a-fA-F0-9]{64})', tag[1])
+                                if asset_id_match:
+                                    asset_id = asset_id_match.group(1)
+                                    logger.debug(f"Extracted asset_id from invoice: {asset_id}")
+                                    break
+                except Exception as e:
+                    logger.warning(f"Failed to extract asset ID from invoice: {e}")
+            
+            # If asset_id is still not available, try to get it from available assets
+            if not asset_id:
+                try:
+                    logger.debug("Asset ID not found in invoice, checking available assets")
+                    assets = await self.list_assets()
+                    if assets and len(assets) > 0:
+                        # Use the first available asset as fallback
+                        asset_id = assets[0]["asset_id"]
+                        logger.debug(f"Using first available asset: {asset_id}")
+                    else:
+                        raise Exception("No asset ID provided and no assets available")
+                except Exception as e:
+                    logger.error(f"Failed to get assets: {e}")
+                    raise Exception("No asset ID provided and failed to get available assets")
+            
             logger.debug(f"Updating Taproot Assets after payment, asset_id={asset_id}, payment_hash={payment_hash}")
 
             # Convert asset_id to bytes
