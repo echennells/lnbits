@@ -182,6 +182,7 @@ class TaprootWalletExtension:
             expiry: Optional expiry time in seconds
             **kwargs: Additional parameters including:
                 - asset_id: ID of the Taproot Asset (required)
+                - peer_pubkey: Optional peer public key to specify which channel to use
 
         Returns:
             InvoiceResponse: Contains payment hash and payment request
@@ -216,10 +217,14 @@ class TaprootWalletExtension:
             # Create the invoice
             try:
                 logger.info(f"DEBUG: Calling create_asset_invoice with asset_id={asset_id}, amount={amount}, channel_count={channel_count}")
+                # Extract peer_pubkey from kwargs if provided
+                peer_pubkey = kwargs.get("peer_pubkey")
+                
                 invoice_result = await self.create_asset_invoice(
                     memo=memo or "Taproot Asset Transfer",
                     asset_id=asset_id,
-                    asset_amount=amount
+                    asset_amount=amount,
+                    peer_pubkey=peer_pubkey
                 )
                 logger.info(f"DEBUG: Got invoice_result, type: {type(invoice_result)}")
 
@@ -339,7 +344,8 @@ class TaprootWalletExtension:
         memo: str,
         asset_id: str,
         asset_amount: int,
-        expiry: Optional[int] = None
+        expiry: Optional[int] = None,
+        peer_pubkey: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Create an invoice for a Taproot Asset transfer.
@@ -382,7 +388,8 @@ class TaprootWalletExtension:
             response = await self.node.create_asset_invoice(
                 memo=memo,
                 asset_id=asset_id,
-                asset_amount=asset_amount
+                asset_amount=asset_amount,
+                peer_pubkey=peer_pubkey
             )
 
             # Debug the response
@@ -497,6 +504,7 @@ class TaprootWalletExtension:
         self,
         invoice: str,
         fee_limit_sats: Optional[int] = None,
+        peer_pubkey: Optional[str] = None,
         **kwargs,
     ) -> PaymentResponse:
         """
@@ -508,6 +516,7 @@ class TaprootWalletExtension:
         Args:
             invoice: The payment request (BOLT11 invoice)
             fee_limit_sats: Optional fee limit in satoshis
+            peer_pubkey: Optional peer public key to specify which channel to use
             **kwargs: Additional parameters including:
                 - asset_id: Optional ID of the Taproot Asset to use for payment
 
@@ -522,12 +531,17 @@ class TaprootWalletExtension:
 
             # Extract asset_id from kwargs if provided
             asset_id = kwargs.get("asset_id")
+            
+            # Log if peer_pubkey is provided
+            if peer_pubkey:
+                logger.debug(f"Using peer_pubkey for payment: {peer_pubkey}")
 
             # Call the node's pay_asset_invoice method
             payment_result = await self.node.pay_asset_invoice(
                 payment_request=invoice,
                 fee_limit_sats=fee_limit_sats,
-                asset_id=asset_id
+                asset_id=asset_id,
+                peer_pubkey=peer_pubkey  # Pass peer_pubkey to the node
             )
 
             logger.debug(f"Payment result: {payment_result}")

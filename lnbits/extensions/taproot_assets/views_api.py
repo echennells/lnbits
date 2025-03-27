@@ -2,7 +2,7 @@
 from http import HTTPStatus
 from typing import List, Optional
 import grpc
-import traceback
+import traceback  # Ensure this is imported at module level
 import sys
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -202,6 +202,7 @@ async def api_create_invoice(
                 memo=data.memo or "Taproot Asset Transfer",
                 asset_id=data.asset_id,
                 expiry=data.expiry,
+                peer_pubkey=data.peer_pubkey,  # Pass peer_pubkey to create_invoice
             )
             logger.info("DEBUG: API: After calling create_invoice")
             logger.info(f"DEBUG: API: invoice_response type: {type(invoice_response)}")
@@ -223,7 +224,6 @@ async def api_create_invoice(
         except Exception as e:
             logger.error(f"DEBUG: API ERROR: Failed in taproot_wallet.create_invoice: {str(e)}", exc_info=True)
             # Log the full exception traceback
-            import traceback
             logger.error(f"DEBUG: API ERROR: Full traceback: {traceback.format_exc()}")
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -264,7 +264,6 @@ async def api_create_invoice(
         except Exception as e:
             logger.error(f"DEBUG: API ERROR: Failed to create invoice record: {str(e)}", exc_info=True)
             # Log the full exception traceback
-            import traceback
             logger.error(f"DEBUG: API ERROR: Full traceback: {traceback.format_exc()}")
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -294,7 +293,6 @@ async def api_create_invoice(
         except Exception as e:
             logger.error(f"DEBUG: API ERROR: Failed to prepare response: {str(e)}", exc_info=True)
             # Log the full exception traceback
-            import traceback
             logger.error(f"DEBUG: API ERROR: Full traceback: {traceback.format_exc()}")
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -307,10 +305,16 @@ async def api_create_invoice(
         logger.error(f"DEBUG: API ERROR: Unhandled exception in api_create_invoice: {str(e)}")
         logger.error(f"DEBUG: API ERROR: Full traceback: {''.join(stack_trace)}")
 
-        # Check if the error is related to 'created_time'
-        if "'created_time'" in str(e):
+        # Check for specific error messages
+        if "multiple asset channels found for asset" in str(e) and "please specify the peer pubkey" in str(e):
+            logger.error(f"DEBUG: API ERROR: Multiple channels error: {str(e)}")
+            
+            # This is the specific error we're handling - multiple channels for the same asset
+            # The frontend should already be showing each channel as a separate asset box,
+            # so this error should not occur in normal operation
+            detail = f"Multiple channels found for asset {data.asset_id}. Please select a specific channel from the asset list."
+        elif "'created_time'" in str(e):
             logger.error(f"DEBUG: API ERROR: Detected 'created_time' error: {str(e)}")
-            # Log additional context about the error
             logger.error("DEBUG: API ERROR: This appears to be the 'created_time' error we're investigating")
             
             # Provide a more detailed error message
@@ -363,9 +367,14 @@ async def api_pay_invoice(
 
         # Pay the invoice using litd (tapd's LND node)
         try:
+            # Log if peer_pubkey is provided
+            if data.peer_pubkey:
+                logger.info(f"Using peer_pubkey for payment: {data.peer_pubkey}")
+            
             payment = await taproot_wallet.pay_asset_invoice(
                 invoice=data.payment_request,
-                fee_limit_sats=fee_limit_sats
+                fee_limit_sats=fee_limit_sats,
+                peer_pubkey=data.peer_pubkey  # Pass peer_pubkey to the wallet
             )
             if not payment.ok:
                 raise Exception(f"Payment failed: {payment.error_message}")

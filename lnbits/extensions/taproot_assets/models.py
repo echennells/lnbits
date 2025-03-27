@@ -41,12 +41,14 @@ class TaprootInvoiceRequest(BaseModel):
     amount: int
     memo: Optional[str] = None
     expiry: Optional[int] = None
+    peer_pubkey: Optional[str] = None  # Add peer_pubkey parameter for multi-channel support
 
 
 class TaprootPaymentRequest(BaseModel):
     """Request model for paying a Taproot Asset invoice."""
     payment_request: str
     fee_limit_sats: Optional[int] = 1000  # Default to 1000 sats fee limit
+    peer_pubkey: Optional[str] = None  # Add peer_pubkey for multi-channel support
 
 
 class TaprootInvoice(BaseModel):

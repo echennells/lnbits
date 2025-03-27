@@ -202,13 +202,19 @@ window.app = Vue.createApp({
       // Find the asset_id
       let assetId = this.selectedAsset.asset_id || '';
 
-      // Create the payload with the found asset ID
+      // Create the payload with the found asset ID and peer_pubkey if available
       const payload = {
         asset_id: assetId,
         amount: parseFloat(this.invoiceForm.amount), // Ensure it's a number
         memo: this.invoiceForm.memo,
         expiry: this.invoiceForm.expiry
       };
+      
+      // Add peer_pubkey if the asset has channel_info
+      if (this.selectedAsset.channel_info && this.selectedAsset.channel_info.peer_pubkey) {
+        payload.peer_pubkey = this.selectedAsset.channel_info.peer_pubkey;
+        console.log('Using peer_pubkey:', payload.peer_pubkey);
+      }
 
       console.log('Submitting invoice:', payload);
 
@@ -240,15 +246,24 @@ window.app = Vue.createApp({
       try {
         this.paymentInProgress = true;
 
-        const response = await LNbits.api.request(
-          'POST',
-          '/taproot_assets/api/v1/taproot/pay',
-          wallet.adminkey,
-          {
-            payment_request: this.paymentRequest,
-            fee_limit_sats: this.feeLimit
-          }
-        );
+      // Create payload with payment request and fee limit
+      const payload = {
+        payment_request: this.paymentRequest,
+        fee_limit_sats: this.feeLimit
+      };
+      
+      // Add peer_pubkey if the asset has channel_info
+      if (this.selectedAsset && this.selectedAsset.channel_info && this.selectedAsset.channel_info.peer_pubkey) {
+        payload.peer_pubkey = this.selectedAsset.channel_info.peer_pubkey;
+        console.log('Using peer_pubkey for payment:', payload.peer_pubkey);
+      }
+
+      const response = await LNbits.api.request(
+        'POST',
+        '/taproot_assets/api/v1/taproot/pay',
+        wallet.adminkey,
+        payload
+      );
 
         this.paymentInProgress = false;
         this.showPayModal = false;

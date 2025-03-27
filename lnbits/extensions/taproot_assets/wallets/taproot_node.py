@@ -139,38 +139,63 @@ class TaprootAssetsNodeExtension:
 
             # Get channel assets information
             channel_assets = await self.list_channel_assets()
-
-            # Create a mapping of asset_id to asset info for easier lookup
+            
+            # Create a list to hold all assets (both regular and channel-specific)
+            result_assets = []
+            
+            # Create a mapping of asset_id to asset info for reference
             asset_map = {asset["asset_id"]: asset for asset in assets}
-
-            # Merge channel asset information with regular assets
+            
+            # Group channel assets by asset_id
+            channel_assets_by_id = {}
             for channel_asset in channel_assets:
                 asset_id = channel_asset["asset_id"]
-                if asset_id in asset_map:
-                    # Add channel information to existing asset
-                    asset_map[asset_id]["channel_info"] = {
-                        "channel_point": channel_asset["channel_point"],
-                        "capacity": channel_asset["capacity"],
-                        "local_balance": channel_asset["local_balance"],
-                        "remote_balance": channel_asset["remote_balance"]
+                if asset_id not in channel_assets_by_id:
+                    channel_assets_by_id[asset_id] = []
+                channel_assets_by_id[asset_id].append(channel_asset)
+            
+            # Process each asset
+            for asset_id, asset_channels in channel_assets_by_id.items():
+                # Get base asset info
+                base_asset = asset_map.get(asset_id, {
+                    "asset_id": asset_id,
+                    "name": asset_channels[0].get("name", "") or "Unknown Asset",
+                    "type": "CHANNEL_ONLY",
+                    "amount": "0",
+                })
+                
+                # Add each channel as a separate asset entry
+                for channel in asset_channels:
+                    # Create a copy of the base asset
+                    channel_asset = base_asset.copy()
+                    
+                    # Add channel-specific information
+                    channel_asset["channel_info"] = {
+                        "channel_point": channel["channel_point"],
+                        "capacity": channel["capacity"],
+                        "local_balance": channel["local_balance"],
+                        "remote_balance": channel["remote_balance"],
+                        "peer_pubkey": channel["remote_pubkey"],  # Important for invoice creation
+                        "channel_id": channel["channel_id"]
                     }
-                else:
-                    # This is a channel-only asset, add it to the map
-                    # FIXED: Use the name from channel_asset instead of hardcoding "Unknown (Channel Asset)"
-                    asset_map[asset_id] = {
-                        "asset_id": asset_id,
-                        "name": channel_asset["name"] or "Unknown (Channel Asset)",
-                        "type": "CHANNEL_ONLY",
-                        "amount": str(channel_asset["capacity"]),
-                        "channel_info": {
-                            "channel_point": channel_asset["channel_point"],
-                            "capacity": channel_asset["capacity"],
-                            "local_balance": channel_asset["local_balance"],
-                            "remote_balance": channel_asset["remote_balance"]
-                        }
-                    }
-
-            return list(asset_map.values())
+                    
+                    # Update the amount to show the channel balance
+                    channel_asset["amount"] = str(channel["local_balance"])
+                    
+                    # Add to result list
+                    result_assets.append(channel_asset)
+                
+                # If there are no channels for an asset but it exists in assets list,
+                # add it as a regular asset
+                if not asset_channels and asset_id in asset_map:
+                    result_assets.append(asset_map[asset_id])
+            
+            # Add any remaining assets that don't have channels
+            for asset_id, asset in asset_map.items():
+                if asset_id not in channel_assets_by_id:
+                    result_assets.append(asset)
+            
+            return result_assets
         except Exception as e:
             logger.error(f"Failed to list assets: {str(e)}")
             return []  # Return empty list on any error
@@ -245,7 +270,14 @@ class TaprootAssetsNodeExtension:
             logger.debug(f"Error in list_channel_assets: {e}")
             return []  # Return empty list instead of raising
 
-    async def create_asset_invoice(self, memo: str, asset_id: str, asset_amount: int, expiry: Optional[int] = None) -> Dict[str, Any]:
+    async def create_asset_invoice(
+        self, 
+        memo: str, 
+        asset_id: str, 
+        asset_amount: int, 
+        expiry: Optional[int] = None,
+        peer_pubkey: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Create an invoice for a Taproot Asset transfer.
 
@@ -258,6 +290,7 @@ class TaprootAssetsNodeExtension:
             asset_id: The ID of the Taproot Asset
             asset_amount: The amount of the asset to transfer
             expiry: Optional expiry time in seconds
+            peer_pubkey: Optional peer public key to specify which channel to use
 
         Returns:
             Dict containing the invoice information with accepted_buy_quote and invoice_result
@@ -351,11 +384,18 @@ class TaprootAssetsNodeExtension:
                         logger.info(f"DEBUG: Setting created_time to {current_time}")
                         invoice.created_time = current_time
                 
+                # Create the AddInvoiceRequest, including peer_pubkey if provided
                 request = tapchannel_pb2.AddInvoiceRequest(
                     asset_id=asset_id_bytes,
                     asset_amount=asset_amount,
                     invoice_request=invoice
                 )
+                
+                # Add peer_pubkey if provided (for multi-channel scenarios)
+                if peer_pubkey:
+                    logger.info(f"DEBUG: Adding peer_pubkey to request: {peer_pubkey}")
+                    # Convert string to bytes as required by the gRPC protocol
+                    request.peer_pubkey = bytes.fromhex(peer_pubkey)
                 
                 # Log the full request
                 logger.info(f"DEBUG: AddInvoiceRequest fields: {[f.name for f in request.DESCRIPTOR.fields]}")
@@ -501,7 +541,8 @@ class TaprootAssetsNodeExtension:
         self,
         payment_request: str,
         fee_limit_sats: Optional[int] = None,
-        asset_id: Optional[str] = None
+        asset_id: Optional[str] = None,
+        peer_pubkey: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Pay a Taproot Asset invoice.
@@ -511,6 +552,7 @@ class TaprootAssetsNodeExtension:
             fee_limit_sats: Optional fee limit in satoshis
             asset_id: Optional asset ID to use for payment. If not provided, 
                       will attempt to extract from invoice metadata.
+            peer_pubkey: Optional peer public key to specify which channel to use
 
         Returns:
             Dict with payment details
@@ -584,6 +626,12 @@ class TaprootAssetsNodeExtension:
                     asset_id=asset_id_bytes,  # Include the asset ID
                     allow_overpay=True  # Allow payment even if it's uneconomical
                 )
+                
+                # Add peer_pubkey if provided (for multi-channel scenarios)
+                if peer_pubkey:
+                    logger.debug(f"Using peer_pubkey for payment: {peer_pubkey}")
+                    # Convert string to bytes as required by the gRPC protocol
+                    request.peer_pubkey = bytes.fromhex(peer_pubkey)
                 
                 logger.debug(f"Calling tapchannel_stub.SendPayment with asset_id={asset_id}")
                 
