@@ -140,15 +140,8 @@ async def api_list_assets(
         logger.info(f"Successfully listed {len(assets_data)} assets for user {user.id}")
         return assets_data
     except Exception as e:
-        # Fixed error handling to prevent the 'created_time' KeyError
-        try:
-            error_str = str(e)
-            logger.error(f"Failed to list assets: {error_str}")
-        except Exception as logging_error:
-            logger.error(f"Error logging exception: {type(logging_error).__name__}")
-
-        # Return an empty list instead of raising an exception
-        return []
+        logger.error(f"Failed to list assets: {str(e)}")
+        return []  # Return empty list on error
 
 
 @taproot_assets_api_router.get("/assets/{asset_id}", status_code=HTTPStatus.OK)
@@ -214,13 +207,6 @@ async def api_create_invoice(
                     channel_count = invoice_response.extra['channel_count']
                     logger.info(f"DEBUG: API: Channel count from invoice_response: {channel_count}")
                 
-                # Check if buy_quote contains created_time
-                if 'buy_quote' in invoice_response.extra and isinstance(invoice_response.extra['buy_quote'], dict):
-                    buy_quote = invoice_response.extra['buy_quote']
-                    if 'created_time' in buy_quote:
-                        logger.info(f"DEBUG: API: buy_quote has created_time: {buy_quote['created_time']}")
-                    else:
-                        logger.info("DEBUG: API: buy_quote does NOT have created_time field")
         except Exception as e:
             logger.error(f"DEBUG: API ERROR: Failed in taproot_wallet.create_invoice: {str(e)}", exc_info=True)
             # Log the full exception traceback
@@ -313,12 +299,6 @@ async def api_create_invoice(
             # The frontend should already be showing each channel as a separate asset box,
             # so this error should not occur in normal operation
             detail = f"Multiple channels found for asset {data.asset_id}. Please select a specific channel from the asset list."
-        elif "'created_time'" in str(e):
-            logger.error(f"DEBUG: API ERROR: Detected 'created_time' error: {str(e)}")
-            logger.error("DEBUG: API ERROR: This appears to be the 'created_time' error we're investigating")
-            
-            # Provide a more detailed error message
-            detail = f"'created_time' error detected: {str(e)}. This error occurs in multi-channel scenarios."
         else:
             # Provide a user-friendly message for common errors
             detail = f"Failed to create Taproot Asset invoice: {str(e)}"
