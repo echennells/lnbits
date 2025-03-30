@@ -304,72 +304,353 @@ class TaprootAssetsNodeExtension:
             
             logger.info(f"Found {channel_count} channels for asset_id={asset_id}")
             for idx, channel in enumerate(asset_channels):
-                logger.info(f"Channel {idx+1}: channel_point={channel.get('channel_point')}, local_balance={channel.get('local_balance')}")
+                # Log detailed channel information
+                logger.info(f"Channel {idx+1} details:")
+                logger.info(f"  - channel_point: {channel.get('channel_point')}")
+                logger.info(f"  - channel_id: {channel.get('channel_id')}")
+                logger.info(f"  - remote_pubkey: {channel.get('remote_pubkey')}")
+                logger.info(f"  - local_balance: {channel.get('local_balance')}")
+                logger.info(f"  - remote_balance: {channel.get('remote_balance')}")
+                logger.info(f"  - commitment_type: {channel.get('commitment_type')}")
+                logger.info(f"  - asset_id: {channel.get('asset_id')}")
+                logger.info(f"  - name: {channel.get('name')}")
+                logger.info(f"  - capacity: {channel.get('capacity')}")
             
-            # Create RFQ client
+            # Create RFQ client and attempt to create a buy order
             rfq_stub = rfq_pb2_grpc.RfqStub(self.channel)
+            selected_quote = None
 
-            # Query peer accepted quotes
             try:
-                logger.info("Querying peer accepted quotes")
-                rfq_request = rfq_pb2.QueryPeerAcceptedQuotesRequest()
-                rfq_response = await rfq_stub.QueryPeerAcceptedQuotes(rfq_request, timeout=10)
-                logger.info(f"Found {len(rfq_response.buy_quotes)} buy quotes")
+                logger.info(f"Creating buy order for asset_id={asset_id}, amount={asset_amount}")
+                
+                # Create and log the buy order request details
+                asset_id_bytes = bytes.fromhex(asset_id)
+                expiry = int(time.time()) + 3600
+                
+                logger.info("Creating buy order request with details:")
+                logger.info(f"  - asset_id (hex): {asset_id}")
+                logger.info(f"  - asset_id (bytes): {asset_id_bytes.hex()}")
+                logger.info(f"  - asset_amount: {asset_amount}")
+                logger.info(f"  - expiry: {expiry} ({time.ctime(expiry)})")
+                logger.info(f"  - timeout_seconds: 30")
+                if peer_pubkey:
+                    logger.info(f"  - peer_pub_key (hex): {peer_pubkey}")
+                    logger.info(f"  - peer_pub_key (bytes): {bytes.fromhex(peer_pubkey).hex()}")
+
+                # Create the buy order request
+                buy_order_request = rfq_pb2.AddAssetBuyOrderRequest(
+                    asset_specifier=rfq_pb2.AssetSpecifier(asset_id=asset_id_bytes),
+                    asset_max_amt=asset_amount,
+                    expiry=expiry,
+                    timeout_seconds=30
+                )
+                if peer_pubkey:
+                    logger.info(f"Setting peer_pub_key in buy order")
+                    buy_order_request.peer_pub_key = bytes.fromhex(peer_pubkey)
+
+                # Log the serialized request
+                logger.info("Buy order request created:")
+                logger.info(f"  Serialized request: {buy_order_request.SerializeToString().hex()}")
+
+                # Send the buy order request
+                buy_order_response = await rfq_stub.AddAssetBuyOrder(buy_order_request, timeout=30)
+                logger.info("Successfully sent buy order request")
+
+                # Handle the response based on its type
+                if buy_order_response.HasField('accepted_quote'):
+                    selected_quote = buy_order_response.accepted_quote
+                    logger.info(f"Buy order accepted with quote ID: {selected_quote.id.hex() if isinstance(selected_quote.id, bytes) else selected_quote.id}")
+                    logger.info(f"Quote details: peer={selected_quote.peer}, scid={selected_quote.scid}")
+                elif buy_order_response.HasField('invalid_quote'):
+                    error_msg = f"Buy order invalid: {buy_order_response.invalid_quote.status}"
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
+                elif buy_order_response.HasField('rejected_quote'):
+                    error_msg = f"Buy order rejected: {buy_order_response.rejected_quote.error_message} (code: {buy_order_response.rejected_quote.error_code})"
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
+
+            except grpc.RpcError as e:
+                error_msg = f"gRPC error in buy order: {e.code()}: {e.details()}"
+                logger.error(error_msg)
+                
+                # Log detailed error information
+                logger.error("Detailed gRPC error information:")
+                logger.error(f"  Code: {e.code().name} ({e.code().value})")
+                logger.error(f"  Details: {e.details()}")
+                
+                # Log metadata
+                if hasattr(e, 'trailing_metadata') and e.trailing_metadata():
+                    logger.error("Trailing metadata:")
+                    for key, value in e.trailing_metadata():
+                        logger.error(f"  {key}: {value}")
+                
+                # Log initial metadata
+                if hasattr(e, 'initial_metadata') and e.initial_metadata():
+                    logger.error("Initial metadata:")
+                    for key, value in e.initial_metadata():
+                        logger.error(f"  {key}: {value}")
+                
+                # Log debug info
+                if hasattr(e, 'debug_error_string'):
+                    logger.error(f"Debug error string: {e.debug_error_string()}")
+                
+                raise Exception(error_msg)
             except Exception as e:
-                logger.error(f"Error querying RFQ service: {e}", exc_info=True)
-                raise
+                error_msg = f"Error in buy order process: {str(e)}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
 
-            # Convert asset_id from hex to bytes if needed
-            asset_id_bytes = bytes.fromhex(asset_id) if isinstance(asset_id, str) else asset_id
+            if not selected_quote:
+                error_msg = "Failed to obtain a valid quote for the asset"
+                logger.error(error_msg)
+                raise Exception(error_msg)
 
-            # Create a standard invoice for the invoice_request field
-            invoice = lightning_pb2.Invoice(
-                memo=memo if memo else "Taproot Asset Transfer",
-                value=0,  # The value will be determined by the RFQ process
-                private=True
-            )
+            # Create the invoice request with proper route hints and HODL invoice setup
+            try:
+                logger.info("Creating invoice request with accepted quote")
+                
+                # Convert asset_id from hex to bytes if needed
+                asset_id_bytes = bytes.fromhex(asset_id) if isinstance(asset_id, str) else asset_id
 
-            # Create the AddInvoiceRequest
-            request = tapchannel_pb2.AddInvoiceRequest(
-                asset_id=asset_id_bytes,
-                asset_amount=asset_amount,
-                invoice_request=invoice
-            )
-            
-            # Add peer_pubkey if provided
-            if peer_pubkey:
-                logger.info(f"Adding peer_pubkey to request: {peer_pubkey}")
-                request.peer_pubkey = bytes.fromhex(peer_pubkey)
+                # Create a standard invoice for the invoice_request field
+                invoice = lightning_pb2.Invoice()
+                invoice.memo = memo if memo else "Taproot Asset Transfer"
+                invoice.value = 0  # The value will be determined by the RFQ process
+                invoice.private = True
+                invoice.expiry = 300  # 5 minutes expiry to match lncli behavior
 
-            # Call the TaprootAssetChannels AddInvoice method
-            logger.info("Calling TaprootAssetChannels.AddInvoice")
-            response = await self.tapchannel_stub.AddInvoice(request, timeout=30)
-            logger.info("Successfully received response from AddInvoice")
+                # Add route hints using the quote's SCID
+                # According to bLIP-29, we use the tap_rfq_scid for routing
+                tap_rfq_scid = selected_quote.scid
+                logger.info(f"Using tap_rfq_scid={tap_rfq_scid} for route hints")
 
-            # Extract payment details
-            payment_hash = response.invoice_result.r_hash
-            if isinstance(payment_hash, bytes):
-                payment_hash = payment_hash.hex()
-            payment_request = response.invoice_result.payment_request
-
-            # Convert the accepted_buy_quote to a dictionary
-            accepted_buy_quote = {}
-            if hasattr(response, 'accepted_buy_quote') and response.accepted_buy_quote:
                 try:
-                    accepted_buy_quote = self._protobuf_to_dict(response.accepted_buy_quote)
+                    logger.info("=== BINARY DATA HANDLING CHECKPOINT 1: PEER ID ===")
+                    # Convert peer ID to bytes properly
+                    if isinstance(selected_quote.peer, bytes):
+                        peer_id_bytes = selected_quote.peer
+                        logger.info("Peer ID was already in bytes format")
+                    else:
+                        peer_id_str = selected_quote.peer if isinstance(selected_quote.peer, str) else selected_quote.peer.hex()
+                        peer_id_bytes = bytes.fromhex(peer_id_str)
+                        logger.info(f"Converted peer ID from {type(selected_quote.peer)} to bytes")
+                    logger.info(f"Peer ID (hex): {peer_id_bytes.hex()}")
+                    logger.info(f"Peer ID length: {len(peer_id_bytes)} bytes")
+
+                    logger.info("=== BINARY DATA HANDLING CHECKPOINT 2: SCID CONVERSION ===")
+                    # Convert SCID to integer properly
+                    try:
+                        # Log the input SCID details
+                        logger.info(f"Input SCID type: {type(tap_rfq_scid)}")
+                        logger.info(f"Input SCID value: {tap_rfq_scid}")
+                        
+                        # From rfq_pb2.py, we can see that scid is uint64 (field 3 in PeerAcceptedBuyQuote)
+                        # So we need to ensure we're working with an integer
+                        if isinstance(tap_rfq_scid, bytes):
+                            logger.info(f"SCID bytes (hex): {tap_rfq_scid.hex()}")
+                            # Convert bytes to integer using big-endian byte order
+                            scid_int = int.from_bytes(tap_rfq_scid, byteorder='big')
+                        elif isinstance(tap_rfq_scid, str):
+                            # Remove any hex prefix if present
+                            clean_scid = tap_rfq_scid.lower().replace('0x', '')
+                            if all(c in '0123456789abcdef' for c in clean_scid):
+                                # It's a hex string
+                                logger.info("SCID is a hex string")
+                                scid_int = int(clean_scid, 16)
+                            else:
+                                # It's a decimal string
+                                logger.info("SCID is a decimal string")
+                                scid_int = int(tap_rfq_scid)
+                        elif isinstance(tap_rfq_scid, int):
+                            logger.info("SCID is already an integer")
+                            scid_int = tap_rfq_scid
+                        else:
+                            raise ValueError(f"Unexpected SCID type: {type(tap_rfq_scid)}")
+                        
+                        # Validate the integer is within uint64 range
+                        if scid_int < 0 or scid_int > 18446744073709551615:  # 2^64 - 1
+                            raise ValueError(f"SCID value {scid_int} is outside uint64 range")
+                        
+                        logger.info(f"Converted SCID to integer: {scid_int}")
+                        logger.info(f"SCID hex representation: {hex(scid_int)}")
+
+                        logger.info("=== BINARY DATA HANDLING CHECKPOINT 3: HOP HINT CREATION ===")
+                        # Create hop hint with proper binary data
+                        hop_hint = lightning_pb2.HopHint()
+                        
+                        # Set node_id with validation
+                        logger.info("Setting node_id...")
+                        try:
+                            if len(peer_id_bytes) != 33:  # Lightning node pubkeys are 33 bytes
+                                raise ValueError(f"Invalid node_id length: {len(peer_id_bytes)}, expected 33 bytes")
+                            # Convert binary pubkey to hex string since node_id is a string field in protobuf
+                            hop_hint.node_id = peer_id_bytes.hex()
+                            logger.info(f"Successfully set node_id (hex): {hop_hint.node_id}")
+                        except Exception as e:
+                            logger.error(f"Error setting node_id: {str(e)}")
+                            raise Exception(f"Failed to set node_id: {str(e)}")
+
+                        # Set chan_id with validation
+                        logger.info("Setting chan_id...")
+                        try:
+                            # chan_id in HopHint is uint64, same as SCID
+                            hop_hint.chan_id = scid_int
+                            logger.info("Successfully set chan_id")
+                        except Exception as e:
+                            logger.error(f"Error setting chan_id: {str(e)}")
+                            raise Exception(f"Failed to set chan_id: {str(e)}")
+
+                        # Set other fields
+                        hop_hint.fee_base_msat = 0  # No additional fees for asset transfers
+                        hop_hint.fee_proportional_millionths = 0  # No fee rate for asset transfers
+                        hop_hint.cltv_expiry_delta = 40  # Standard CLTV delta
+
+                        logger.info("=== BINARY DATA HANDLING CHECKPOINT 4: ROUTE HINT CREATION ===")
+                        # Create route hint and add to invoice
+                        try:
+                            route_hint = lightning_pb2.RouteHint()
+                            route_hint.hop_hints.append(hop_hint)
+                            invoice.route_hints.append(route_hint)
+                            
+                            # Log detailed route hint information
+                            logger.info("=== ROUTE HINT DETAILS ===")
+                            logger.info("Created route hint with hop hint:")
+                            logger.info(f"  - node_id (hex): {hop_hint.node_id}")
+                            logger.info(f"  - chan_id: {hop_hint.chan_id}")
+                            logger.info(f"  - chan_id (hex): {hex(hop_hint.chan_id)}")
+                            logger.info(f"  - fee_base_msat: {hop_hint.fee_base_msat}")
+                            logger.info(f"  - fee_proportional_millionths: {hop_hint.fee_proportional_millionths}")
+                            logger.info(f"  - cltv_expiry_delta: {hop_hint.cltv_expiry_delta}")
+                            logger.info("Route hint added successfully to invoice")
+                        except Exception as e:
+                            logger.error(f"Error creating route hint: {str(e)}")
+                            raise Exception(f"Failed to create route hint: {str(e)}")
+
+                    except ValueError as ve:
+                        logger.error(f"Error converting SCID value: {str(ve)}")
+                        raise Exception(f"Failed to convert SCID: {str(ve)}")
                 except Exception as e:
-                    logger.error(f"Error converting accepted_buy_quote to dictionary: {e}", exc_info=True)
+                    logger.error(f"Error creating route hint: {str(e)}")
+                    raise Exception(f"Failed to create route hint: {str(e)}")
 
-            # Return the invoice information
-            result = {
-                "accepted_buy_quote": accepted_buy_quote,
-                "invoice_result": {
-                    "r_hash": payment_hash,
-                    "payment_request": payment_request
+                # Create the AddInvoiceRequest with HODL invoice
+                try:
+                    # First ensure we have the quote ID in proper binary format
+                    if isinstance(selected_quote.id, bytes):
+                        quote_id_bytes = selected_quote.id
+                    else:
+                        quote_id_str = selected_quote.id if isinstance(selected_quote.id, str) else selected_quote.id.hex()
+                        quote_id_bytes = bytes.fromhex(quote_id_str)
+                    
+                    # Log the binary data in hex format
+                    logger.info(f"Quote ID (hex): {quote_id_bytes.hex()}")
+                    logger.info(f"Asset ID (hex): {asset_id_bytes.hex()}")
+
+                    # Create the HODL invoice first
+                    hodl_invoice = tapchannel_pb2.HodlInvoice()
+                    hodl_invoice.payment_hash = quote_id_bytes
+
+                    # Create the full request with all components
+                    request = tapchannel_pb2.AddInvoiceRequest()
+                    request.asset_id = asset_id_bytes
+                    request.asset_amount = asset_amount
+                    request.invoice_request.MergeFrom(invoice)
+                    request.hodl_invoice.MergeFrom(hodl_invoice)
+
+                    # Log the complete invoice request details
+                    logger.info("=== COMPLETE INVOICE REQUEST DETAILS ===")
+                    logger.info(f"Asset ID: {asset_id_bytes.hex()}")
+                    logger.info(f"Asset Amount: {asset_amount}")
+                    logger.info("Invoice fields:")
+                    logger.info(f"  - memo: {invoice.memo}")
+                    logger.info(f"  - value: {invoice.value}")
+                    logger.info(f"  - private: {invoice.private}")
+                    logger.info(f"  - expiry: {invoice.expiry}")
+                    logger.info(f"  - route_hints count: {len(invoice.route_hints)}")
+                    logger.info("HODL invoice fields:")
+                    logger.info(f"  - payment_hash: {hodl_invoice.payment_hash.hex()}")
+
+                    # Log the complete request details
+                    logger.info("=== FINAL REQUEST DETAILS ===")
+                    logger.info("AddInvoiceRequest created successfully with:")
+                    logger.info(f"  - Asset amount: {asset_amount}")
+                    logger.info(f"  - HODL invoice payment hash (hex): {hodl_invoice.payment_hash.hex()}")
+                    logger.info(f"  - Route hints included: {len(request.invoice_request.route_hints)}")
+                    for i, rh in enumerate(request.invoice_request.route_hints):
+                        for j, hh in enumerate(rh.hop_hints):
+                            logger.info(f"    Route hint {i+1}, Hop hint {j+1}:")
+                            logger.info(f"      - node_id: {hh.node_id}")
+                            logger.info(f"      - chan_id: {hh.chan_id} (hex: {hex(hh.chan_id)})")
+                except Exception as e:
+                    logger.error(f"Error creating AddInvoiceRequest: {str(e)}")
+                    raise Exception(f"Failed to create invoice request: {str(e)}")
+
+                # Add peer_pubkey if provided or from selected quote
+                try:
+                    if peer_pubkey:
+                        logger.info(f"Using provided peer_pubkey: {peer_pubkey}")
+                        request.peer_pubkey = bytes.fromhex(peer_pubkey)
+                    elif hasattr(selected_quote, 'peer'):
+                        if isinstance(selected_quote.peer, bytes):
+                            peer_bytes = selected_quote.peer
+                        else:
+                            peer_str = selected_quote.peer if isinstance(selected_quote.peer, str) else selected_quote.peer.hex()
+                            peer_bytes = bytes.fromhex(peer_str)
+                        logger.info(f"Using peer from selected quote (hex): {peer_bytes.hex()}")
+                        request.peer_pubkey = peer_bytes
+                except Exception as e:
+                    logger.error(f"Error setting peer_pubkey: {str(e)}")
+                    raise Exception(f"Failed to set peer_pubkey: {str(e)}")
+
+                # Call the TaprootAssetChannels AddInvoice method
+                logger.info("Calling TaprootAssetChannels.AddInvoice")
+                try:
+                    response = await self.tapchannel_stub.AddInvoice(request, timeout=30)
+                    logger.info("Successfully received response from AddInvoice")
+                except Exception as e:
+                    logger.error(f"Error in AddInvoice call: {str(e)}")
+                    if hasattr(e, 'debug_error_string'):
+                        logger.error(f"gRPC debug info: {e.debug_error_string()}")
+                    raise
+
+                # Extract payment details
+                payment_hash = response.invoice_result.r_hash
+                if isinstance(payment_hash, bytes):
+                    payment_hash = payment_hash.hex()
+                payment_request = response.invoice_result.payment_request
+
+                # Convert the accepted_buy_quote to a dictionary
+                accepted_buy_quote = {}
+                if hasattr(response, 'accepted_buy_quote') and response.accepted_buy_quote:
+                    try:
+                        accepted_buy_quote = self._protobuf_to_dict(response.accepted_buy_quote)
+                    except Exception as e:
+                        logger.error(f"Error converting accepted_buy_quote to dictionary: {e}", exc_info=True)
+
+                # Return the invoice information
+                result = {
+                    "accepted_buy_quote": accepted_buy_quote,
+                    "invoice_result": {
+                        "r_hash": payment_hash,
+                        "payment_request": payment_request
+                    }
                 }
-            }
 
-            return result
+                return result
+
+            except grpc.RpcError as e:
+                error_msg = f"gRPC error in invoice creation: {e.code()}: {e.details()}"
+                logger.error(error_msg)
+                if hasattr(e, 'trailing_metadata') and e.trailing_metadata():
+                    for key, value in e.trailing_metadata():
+                        logger.error(f"Metadata: {key}: {value}")
+                raise Exception(error_msg)
+            except Exception as e:
+                error_msg = f"Error in invoice creation: {str(e)}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+
         except Exception as e:
             logger.error(f"Failed to create asset invoice: {str(e)}", exc_info=True)
             raise Exception(f"Failed to create asset invoice: {str(e)}")
@@ -385,12 +666,21 @@ class TaprootAssetsNodeExtension:
             if isinstance(value, bytes):
                 result[field_name] = value.hex()
             elif hasattr(value, 'DESCRIPTOR'):
-                result[field_name] = self._protobuf_to_dict(value)
+                # Handle nested messages like FixedPoint
+                nested_dict = self._protobuf_to_dict(value)
+                if nested_dict is not None:
+                    result[field_name] = nested_dict
             elif isinstance(value, (list, tuple)):
                 result[field_name] = [
                     self._protobuf_to_dict(item) if hasattr(item, 'DESCRIPTOR') else item
                     for item in value
                 ]
+            elif isinstance(value, int):
+                # Convert large integers to strings to avoid JSON serialization issues
+                if value > 2**53 - 1:  # JavaScript's Number.MAX_SAFE_INTEGER
+                    result[field_name] = str(value)
+                else:
+                    result[field_name] = value
             else:
                 result[field_name] = value
         return result
@@ -424,9 +714,31 @@ class TaprootAssetsNodeExtension:
             # Get payment hash and try to extract asset ID from the invoice
             payment_hash = ""
             try:
+                logger.info("=== PAYMENT INVOICE DECODING CHECKPOINT ===")
                 decoded = bolt11.decode(payment_request)
                 payment_hash = decoded.payment_hash
-                logger.debug(f"Decoded invoice: payment_hash={payment_hash}, amount_msat={decoded.amount_msat}")
+                logger.info(f"Decoded invoice details:")
+                logger.info(f"  - payment_hash: {payment_hash}")
+                logger.info(f"  - amount_msat: {decoded.amount_msat}")
+                logger.info(f"  - description: {decoded.description}")
+                logger.info(f"  - payee: {decoded.payee}")
+                logger.info(f"  - date: {decoded.date}")
+                logger.info(f"  - expiry: {decoded.expiry}")
+                
+                # Log route hints if present
+                if hasattr(decoded, 'route_hints') and decoded.route_hints:
+                    logger.info("Route hints found in invoice:")
+                    for i, hint in enumerate(decoded.route_hints):
+                        logger.info(f"Route hint {i+1}:")
+                        logger.info(f"  - node_id: {hint.node_id if hasattr(hint, 'node_id') else 'N/A'}")
+                        logger.info(f"  - channel_id: {hint.channel_id if hasattr(hint, 'channel_id') else 'N/A'}")
+                else:
+                    logger.info("No route hints found in invoice")
+                
+                # Log all tags for debugging
+                logger.info("All invoice tags:")
+                for tag in decoded.tags:
+                    logger.info(f"  - {tag[0]}: {tag[1]}")
                 
                 # Try to extract asset ID from invoice metadata if not provided
                 if not asset_id and decoded.tags:
@@ -436,10 +748,13 @@ class TaprootAssetsNodeExtension:
                             asset_id_match = re.search(r'asset_id=([a-fA-F0-9]{64})', tag[1])
                             if asset_id_match:
                                 asset_id = asset_id_match.group(1)
-                                logger.debug(f"Extracted asset_id from invoice: {asset_id}")
+                                logger.info(f"Successfully extracted asset_id from invoice: {asset_id}")
                                 break
+                    if not asset_id:
+                        logger.info("No asset_id found in invoice tags")
             except Exception as e:
-                logger.warning(f"Failed to decode invoice: {e}")
+                logger.error(f"Failed to decode invoice: {str(e)}")
+                logger.error(f"Full invoice for debugging: {payment_request}")
             
             # If asset_id is still not available, try to get it from available assets
             if not asset_id:
@@ -459,10 +774,15 @@ class TaprootAssetsNodeExtension:
             
             # Convert asset_id to bytes
             asset_id_bytes = bytes.fromhex(asset_id)
+            logger.info(f"Using asset_id_bytes: {asset_id_bytes.hex()}")
             
             # Try to pay the invoice with Lightning directly first
             try:
                 from lnbits.wallets.lnd_grpc_files.routerrpc import router_pb2
+                
+                logger.info("=== PAYMENT REQUEST CREATION CHECKPOINT ===")
+                # Log the original payment request for debugging
+                logger.info(f"Original payment request: {payment_request}")
                 
                 # Create the router payment request
                 router_payment_request = router_pb2.SendPaymentRequest(
@@ -471,21 +791,56 @@ class TaprootAssetsNodeExtension:
                     timeout_seconds=60,  # 1 minute timeout
                     no_inflight_updates=False
                 )
+                logger.info(f"Created router payment request with fee_limit_sat={fee_limit_sats}")
                 
+                # Log available channels for this asset
+                logger.info("=== AVAILABLE CHANNELS CHECKPOINT ===")
+                channel_assets = await self.list_channel_assets()
+                asset_channels = [ca for ca in channel_assets if ca.get("asset_id") == asset_id]
+                logger.info(f"Found {len(asset_channels)} channels for asset_id={asset_id}")
+                for idx, channel in enumerate(asset_channels):
+                    logger.info(f"Channel {idx+1}:")
+                    logger.info(f"  - channel_id: {channel.get('channel_id')}")
+                    logger.info(f"  - channel_id (hex): {hex(int(channel.get('channel_id')))}")
+                    logger.info(f"  - remote_pubkey: {channel.get('remote_pubkey')}")
+                    logger.info(f"  - local_balance: {channel.get('local_balance')}")
+                
+                logger.info("=== SEND PAYMENT REQUEST CREATION CHECKPOINT ===")
                 # Create the SendPayment request
                 request = tapchannel_pb2.SendPaymentRequest(
                     payment_request=router_payment_request,
                     asset_id=asset_id_bytes,  # Include the asset ID
                     allow_overpay=True  # Allow payment even if it's uneconomical
                 )
+                logger.info(f"Created SendPayment request:")
+                logger.info(f"  - asset_id: {asset_id}")
+                logger.info(f"  - allow_overpay: True")
+                
+                # Log the decoded invoice route hints for comparison
+                logger.info("=== INVOICE ROUTE HINTS CHECKPOINT ===")
+                decoded = bolt11.decode(payment_request)
+                if hasattr(decoded, 'route_hints') and decoded.route_hints:
+                    for i, hint in enumerate(decoded.route_hints):
+                        logger.info(f"Invoice route hint {i+1}:")
+                        if hasattr(hint, 'node_id'):
+                            logger.info(f"  - node_id: {hint.node_id}")
+                        if hasattr(hint, 'channel_id'):
+                            logger.info(f"  - channel_id: {hint.channel_id}")
+                            logger.info(f"  - channel_id (hex): {hex(hint.channel_id) if isinstance(hint.channel_id, int) else 'N/A'}")
+                else:
+                    logger.info("No route hints found in decoded invoice")
                 
                 # Add peer_pubkey if provided
                 if peer_pubkey:
-                    logger.debug(f"Using peer_pubkey for payment: {peer_pubkey}")
+                    logger.info(f"Adding peer_pubkey to request: {peer_pubkey}")
                     request.peer_pubkey = bytes.fromhex(peer_pubkey)
+                    logger.info(f"Peer pubkey bytes: {request.peer_pubkey.hex()}")
+                else:
+                    logger.info("No peer_pubkey provided")
                 
-                logger.debug(f"Calling tapchannel_stub.SendPayment with asset_id={asset_id}")
+                logger.info(f"Calling tapchannel_stub.SendPayment with asset_id={asset_id}")
                 
+                logger.info("=== PAYMENT STREAM PROCESSING CHECKPOINT ===")
                 # Get the stream object
                 response_stream = self.tapchannel_stub.SendPayment(request)
                 
@@ -496,7 +851,9 @@ class TaprootAssetsNodeExtension:
                 
                 try:
                     async for response in response_stream:
-                        logger.debug(f"Got payment response: {response}")
+                        logger.info(f"Got payment response type: {type(response)}")
+                        logger.info(f"Payment response fields: {[field.name for field in response.DESCRIPTOR.fields]}")
+                        logger.info(f"Full response: {response}")
                         
                         if hasattr(response, 'accepted_sell_order') and response.HasField('accepted_sell_order'):
                             logger.debug("Received accepted sell order response")
