@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package routerrpc;
 
-import "../lightning.proto";
+import "lightning.proto";
 
 option go_package = "github.com/lightningnetwork/lnd/lnrpc/routerrpc";
 
