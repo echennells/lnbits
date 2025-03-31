@@ -10,6 +10,7 @@ from lnbits.wallets.tapd_grpc_files.rfqrpc import rfq_pb2
 from lnbits.wallets.tapd_grpc_files.tapchannelrpc import tapchannel_pb2
 from lnbits.wallets.lnd_grpc_files import lightning_pb2
 from lnbits.wallets.lnd_grpc_files.routerrpc import router_pb2
+from lnbits.wallets.lnd_grpc_files.invoicesrpc import invoices_pb2
 
 # GRPC services
 from lnbits.wallets.tapd_grpc_files import taprootassets_pb2_grpc
@@ -17,6 +18,7 @@ from lnbits.wallets.tapd_grpc_files.rfqrpc import rfq_pb2_grpc
 from lnbits.wallets.tapd_grpc_files.tapchannelrpc import tapchannel_pb2_grpc
 from lnbits.wallets.lnd_grpc_files import lightning_pb2_grpc
 from lnbits.wallets.lnd_grpc_files.routerrpc import router_pb2_grpc
+from lnbits.wallets.lnd_grpc_files.invoicesrpc import invoices_pb2_grpc
 
 # Create service client factory functions
 def create_taprootassets_client(channel):
@@ -41,4 +43,12 @@ def create_lightning_client(channel):
         return lightning_pb2_grpc.LightningStub(channel)
     except Exception as e:
         logger.error(f"Error creating Lightning client: {e}")
+        raise
+
+def create_invoices_client(channel):
+    """Create an Invoices service client."""
+    try:
+        return invoices_pb2_grpc.InvoicesStub(channel)
+    except Exception as e:
+        logger.error(f"Error creating Invoices client: {e}")
         raise

@@ -200,13 +200,13 @@ async def api_create_invoice(
             logger.info("DEBUG: API: After calling create_invoice")
             logger.info(f"DEBUG: API: invoice_response type: {type(invoice_response)}")
             logger.info(f"DEBUG: API: invoice_response: {invoice_response}")
-            
+
             # Check if extra data contains channel_count
             if hasattr(invoice_response, 'extra') and invoice_response.extra:
                 if 'channel_count' in invoice_response.extra:
                     channel_count = invoice_response.extra['channel_count']
                     logger.info(f"DEBUG: API: Channel count from invoice_response: {channel_count}")
-                
+
         except Exception as e:
             logger.error(f"DEBUG: API ERROR: Failed in taproot_wallet.create_invoice: {str(e)}", exc_info=True)
             # Log the full exception traceback
@@ -263,7 +263,7 @@ async def api_create_invoice(
             channel_count = None
             if hasattr(invoice_response, 'extra') and invoice_response.extra and 'channel_count' in invoice_response.extra:
                 channel_count = invoice_response.extra['channel_count']
-            
+
             response_data = {
                 "payment_hash": payment_hash,
                 "payment_request": payment_request,
@@ -294,7 +294,7 @@ async def api_create_invoice(
         # Check for specific error messages
         if "multiple asset channels found for asset" in str(e) and "please specify the peer pubkey" in str(e):
             logger.error(f"DEBUG: API ERROR: Multiple channels error: {str(e)}")
-            
+
             # This is the specific error we're handling - multiple channels for the same asset
             # The frontend should already be showing each channel as a separate asset box,
             # so this error should not occur in normal operation
@@ -350,7 +350,7 @@ async def api_pay_invoice(
             # Log if peer_pubkey is provided
             if data.peer_pubkey:
                 logger.info(f"Using peer_pubkey for payment: {data.peer_pubkey}")
-            
+
             payment = await taproot_wallet.pay_asset_invoice(
                 invoice=data.payment_request,
                 fee_limit_sats=fee_limit_sats,
@@ -487,3 +487,42 @@ async def api_update_invoice_status(
 
     updated_invoice = await update_invoice_status(invoice_id, status)
     return updated_invoice
+
+
+@taproot_assets_api_router.get("/settle/{payment_hash}", status_code=HTTPStatus.OK)
+async def api_settle_invoice(
+    payment_hash: str,
+    script_key: Optional[str] = None,
+):
+    """
+    Manually settle a Taproot Asset invoice by payment hash.
+    This is a utility endpoint to fix issues where automatic settlement fails.
+    """
+    try:
+        logger.info(f"Manual settlement API called for payment_hash={payment_hash}")
+        if script_key:
+            logger.info(f"Script key provided: {script_key}")
+        
+        # Create a wallet instance
+        wallet = TaprootWalletExtension()
+        
+        # Initialize the wallet connection
+        await wallet._init_connection()
+        
+        # Call the manually_settle_invoice method
+        success = await wallet.manually_settle_invoice(payment_hash, script_key)
+        
+        if success:
+            logger.info(f"Manual settlement successful for payment_hash={payment_hash}")
+            return {"success": True, "message": f"Invoice {payment_hash} settled successfully"}
+        else:
+            logger.warning(f"Manual settlement failed for payment_hash={payment_hash}")
+            return {"success": False, "message": f"Failed to settle invoice {payment_hash}"}
+    except Exception as e:
+        # Get full traceback
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        stack_trace = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        logger.error(f"Error in manual settlement: {str(e)}")
+        logger.error(f"Full traceback: {''.join(stack_trace)}")
+        
+        return {"success": False, "error": str(e)}

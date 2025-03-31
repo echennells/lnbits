@@ -128,6 +128,47 @@ class TaprootWalletExtension:
         finally:
             await self.cleanup()
 
+    async def manually_settle_invoice(
+        self,
+        payment_hash: str,
+        script_key: Optional[str] = None,
+    ) -> bool:
+        """
+        Manually settle a HODL invoice using the stored preimage.
+        This can be used as a fallback if automatic settlement fails.
+
+        Args:
+            payment_hash: The payment hash of the invoice to settle
+            script_key: Optional script key to use for lookup if payment hash is not found directly
+
+        Returns:
+            bool: True if settlement was successful, False otherwise
+        """
+        try:
+            await self._init_connection()
+
+            # Call the node's manually_settle_invoice method
+            logger.info(f"Manually settling invoice with payment_hash={payment_hash}")
+            if script_key:
+                logger.info(f"Using script_key={script_key} for lookup")
+
+            success = await self.node.manually_settle_invoice(
+                payment_hash=payment_hash,
+                script_key=script_key
+            )
+
+            if success:
+                logger.info(f"Successfully manually settled invoice with payment_hash={payment_hash}")
+            else:
+                logger.error(f"Failed to manually settle invoice with payment_hash={payment_hash}")
+
+            return success
+        except Exception as e:
+            logger.error(f"Error in manual settlement: {str(e)}", exc_info=True)
+            return False
+        finally:
+            await self.cleanup()
+
     async def create_invoice(
         self,
         amount: int,
@@ -166,7 +207,7 @@ class TaprootWalletExtension:
             channel_assets = await self.node.list_channel_assets()
             asset_channels = [ca for ca in channel_assets if ca.get("asset_id") == asset_id]
             channel_count = len(asset_channels)
-            
+
             logger.info(f"Found {channel_count} channels for asset_id={asset_id}")
             for idx, channel in enumerate(asset_channels):
                 logger.info(f"Channel {idx+1}: channel_point={channel.get('channel_point')}, local_balance={channel.get('local_balance')}")
@@ -257,7 +298,7 @@ class TaprootWalletExtension:
     ) -> PaymentResponse:
         """
         Pay a Taproot Asset invoice.
-        
+
         WARNING: This method is now deprecated for direct use.
         Use update_taproot_assets_after_payment instead after making the payment with LNbits wallet.
 
@@ -277,7 +318,7 @@ class TaprootWalletExtension:
 
             # Extract asset_id from kwargs if provided
             asset_id = kwargs.get("asset_id")
-            
+
             # Call the node's pay_asset_invoice method
             payment_result = await self.node.pay_asset_invoice(
                 payment_request=invoice,
@@ -315,7 +356,7 @@ class TaprootWalletExtension:
     ) -> PaymentResponse:
         """
         Update Taproot Assets after payment has been made from LNbits wallet.
-        
+
         This function is called after a successful payment through the LNbits wallet system
         to update the Taproot Assets daemon about the payment.
 
@@ -330,7 +371,7 @@ class TaprootWalletExtension:
         """
         try:
             await self._init_connection()
-            
+
             # Call the node's update_after_payment method
             update_result = await self.node.update_after_payment(
                 payment_request=invoice,
@@ -338,7 +379,7 @@ class TaprootWalletExtension:
                 fee_limit_sats=fee_limit_sats,
                 asset_id=asset_id
             )
-            
+
             return PaymentResponse(
                 ok=True,
                 checking_id=payment_hash,
