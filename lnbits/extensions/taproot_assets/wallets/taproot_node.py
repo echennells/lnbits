@@ -226,8 +226,15 @@ class TaprootAssetsNodeExtension:
         )
 
     async def monitor_invoice(self, payment_hash: str):
-        """Monitor a specific invoice for state changes."""
-        return await self.invoice_manager.monitor_invoice(payment_hash)
+        """
+        Monitor a specific invoice for state changes.
+        
+        This method now delegates to the transfer_manager's implementation
+        which includes direct settlement logic, rather than the invoice_manager's
+        implementation which relies on the heartbeat process.
+        """
+        logger.info(f"🔀 NODE: Delegating monitor_invoice to transfer_manager for {payment_hash}")
+        return await self.transfer_manager.monitor_invoice(payment_hash)
 
     async def manually_settle_invoice(self, payment_hash: str, script_key: Optional[str] = None):
         """

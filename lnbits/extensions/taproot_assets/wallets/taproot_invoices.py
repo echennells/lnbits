@@ -158,8 +158,10 @@ class TaprootInvoiceManager:
                 self.node._store_preimage(payment_hash_hex, preimage_hex)
                 logger.info(f"Stored preimage for payment_hash: {payment_hash_hex}")
 
-                # Start monitoring
-                asyncio.create_task(self.monitor_invoice(payment_hash_hex))
+                # Start monitoring using the transfer_manager's implementation
+                # which includes direct settlement logic
+                logger.info(f"🔄 Starting invoice monitoring with transfer_manager for {payment_hash_hex}")
+                asyncio.create_task(self.node.monitor_invoice(payment_hash_hex))
 
                 # Add peer_pubkey if provided
                 if peer_pubkey:
@@ -321,12 +323,26 @@ class TaprootInvoiceManager:
                                     amount=asset_amount
                                 )
                                 logger.info(f"Asset transfer initiated successfully")
+                                
+                                # Try direct settlement from invoice manager
+                                try:
+                                    logger.info("🔄 INVOICE MANAGER: Attempting direct settlement after transfer...")
+                                    preimage = self.node._get_preimage(payment_hash)
+                                    if preimage:
+                                        logger.info(f"🔑 INVOICE MANAGER: Found preimage for {payment_hash}")
+                                        from .taproot_transfers import direct_settle_invoice
+                                        settlement_result = await direct_settle_invoice(self.node, payment_hash)
+                                        logger.info(f"⚡ INVOICE MANAGER: Direct settlement result: {settlement_result}")
+                                    else:
+                                        logger.warning(f"❌ INVOICE MANAGER: No preimage found for {payment_hash}")
+                                except Exception as e:
+                                    logger.error(f"❌ INVOICE MANAGER: Direct settlement failed: {e}", exc_info=True)
                             except Exception as e:
                                 logger.error(f"Failed to initiate asset transfer: {e}", exc_info=True)
                         else:
                             logger.warning(f"Cannot initiate asset transfer: missing required information")
                         
-                        logger.info("Waiting for asset transfer completion via monitor_asset_transfers")
+                        logger.info("Waiting for asset transfer completion via monitor_asset_transfers (fallback path)")
                         break  # Exit loop after acceptance
                         
                     elif invoice.state == 1:  # SETTLED state

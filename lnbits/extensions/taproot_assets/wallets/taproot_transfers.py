@@ -11,10 +11,10 @@ from .taproot_adapter import (
 )
 
 # Add version marker to verify code deployment
-VERSION = "v3.0 - Direct Settlement"
+VERSION = "v4.0 - Fixed Main Path"
 logger.info(f"=== LOADING TAPROOT TRANSFERS MODULE {VERSION} ===")
 
-# CRITICAL: Add direct settlement function at module level
+# Module-level direct settlement function
 async def direct_settle_invoice(node, payment_hash):
     """
     Direct settlement function at module level to bypass any method overriding.
@@ -85,11 +85,6 @@ class TaprootTransferManager:
         self.node = node
         # Log version on initialization to verify instance creation
         logger.info(f"TaprootTransferManager initialized - {VERSION}")
-        
-        # CRITICAL: Override the monitor_invoice method 
-        # This ensures we're using our implementation
-        self.original_monitor_invoice = self.monitor_invoice
-        self.monitor_invoice = self.monitor_invoice_v3
 
     async def monitor_asset_transfers(self):
         """
@@ -100,7 +95,7 @@ class TaprootTransferManager:
 
         RETRY_DELAY = 5  # seconds
         MAX_RETRIES = 3  # number of retries before giving up
-        HEARTBEAT_INTERVAL = 30  # seconds - reduced for more frequent heartbeats
+        HEARTBEAT_INTERVAL = 10  # seconds - reduced for more frequent heartbeats
 
         async def log_heartbeat():
             """Log periodic heartbeat to confirm subscription is active"""
@@ -109,30 +104,30 @@ class TaprootTransferManager:
                 try:
                     counter += 1
                     logger.info(f"Asset transfer monitoring heartbeat #{counter} - subscription active - {VERSION}")
-                    # Also log the current preimage cache and script key mappings
-                    if counter % 2 == 0:  # Every other heartbeat
-                        # Log script key mappings with more detail
-                        script_key_mappings = list(self.node.invoice_manager._script_key_to_payment_hash.keys())
-                        if script_key_mappings:
-                            logger.info(f"Current script key mappings:")
-                            for script_key in script_key_mappings:
-                                payment_hash = self.node.invoice_manager._script_key_to_payment_hash.get(script_key)
-                                logger.info(f"  - Script key: {script_key[:6]}...{script_key[-6:]} -> Payment hash: {payment_hash[:6]}...{payment_hash[-6:]}")
-                                # If we find a script key with payment hash, try to settle immediately
-                                if payment_hash and payment_hash in self.node._preimage_cache:
-                                    logger.info(f"🚨 Found unprocessed payment in heartbeat! Attempting immediate settlement...")
-                                    settlement_result = await direct_settle_invoice(self.node, payment_hash)
-                                    if settlement_result:
-                                        logger.info(f"💯 Heartbeat settlement successful for {payment_hash}")
-                                    else:
-                                        logger.error(f"❌ Heartbeat settlement failed for {payment_hash}")
+                    
+                    # Check for unprocessed payments on every heartbeat
+                    script_key_mappings = list(self.node.invoice_manager._script_key_to_payment_hash.keys())
+                    if script_key_mappings:
+                        logger.info(f"Current script key mappings:")
+                        for script_key in script_key_mappings:
+                            payment_hash = self.node.invoice_manager._script_key_to_payment_hash.get(script_key)
+                            logger.info(f"  - Script key: {script_key[:6]}...{script_key[-6:]} -> Payment hash: {payment_hash[:6]}...{payment_hash[-6:]}")
+                            # If we find a script key with payment hash, try to settle immediately
+                            if payment_hash and payment_hash in self.node._preimage_cache:
+                                logger.info(f"🚨 Found unprocessed payment in heartbeat! Attempting immediate settlement...")
+                                settlement_result = await direct_settle_invoice(self.node, payment_hash)
+                                if settlement_result:
+                                    logger.info(f"💯 Heartbeat settlement successful for {payment_hash}")
+                                else:
+                                    logger.error(f"❌ Heartbeat settlement failed for {payment_hash}")
                                         
-                        else:
-                            logger.info("No script key mappings available")
+                    else:
+                        logger.info("No script key mappings available")
                         
-                        # Log preimage cache
-                        logger.info(f"Current preimage cache size: {len(self.node._preimage_cache)}")
-                        logger.info(f"Available payment hashes in cache: {list(self.node._preimage_cache.keys())}")
+                    # Log preimage cache
+                    logger.info(f"Current preimage cache size: {len(self.node._preimage_cache)}")
+                    logger.info(f"Available payment hashes in cache: {list(self.node._preimage_cache.keys())}")
+                    
                     await asyncio.sleep(HEARTBEAT_INTERVAL)
                 except asyncio.CancelledError:
                     break
@@ -209,22 +204,12 @@ class TaprootTransferManager:
         new_task = asyncio.create_task(self.monitor_asset_transfers())
         logger.info(f"Created new monitoring task: {new_task}")
 
-    # Keep the original method for compatibility
     async def monitor_invoice(self, payment_hash: str):
         """
-        Original monitor_invoice method (retained for compatibility).
-        This should not be called directly in the updated version.
+        Monitor a specific invoice for state changes.
+        DIRECT IMPLEMENTATION OF THE SETTLEMENT LOGIC TO FIX MAIN PATH.
         """
-        logger.info(f"⚠️ ORIGINAL monitor_invoice called for {payment_hash} - This shouldn't happen!")
-        return await self.monitor_invoice_v3(payment_hash)
-
-    # Create a new version with a distinctive name
-    async def monitor_invoice_v3(self, payment_hash: str):
-        """
-        NEW VERSION! Monitor a specific invoice for state changes.
-        This version has immediate settlement built in.
-        """
-        logger.info(f"🌟 UPDATED monitor_invoice_v3 running for {payment_hash} - {VERSION} 🌟")
+        logger.info(f"🌟 DIRECT IMPLEMENTATION monitor_invoice for {payment_hash} - {VERSION} 🌟")
 
         try:
             # Convert payment hash to bytes
@@ -241,7 +226,7 @@ class TaprootTransferManager:
 
                     # Check if the invoice is in the ACCEPTED state
                     if invoice.state == 3:  # ACCEPTED state
-                        logger.info(f"🔔 Invoice {payment_hash} is ACCEPTED (state=3) - V3 METHOD RUNNING! 🔔")
+                        logger.info(f"🔔 Invoice {payment_hash} is ACCEPTED (state=3) - DIRECT MAIN PATH - {VERSION}")
 
                         # Process HTLCs
                         script_key_found = False
@@ -260,6 +245,8 @@ class TaprootTransferManager:
                                     if 65543 in records and isinstance(records[65543], bytes):
                                         value = records[65543]
                                         logger.info(f"Processing asset transfer record (65543), length: {len(value)} bytes")
+                                        # Log raw data for debugging
+                                        logger.info(f"Raw record 65543 data: {value.hex()}")
 
                                         try:
                                             # Extract asset ID
@@ -293,6 +280,8 @@ class TaprootTransferManager:
                                     if 65536 in records and isinstance(records[65536], bytes):
                                         value = records[65536]
                                         logger.info(f"Processing asset info record (65536), length: {len(value)} bytes")
+                                        # Log raw data for debugging
+                                        logger.info(f"Raw record 65536 data: {value.hex()}")
 
                                         try:
                                             # Extract asset ID
@@ -323,30 +312,43 @@ class TaprootTransferManager:
                         # Process asset transfer and then settle invoice
                         if script_key_found and asset_id and asset_amount:
                             try:
+                                logger.info(f"🔍 Starting asset transfer verification process")
+                                logger.info(f"Script key found: {script_key_found}, Asset ID: {asset_id}, Amount: {asset_amount}")
                                 logger.info(f"Initiating asset transfer - ID: {asset_id}, Script Key: {script_key_hex}, Amount: {asset_amount}")
                                 
                                 # Verify asset transfer
                                 try:
+                                    logger.info("🚀 Attempting direct transfer and settlement")
+                                    logger.info(f"Transfer parameters - Asset ID: {asset_id}, Script Key: {script_key_hex}, Amount: {asset_amount}")
+                                    
                                     # Call node's asset_manager.send_asset which now just verifies the transfer
                                     transfer_result = await self.node.asset_manager.send_asset(
                                         asset_id=asset_id,
                                         script_key=script_key_hex,
                                         amount=asset_amount
                                     )
-                                    logger.info("Asset transfer verification successful!")
+                                    logger.info(f"✅ Transfer verification result: {transfer_result}")
+                                    logger.info("Asset transfer initiated successfully")
                                     
-                                    # CRITICAL PART: Immediate settlement using direct function
-                                    logger.info("⚡⚡⚡ IMMEDIATE SETTLEMENT HAPPENING NOW ⚡⚡⚡")
-                                    await direct_settle_invoice(self.node, payment_hash)
+                                    # CRITICAL CHANGE: Call direct_settle_invoice function directly after verification
+                                    logger.info("💫 Proceeding to direct settlement...")
+                                    logger.info("⚡⚡⚡ IMMEDIATE SETTLEMENT IN MAIN PATH ⚡⚡⚡")
+                                    settlement_result = await direct_settle_invoice(self.node, payment_hash)
+                                    logger.info(f"🎯 Direct settlement attempt result: {settlement_result}")
+                                    
+                                    # Check post-settlement state
+                                    logger.info("📊 Post-settlement state check:")
+                                    logger.info(f"Preimage cache status: {list(self.node._preimage_cache.keys())}")
+                                    logger.info(f"Script key mappings: {self.node.invoice_manager._script_key_to_payment_hash}")
                                     
                                 except Exception as e:
-                                    logger.error(f"Failed to process asset transfer or settle invoice: {e}", exc_info=True)
+                                    logger.error(f"❌ Error in transfer/settlement process: {e}", exc_info=True)
                             except Exception as e:
                                 logger.error(f"Failed to initiate asset transfer: {e}", exc_info=True)
                         else:
                             logger.warning(f"Cannot initiate asset transfer: missing required information")
 
-                        logger.info("Continuing to monitor invoice state changes")
+                        logger.info("Continuing to monitor invoice state changes (fallback path)")
 
                     elif invoice.state == 1:  # SETTLED state
                         logger.info(f"Invoice {payment_hash} is SETTLED")
