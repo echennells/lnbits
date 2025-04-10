@@ -225,7 +225,7 @@
 </q-dialog>
 
 <!-- Payment success dialog -->
-<q-dialog v-model="showPaymentSuccessModal">
+<q-dialog v-model="showPaymentSuccessModal" @hide="getAssets">
   <q-card class="q-pa-lg">
     <q-card-section class="row items-center">
       <q-avatar icon="check_circle" color="positive" text-color="white" />

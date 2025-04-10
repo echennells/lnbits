@@ -74,6 +74,14 @@ window.app = Vue.createApp({
           LNbits.utils.notifyWarning(`Amount capped at maximum receivable: ${max}`);
         }
       }
+    },
+    // Add a watcher for the payment success modal
+    'showPaymentSuccessModal': function(newVal, oldVal) {
+      // When the modal is closed (changes from true to false)
+      if (oldVal === true && newVal === false) {
+        // Refresh the assets to show updated balances
+        this.getAssets();
+      }
     }
   },
   methods: {
@@ -222,8 +230,12 @@ window.app = Vue.createApp({
         .request('POST', '/taproot_assets/api/v1/taproot/invoice', wallet.adminkey, payload)
         .then(response => {
           this.createdInvoice = response.data;
+          
+          // Automatically copy the invoice to clipboard
+          this.copyInvoice(response.data.payment_request || response.data.id);
+          
           if (LNbits && LNbits.utils && LNbits.utils.notifySuccess) {
-            LNbits.utils.notifySuccess('Invoice created successfully');
+            LNbits.utils.notifySuccess('Invoice created and copied to clipboard');
           }
         })
         .catch(err => {
