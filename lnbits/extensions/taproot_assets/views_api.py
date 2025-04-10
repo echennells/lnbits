@@ -325,27 +325,12 @@ async def api_pay_invoice(
         fee_limit_sats = max(taproot_settings.default_sat_fee, 10)  # Minimum 10 sats for routing
         logger.info(f"Using fee_limit_sats={fee_limit_sats} for payment")
 
-        # Decode the invoice to get the amount
+        # Decode the invoice to get the amount (for logging purposes only)
         decoded_invoice = bolt11.decode(data.payment_request)
         invoice_amount_sats = int(decoded_invoice.amount_msat / 1000)
-
-        # Check LNbits wallet balance for the invoice amount only (no additional fee)
-        if user_wallet.balance_msat < invoice_amount_sats * 1000:
-            raise HTTPException(
-                status_code=HTTPStatus.PAYMENT_REQUIRED,
-                detail=f"Insufficient balance to pay for this Taproot Asset transfer. You have {user_wallet.balance_msat/1000} sats, but need {invoice_amount_sats} sats."
-            )
-
-        # Deduct only the invoice amount from the LNbits wallet (pre-payment to litd)
-        await update_wallet_balance(user_wallet, -invoice_amount_sats)
-        logger.info(f"Deducted {invoice_amount_sats} sats from wallet {user_wallet.id}")
-        await create_fee_transaction(
-            user_id=user_wallet.user,
-            wallet_id=user_wallet.id,
-            asset_payment_hash=data.payment_request,
-            fee_amount_msat=0,  # No additional service fee
-            status="deducted"
-        )
+        logger.info(f"Invoice amount: {invoice_amount_sats} sats")
+        
+        # No longer deducting from LNbits wallet balance for Taproot Asset transfers
 
         # Pay the invoice using litd (tapd's LND node)
         try:
@@ -366,23 +351,14 @@ async def api_pay_invoice(
                 
             logger.info(f"Payment completed successfully: {payment.checking_id}")
         except Exception as e:
-            # Refund the deducted amount if payment fails
-            await update_wallet_balance(user_wallet, invoice_amount_sats)
-            await create_fee_transaction(
-                user_id=user_wallet.user,
-                wallet_id=user_wallet.id,
-                asset_payment_hash=data.payment_request,
-                fee_amount_msat=0,
-                status="refunded"
-            )
-            logger.error(f"Refunded {invoice_amount_sats} sats due to payment error: {str(e)}")
+            # No need to refund since we're not deducting from wallet balance anymore
+            logger.error(f"Payment error: {str(e)}")
             raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=f"Failed to pay invoice: {str(e)}")
 
-        # Deduct any additional routing fees from the LNbits wallet
+        # Calculate routing fees for logging purposes only
         routing_fees_sats = payment.fee_msat // 1000 if payment.fee_msat else 0  # Convert msat to sat
         if routing_fees_sats > 0:
-            await update_wallet_balance(user_wallet, -routing_fees_sats)
-            logger.info(f"Deducted {routing_fees_sats} sats for routing fees from wallet {user_wallet.id}")
+            logger.info(f"Routing fees: {routing_fees_sats} sats (not deducted from wallet)")
 
         # Prepare response
         response_data = {
@@ -393,7 +369,7 @@ async def api_pay_invoice(
             "sat_fee_paid": 0,  # No additional service fee
             "routing_fees_sats": routing_fees_sats
         }
-        logger.info(f"API: Successfully paid invoice, deducted {routing_fees_sats} sat routing fees")
+        logger.info(f"API: Successfully paid invoice (routing fees: {routing_fees_sats} sats)")
         return response_data
 
     except Exception as e:
