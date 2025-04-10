@@ -321,7 +321,9 @@ async def api_pay_invoice(
     try:
         user_wallet = wallet.wallet
         taproot_wallet = TaprootWalletExtension()
-        fee_limit_sats = taproot_settings.default_sat_fee  # Used as the fee limit for the payment
+        # Use a higher fee limit for routing through third nodes
+        fee_limit_sats = max(taproot_settings.default_sat_fee, 10)  # Minimum 10 sats for routing
+        logger.info(f"Using fee_limit_sats={fee_limit_sats} for payment")
 
         # Decode the invoice to get the amount
         decoded_invoice = bolt11.decode(data.payment_request)
@@ -351,14 +353,18 @@ async def api_pay_invoice(
             if data.peer_pubkey:
                 logger.info(f"Using peer_pubkey for payment: {data.peer_pubkey}")
 
+            logger.info("Starting payment process - this will wait for payment completion")
             payment = await taproot_wallet.pay_asset_invoice(
                 invoice=data.payment_request,
                 fee_limit_sats=fee_limit_sats,
                 peer_pubkey=data.peer_pubkey  # Pass peer_pubkey to the wallet
             )
+            
             if not payment.ok:
+                logger.error(f"Payment failed: {payment.error_message}")
                 raise Exception(f"Payment failed: {payment.error_message}")
-            logger.debug(f"Successfully paid invoice via litd: {payment.checking_id}")
+                
+            logger.info(f"Payment completed successfully: {payment.checking_id}")
         except Exception as e:
             # Refund the deducted amount if payment fails
             await update_wallet_balance(user_wallet, invoice_amount_sats)
@@ -369,7 +375,7 @@ async def api_pay_invoice(
                 fee_amount_msat=0,
                 status="refunded"
             )
-            logger.error(f"Refunded {invoice_amount_sats} sats due to payment error")
+            logger.error(f"Refunded {invoice_amount_sats} sats due to payment error: {str(e)}")
             raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=f"Failed to pay invoice: {str(e)}")
 
         # Deduct any additional routing fees from the LNbits wallet

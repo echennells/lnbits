@@ -17,11 +17,11 @@ class TapdSettingsManager:
         
         # Default settings
         self.tapd_host = "lit:10009"
-        self.tapd_network = "signet"
+        self.tapd_network = "mainnet"
         self.tapd_tls_cert_path = "/root/.lnd/tls.cert"
-        self.tapd_macaroon_path = "/root/.tapd/data/signet/admin.macaroon"
+        self.tapd_macaroon_path = "/root/.tapd/data/mainnet/admin.macaroon"
         self.tapd_macaroon_hex = None
-        self.lnd_macaroon_path = "/root/.lnd/data/chain/bitcoin/signet/admin.macaroon" 
+        self.lnd_macaroon_path = "/root/.lnd/data/chain/bitcoin/mainnet/admin.macaroon" 
         self.lnd_macaroon_hex = None
         self.default_sat_fee = 1  # Default to 1 sat fee
         
