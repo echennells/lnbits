@@ -147,10 +147,35 @@ window.app = Vue.createApp({
       // Keep this method but make it do nothing (just set empty array)
       this.invoices = [];
     },
-    createInvoice(asset) {
-      // Store the entire asset object
-      this.selectedAsset = asset;
-      console.log('Selected asset:', asset);
+    async createInvoice(asset) {
+      // Store the asset ID and channel identifier for reference
+      const assetId = asset.asset_id;
+      // Use peer_pubkey as a unique identifier for channels
+      const peerPubkey = asset.channel_info?.peer_pubkey;
+      
+      console.log('Selected asset ID:', assetId);
+      console.log('Selected channel peer_pubkey:', peerPubkey);
+      
+      // First refresh the assets to get the latest balance information
+      await this.getAssets();
+      
+      // Find the updated asset with the same ID and channel in the refreshed assets list
+      let updatedAsset;
+      
+      if (peerPubkey) {
+        // If this is a channel asset, match both asset_id and peer_pubkey
+        updatedAsset = this.assets.find(a => 
+          a.asset_id === assetId && 
+          a.channel_info?.peer_pubkey === peerPubkey
+        );
+      } else {
+        // For non-channel assets, just match by asset_id
+        updatedAsset = this.assets.find(a => a.asset_id === assetId);
+      }
+      
+      // Use the updated asset or fall back to the original if not found
+      this.selectedAsset = updatedAsset || asset;
+      console.log('Updated selected asset:', this.selectedAsset);
 
       // Show the invoice form
       this.showInvoiceForm = true;
@@ -160,10 +185,35 @@ window.app = Vue.createApp({
       this.invoiceForm.memo = '';
       this.invoiceForm.expiry = 3600;
     },
-    showSendForm(asset) {
-      // Store the entire asset object
-      this.selectedAsset = asset;
-      console.log('Selected asset for sending:', asset);
+    async showSendForm(asset) {
+      // Store the asset ID and channel identifier for reference
+      const assetId = asset.asset_id;
+      // Use peer_pubkey as a unique identifier for channels
+      const peerPubkey = asset.channel_info?.peer_pubkey;
+      
+      console.log('Selected asset ID for sending:', assetId);
+      console.log('Selected channel peer_pubkey for sending:', peerPubkey);
+      
+      // First refresh the assets to get the latest balance information
+      await this.getAssets();
+      
+      // Find the updated asset with the same ID and channel in the refreshed assets list
+      let updatedAsset;
+      
+      if (peerPubkey) {
+        // If this is a channel asset, match both asset_id and peer_pubkey
+        updatedAsset = this.assets.find(a => 
+          a.asset_id === assetId && 
+          a.channel_info?.peer_pubkey === peerPubkey
+        );
+      } else {
+        // For non-channel assets, just match by asset_id
+        updatedAsset = this.assets.find(a => a.asset_id === assetId);
+      }
+      
+      // Use the updated asset or fall back to the original if not found
+      this.selectedAsset = updatedAsset || asset;
+      console.log('Updated selected asset for sending:', this.selectedAsset);
 
       // Reset payment form
       this.paymentRequest = '';
