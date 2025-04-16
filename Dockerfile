@@ -8,6 +8,7 @@ RUN apt-get update && \
         build-essential \
         libnss-myhostname \
         nodejs \
+	sqlite3 \
         npm && \
     rm -rf /var/lib/apt/lists/*
 

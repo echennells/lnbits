@@ -40,11 +40,11 @@
                 <span class="asset-name">{% raw %}{{ asset.name ? asset.name : 'Unknown' }}{% endraw %}</span>
               </div>
               <div class="col-auto">
-                <q-btn flat color="primary" @click="createInvoice(asset)" class="q-mr-sm">
+                <q-btn flat color="primary" @click="openInvoiceDialog(asset)" class="q-mr-sm">
                   <q-icon left name="arrow_upward"></q-icon>
                   RECEIVE
                 </q-btn>
-                <q-btn flat color="primary" @click="showSendForm(asset)">
+                <q-btn flat color="primary" @click="openPaymentDialog(asset)">
                   <q-icon left name="arrow_downward"></q-icon>
                   SEND
                 </q-btn>
@@ -65,31 +65,92 @@
             </div>
           </div>
         </div>
+      </q-card-section>
+    </q-card>
 
+    <!-- Invoices Table -->
+    <q-card>
+      <q-card-section>
+        <div class="row items-center no-wrap q-mb-sm">
+          <div class="col">
+            <h5 class="text-subtitle1 q-my-none">Recent Invoices</h5>
+          </div>
+          <div class="col-auto">
+            <q-btn flat round dense icon="refresh" color="primary" @click="refreshInvoices">
+              <q-tooltip>Refresh</q-tooltip>
+            </q-btn>
+          </div>
+        </div>
+        <q-separator></q-separator>
+      </q-card-section>
+
+      <q-card-section>
+        <div v-if="invoicesLoading" class="text-center q-pa-md">
+          <q-spinner color="primary" size="2em" />
+          <div class="q-mt-sm text-grey">Loading invoices...</div>
+        </div>
+
+        <q-table
+          v-else
+          ref="invoicesTable"
+          flat
+          dense
+          :rows="invoices"
+          :columns="invoicesTable.columns"
+          row-key="id"
+          :pagination="invoicesTable.pagination"
+          class="invoices-table"
+        >
+          <!-- Date column -->
+          <template v-slot:body-cell-created_at="props">
+            <q-td :props="props">
+              {% raw %}{{ props.row.date }}{% endraw %}
+            </q-td>
+          </template>
+
+          <!-- Status column - Using Quasar badge component correctly -->
+          <template v-slot:body-cell-status="props">
+            <q-td :props="props">
+              <q-badge 
+                :color="getStatusColor(props.row.status)"
+                :class="{'status-changed': props.row._statusChanged}"
+              >
+                {% raw %}{{ props.row.status }}{% endraw %}
+              </q-badge>
+            </q-td>
+          </template>
+
+          <!-- No data message -->
+          <template v-slot:no-data>
+            <div class="text-center text-grey-6 q-py-md">
+              No invoices found
+            </div>
+          </template>
+        </q-table>
       </q-card-section>
     </q-card>
   </div>
 
   <div class="col-12 col-md-4 col-lg-5">
-    <q-card v-if="showInvoiceForm">
+    <q-card v-if="invoiceDialog.show">
       <q-card-section>
         <h6 class="text-subtitle1 q-my-none text-white">Create Invoice</h6>
         <q-separator class="q-my-sm"></q-separator>
 
         <div class="invoice-form-container">
-          <div class="selected-asset-info" v-if="selectedAsset">
+          <div class="selected-asset-info" v-if="invoiceDialog.selectedAsset">
             <div class="text-white">
               <div>Selected asset:</div>
-              <div class="asset-name">{% raw %}{{ selectedAsset.name || 'Unknown' }}{% endraw %}</div>
+              <div class="asset-name">{% raw %}{{ invoiceDialog.selectedAsset.name || 'Unknown' }}{% endraw %}</div>
               <div class="asset-detail">
                 <!-- Show balance information if it's a channel asset -->
-                <span v-if="selectedAsset.channel_info">
-                  Balance: {% raw %}{{ selectedAsset.channel_info.local_balance }}{% endraw %}<br>
-                  Channel Capacity: {% raw %}{{ selectedAsset.channel_info.capacity }}{% endraw %}<br>
+                <span v-if="invoiceDialog.selectedAsset.channel_info">
+                  Balance: {% raw %}{{ invoiceDialog.selectedAsset.channel_info.local_balance }}{% endraw %}<br>
+                  Channel Capacity: {% raw %}{{ invoiceDialog.selectedAsset.channel_info.capacity }}{% endraw %}<br>
                   <span class="text-positive">Max Receivable: {% raw %}{{ maxInvoiceAmount }}{% endraw %}</span>
                 </span>
                 <span v-else>
-                  Amount: {% raw %}{{ selectedAsset.amount }}{% endraw %}
+                  Amount: {% raw %}{{ invoiceDialog.selectedAsset.amount }}{% endraw %}
                 </span>
               </div>
             </div>
@@ -98,11 +159,11 @@
             No asset selected. Please click RECEIVE on an asset.
           </div>
 
-          <form @submit.prevent="submitInvoice" class="invoice-form">
+          <form @submit.prevent="submitInvoiceForm" class="invoice-form">
             <div class="invoice-form-row">
               <div class="invoice-form-col">
                 <label class="invoice-input-label">Amount</label>
-                <input v-model.number="invoiceForm.amount" type="number" min="0.000001" step="0.000001" class="invoice-input" required
+                <input v-model.number="invoiceDialog.form.amount" type="number" min="0.000001" step="0.000001" class="invoice-input" required
                        :max="maxInvoiceAmount" />
                 <div class="text-negative" v-if="!isInvoiceAmountValid">
                   <small>Amount exceeds maximum receivable</small>
@@ -110,21 +171,21 @@
               </div>
               <div class="invoice-form-col">
                 <label class="invoice-input-label">Memo (optional)</label>
-                <input v-model="invoiceForm.memo" type="text" class="invoice-input" />
+                <input v-model="invoiceDialog.form.memo" type="text" class="invoice-input" />
               </div>
               <div class="invoice-form-col">
                 <label class="invoice-input-label">Expiry (seconds)</label>
-                <input v-model.number="invoiceForm.expiry" type="number" min="1" class="invoice-input" />
+                <input v-model.number="invoiceDialog.form.expiry" type="number" min="1" class="invoice-input" />
               </div>
             </div>
 
             <div class="invoice-button-container">
               <div class="invoice-buttons">
                 <button type="submit" class="create-invoice-btn"
-                        :disabled="!selectedAsset || !isInvoiceAmountValid">
-                  CREATE INVOICE
+                        :disabled="!invoiceDialog.selectedAsset || !isInvoiceAmountValid || isSubmitting">
+                  {% raw %}{{ isSubmitting ? 'CREATING...' : 'CREATE INVOICE' }}{% endraw %}
                 </button>
-                <button type="button" class="cancel-btn" @click="resetForm()">CANCEL</button>
+                <button type="button" class="cancel-btn" @click="closeInvoiceDialog()">CANCEL</button>
               </div>
             </div>
           </form>
@@ -141,7 +202,7 @@
           <div class="row items-center">
             <div class="col">
               <div class="invoice-label">Asset:</div>
-              <div class="invoice-value">{% raw %}{{ createdInvoice.asset_name || selectedAsset.name }}{% endraw %}</div>
+              <div class="invoice-value">{% raw %}{{ createdInvoice.asset_name || (invoiceDialog.selectedAsset ? invoiceDialog.selectedAsset.name : '') }}{% endraw %}</div>
             </div>
             <div class="col-auto">
               <q-btn flat round dense icon="content_copy" size="lg" color="purple-3" @click="copyInvoice(createdInvoice.payment_request || createdInvoice.id)" />
@@ -151,7 +212,7 @@
           <div class="invoice-amount-row">
             <div>
               <div class="invoice-label">Asset Amount:</div>
-              <div class="invoice-value">{% raw %}{{ invoiceForm.amount || createdInvoice.amount }}{% endraw %}</div>
+              <div class="invoice-value">{% raw %}{{ invoiceDialog.form.amount || createdInvoice.asset_amount }}{% endraw %}</div>
             </div>
             <div>
               <div class="invoice-label">Protocol Fee:</div>
@@ -172,31 +233,31 @@
 </div>
 
 <!-- Send payment modal -->
-<q-dialog v-model="showPayModal">
+<q-dialog v-model="paymentDialog.show">
   <q-card class="q-pa-lg q-pt-xl" style="min-width: 500px">
     <q-card-section>
       <div class="text-h6">Pay Taproot Asset Invoice</div>
     </q-card-section>
 
     <q-card-section>
-      <div v-if="selectedAsset" class="q-mb-md">
-        <div>Selected asset: <strong>{% raw %}{{ selectedAsset.name || 'Unknown' }}{% endraw %}</strong></div>
-        <div v-if="selectedAsset.channel_info">
-          <div>Balance: {% raw %}{{ selectedAsset.channel_info.local_balance }}{% endraw %}</div>
+      <div v-if="paymentDialog.selectedAsset" class="q-mb-md">
+        <div>Selected asset: <strong>{% raw %}{{ paymentDialog.selectedAsset.name || 'Unknown' }}{% endraw %}</strong></div>
+        <div v-if="paymentDialog.selectedAsset.channel_info">
+          <div>Balance: {% raw %}{{ paymentDialog.selectedAsset.channel_info.local_balance }}{% endraw %}</div>
         </div>
       </div>
 
-      <q-form @submit="payInvoice" class="q-gutter-md">
+      <q-form @submit="submitPaymentForm" class="q-gutter-md">
         <q-input
           filled
-          v-model="paymentRequest"
+          v-model="paymentDialog.form.paymentRequest"
           label="Paste invoice"
           :rules="[val => !!val || 'Invoice is required']"
         ></q-input>
 
         <q-input
           filled
-          v-model.number="feeLimit"
+          v-model.number="paymentDialog.form.feeLimit"
           type="number"
           label="Fee limit (sats)"
           :rules="[val => val > 0 || 'Fee limit must be greater than 0']"
@@ -206,13 +267,13 @@
           <q-btn
             flat
             color="grey"
-            @click="showPayModal = false"
+            @click="closePaymentDialog"
             class="q-mr-sm"
           >
             Cancel
           </q-btn>
           <q-btn
-            :loading="paymentInProgress"
+            :loading="paymentDialog.inProgress"
             color="primary"
             type="submit"
           >
@@ -225,7 +286,7 @@
 </q-dialog>
 
 <!-- Payment success dialog -->
-<q-dialog v-model="showPaymentSuccessModal" @hide="getAssets">
+<q-dialog v-model="successDialog.show" @hide="getAssets(); refreshInvoices();">
   <q-card class="q-pa-lg">
     <q-card-section class="row items-center">
       <q-avatar icon="check_circle" color="positive" text-color="white" />

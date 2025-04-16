@@ -1,3 +1,4 @@
+# /home/ubuntu/lnbits/lnbits/extensions/taproot_assets/wallets/taproot_transfers.py
 import asyncio
 import hashlib
 from typing import Optional
@@ -10,6 +11,9 @@ from .taproot_adapter import (
     invoices_pb2
 )
 
+# Import database functions
+from ..crud import get_invoice_by_payment_hash, update_invoice_status
+
 # Add version marker to verify code deployment
 VERSION = "v4.0 - Fixed Main Path"
 logger.info(f"=== LOADING TAPROOT TRANSFERS MODULE {VERSION} ===")
@@ -20,38 +24,78 @@ async def direct_settle_invoice(node, payment_hash):
     Direct settlement function at module level to bypass any method overriding.
     """
     logger.info(f"🔴 DIRECT SETTLEMENT FUNCTION CALLED FOR {payment_hash} 🔴")
-    
+
     try:
         # Get the preimage for this payment hash
         preimage_hex = node._get_preimage(payment_hash)
-        
+
         if not preimage_hex:
             logger.error(f"❌ No preimage found for payment hash {payment_hash}")
             logger.info(f"Available payment hashes in cache: {list(node._preimage_cache.keys())}")
             return False
-            
+
         logger.info(f"✅ Found preimage: {preimage_hex[:6]}...{preimage_hex[-6:]}")
-        
+
         # Convert the preimage to bytes
         preimage_bytes = bytes.fromhex(preimage_hex)
-        
+
         # Validate preimage length
         if len(preimage_bytes) != 32:
             logger.error(f"❌ Invalid preimage length: {len(preimage_bytes)}, expected 32 bytes")
             return False
-            
+
         # Create settlement request
         logger.info("⏳ Creating SettleInvoice request")
         settle_request = invoices_pb2.SettleInvoiceMsg(
             preimage=preimage_bytes
         )
-        
+
         # Settle the invoice
         logger.info("🚀 Calling SettleInvoice RPC DIRECTLY...")
         await node.invoices_stub.SettleInvoice(settle_request)
         logger.info(f"💥 INVOICE {payment_hash} SUCCESSFULLY SETTLED 💥")
+
+        # Update the invoice status in the database
+        try:
+            # Look up the invoice by payment hash
+            logger.info(f"Looking up invoice in database by payment_hash: {payment_hash}")
+            invoice = await get_invoice_by_payment_hash(payment_hash)
+
+            if invoice:
+                logger.info(f"Found invoice with ID: {invoice.id}, updating status to 'paid'")
+                
+                # Debug log the invoice details before update
+                logger.info(f"Invoice before update: status={invoice.status}, id={invoice.id}, payment_hash={invoice.payment_hash}")
+                
+                # Update the invoice status to "paid"
+                updated_invoice = await update_invoice_status(invoice.id, "paid")
+                
+                # Add extra verification
+                if updated_invoice:
+                    logger.info(f"✅ Database updated: Invoice {invoice.id} status set to '{updated_invoice.status}'")
+                    if updated_invoice.status != "paid":
+                        logger.error(f"❌ Invoice status was not changed to 'paid'! Current status: {updated_invoice.status}")
+                    if updated_invoice.paid_at is None:
+                        logger.error(f"❌ Invoice paid_at timestamp was not set!")
+                else:
+                    logger.error(f"❌ Failed to update invoice status - update_invoice_status returned None")
+                
+                # Double-check that the invoice was updated
+                verification_invoice = await get_invoice_by_payment_hash(payment_hash)
+                if verification_invoice and verification_invoice.status == "paid":
+                    logger.info(f"✓ Verified invoice status is now 'paid' in database")
+                else:
+                    logger.error(f"❌ Verification failed! Invoice status is not 'paid' in database")
+                    if verification_invoice:
+                        logger.error(f"   Current status: {verification_invoice.status}")
+            else:
+                logger.warning(f"⚠️ No invoice found in database with payment_hash: {payment_hash}")
+        except Exception as db_error:
+            logger.error(f"❌ Error updating invoice status in database: {db_error}", exc_info=True)
+            # Continue even if database update fails - the invoice is still settled at the blockchain level
+
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Failed to settle invoice: {e}", exc_info=True)
         return False
@@ -104,7 +148,7 @@ class TaprootTransferManager:
                 try:
                     counter += 1
                     logger.info(f"Asset transfer monitoring heartbeat #{counter} - subscription active - {VERSION}")
-                    
+
                     # Check for unprocessed payments on every heartbeat
                     script_key_mappings = list(self.node.invoice_manager._script_key_to_payment_hash.keys())
                     if script_key_mappings:
@@ -118,16 +162,32 @@ class TaprootTransferManager:
                                 settlement_result = await direct_settle_invoice(self.node, payment_hash)
                                 if settlement_result:
                                     logger.info(f"💯 Heartbeat settlement successful for {payment_hash}")
+
+                                    # Also directly update the database
+                                    try:
+                                        # Look up the invoice by payment hash
+                                        logger.info(f"Looking up invoice in database by payment_hash: {payment_hash}")
+                                        invoice_db = await get_invoice_by_payment_hash(payment_hash)
+
+                                        if invoice_db:
+                                            logger.info(f"Found invoice with ID: {invoice_db.id}, updating status to 'paid'")
+                                            # Update the invoice status to "paid"
+                                            updated_invoice = await update_invoice_status(invoice_db.id, "paid")
+                                            logger.info(f"✅ Database updated: Invoice {invoice_db.id} status set to 'paid'")
+                                        else:
+                                            logger.warning(f"⚠️ No invoice found in database with payment_hash: {payment_hash}")
+                                    except Exception as db_error:
+                                        logger.error(f"❌ Error updating invoice status in database: {db_error}", exc_info=True)
                                 else:
                                     logger.error(f"❌ Heartbeat settlement failed for {payment_hash}")
-                                        
+
                     else:
                         logger.info("No script key mappings available")
-                        
+
                     # Log preimage cache
                     logger.info(f"Current preimage cache size: {len(self.node._preimage_cache)}")
                     logger.info(f"Available payment hashes in cache: {list(self.node._preimage_cache.keys())}")
-                    
+
                     await asyncio.sleep(HEARTBEAT_INTERVAL)
                 except asyncio.CancelledError:
                     break
@@ -167,7 +227,7 @@ class TaprootTransferManager:
                         # Log detailed event information
                         logger.info(f"=== RECEIVED SEND EVENT #{event_counter} ===")
                         logger.info(f"Event type: {type(event)}")
-                        
+
                         # We don't take action based on send events since the asset
                         # transfer happens through the Lightning layer
                         logger.info("Asset transfer events are informational only - no action needed")
@@ -268,7 +328,7 @@ class TaprootTransferManager:
                                                     script_key_end = script_key_start + 33
                                                     script_key = value[script_key_start:script_key_end]
                                                     script_key_hex = script_key.hex()
-                                                    
+
                                                     # Store mapping
                                                     self.node.invoice_manager._store_script_key_mapping(script_key_hex, payment_hash)
                                                     logger.info(f"Stored script key mapping: {script_key_hex} -> {payment_hash}")
@@ -315,12 +375,12 @@ class TaprootTransferManager:
                                 logger.info(f"🔍 Starting asset transfer verification process")
                                 logger.info(f"Script key found: {script_key_found}, Asset ID: {asset_id}, Amount: {asset_amount}")
                                 logger.info(f"Initiating asset transfer - ID: {asset_id}, Script Key: {script_key_hex}, Amount: {asset_amount}")
-                                
+
                                 # Verify asset transfer
                                 try:
                                     logger.info("🚀 Attempting direct transfer and settlement")
                                     logger.info(f"Transfer parameters - Asset ID: {asset_id}, Script Key: {script_key_hex}, Amount: {asset_amount}")
-                                    
+
                                     # Call node's asset_manager.send_asset which now just verifies the transfer
                                     transfer_result = await self.node.asset_manager.send_asset(
                                         asset_id=asset_id,
@@ -329,18 +389,18 @@ class TaprootTransferManager:
                                     )
                                     logger.info(f"✅ Transfer verification result: {transfer_result}")
                                     logger.info("Asset transfer initiated successfully")
-                                    
+
                                     # CRITICAL CHANGE: Call direct_settle_invoice function directly after verification
                                     logger.info("💫 Proceeding to direct settlement...")
                                     logger.info("⚡⚡⚡ IMMEDIATE SETTLEMENT IN MAIN PATH ⚡⚡⚡")
                                     settlement_result = await direct_settle_invoice(self.node, payment_hash)
                                     logger.info(f"🎯 Direct settlement attempt result: {settlement_result}")
-                                    
+
                                     # Check post-settlement state
                                     logger.info("📊 Post-settlement state check:")
                                     logger.info(f"Preimage cache status: {list(self.node._preimage_cache.keys())}")
                                     logger.info(f"Script key mappings: {self.node.invoice_manager._script_key_to_payment_hash}")
-                                    
+
                                 except Exception as e:
                                     logger.error(f"❌ Error in transfer/settlement process: {e}", exc_info=True)
                             except Exception as e:
@@ -352,6 +412,23 @@ class TaprootTransferManager:
 
                     elif invoice.state == 1:  # SETTLED state
                         logger.info(f"Invoice {payment_hash} is SETTLED")
+
+                        # Update the invoice status in the database
+                        try:
+                            # Look up the invoice by payment hash
+                            logger.info(f"Looking up invoice in database by payment_hash: {payment_hash}")
+                            invoice_db = await get_invoice_by_payment_hash(payment_hash)
+
+                            if invoice_db:
+                                logger.info(f"Found invoice with ID: {invoice_db.id}, updating status to 'paid'")
+                                # Update the invoice status to "paid"
+                                updated_invoice = await update_invoice_status(invoice_db.id, "paid")
+                                logger.info(f"✅ Database updated: Invoice {invoice_db.id} status set to 'paid'")
+                            else:
+                                logger.warning(f"⚠️ No invoice found in database with payment_hash: {payment_hash}")
+                        except Exception as db_error:
+                            logger.error(f"❌ Error updating invoice status in database: {db_error}", exc_info=True)
+
                         break
                     elif invoice.state == 2:  # CANCELED state
                         logger.warning(f"Invoice {payment_hash} was CANCELED")
@@ -367,10 +444,10 @@ class TaprootTransferManager:
     async def settle_invoice_with_preimage(self, payment_hash: str):
         """
         Settle an invoice using the stored preimage.
-        
+
         Args:
             payment_hash: The payment hash of the invoice to settle
-            
+
         Returns:
             bool: True if settlement was successful, False otherwise
         """
@@ -385,7 +462,7 @@ class TaprootTransferManager:
         Args:
             payment_hash: The payment hash of the invoice to settle
             script_key: Optional script key to use for lookup if payment hash is not found directly
-            
+
         Returns:
             bool: True if settlement was successful, False otherwise
         """
