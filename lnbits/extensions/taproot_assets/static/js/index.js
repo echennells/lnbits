@@ -122,10 +122,16 @@ window.app = Vue.createApp({
 
       // Refresh state tracking
       refreshInterval: null,
-      refreshCount: 0
+      refreshCount: 0,
+      isRefreshing: false
     }
   },
   computed: {
+    // Filter to only show assets with channels
+    filteredAssets() {
+      if (!this.assets || this.assets.length === 0) return [];
+      return this.assets.filter(asset => asset.channel_info !== undefined);
+    },
     maxInvoiceAmount() {
       if (!this.invoiceDialog.selectedAsset) return 0;
 
@@ -148,6 +154,11 @@ window.app = Vue.createApp({
       if (!assetId || !this.assets || this.assets.length === 0) return null;
       const asset = this.assets.find(a => a.asset_id === assetId);
       return asset ? asset.name : null;
+    },
+
+    // Check if a channel is active (used for styling)
+    isChannelActive(asset) {
+      return asset.channel_info && asset.channel_info.active !== false;
     },
 
     toggleSettings() {
@@ -184,7 +195,9 @@ window.app = Vue.createApp({
     },
     
     getAssets() {
-      if (!this.g.user.wallets.length) return;
+      if (!this.g.user.wallets.length || this.isRefreshing) return;
+      
+      this.isRefreshing = true;
       const wallet = this.g.user.wallets[0];
 
       LNbits.api
@@ -198,6 +211,9 @@ window.app = Vue.createApp({
         .catch(err => {
           console.error('Failed to fetch assets:', err);
           this.assets = [];
+        })
+        .finally(() => {
+          this.isRefreshing = false;
         });
     },
     
@@ -353,6 +369,15 @@ window.app = Vue.createApp({
     
     // Invoice dialog methods
     openInvoiceDialog(asset) {
+      // Refresh assets first to ensure we have the latest channel status
+      this.getAssets();
+      
+      // Don't allow creating invoices for inactive channels
+      if (asset.channel_info && asset.channel_info.active === false) {
+        LNbits.utils.notifyError('Cannot create invoice for inactive channel');
+        return;
+      }
+      
       this.resetInvoiceForm();
       this.invoiceDialog.selectedAsset = asset;
       this.invoiceDialog.show = true;
@@ -410,6 +435,36 @@ window.app = Vue.createApp({
         })
         .catch(err => {
           console.error('Failed to create invoice:', err);
+          
+          // Check for specific error patterns
+          let errorMessage = 'Failed to create invoice';
+          
+          if (err.response && err.response.data && err.response.data.detail) {
+            const errorDetail = err.response.data.detail.toLowerCase();
+            
+            // Check for offline channel or no channel found errors
+            if (errorDetail.includes('no asset channel found') || 
+                errorDetail.includes('no channel balance') ||
+                errorDetail.includes('channel not found') ||
+                errorDetail.includes('peer channel') ||
+                errorDetail.includes('offline') ||
+                errorDetail.includes('unavailable')) {
+              
+              errorMessage = 'Channel appears to be offline or unavailable. Refreshing assets...';
+              
+              // Automatically refresh assets to get updated channel status
+              this.getAssets();
+              
+              // Close the dialog
+              this.closeInvoiceDialog();
+            } else {
+              // Use the server-provided error message
+              errorMessage = err.response.data.detail;
+            }
+          }
+          
+          // Show error notification
+          LNbits.utils.notifyError(errorMessage);
         })
         .finally(() => {
           this.isSubmitting = false;
@@ -418,6 +473,15 @@ window.app = Vue.createApp({
     
     // Payment dialog methods
     openPaymentDialog(asset) {
+      // Refresh assets first to ensure we have the latest channel status
+      this.getAssets();
+      
+      // Don't allow payments from inactive channels
+      if (asset.channel_info && asset.channel_info.active === false) {
+        LNbits.utils.notifyError('Cannot send payment from inactive channel');
+        return;
+      }
+      
       this.resetPaymentForm();
       this.paymentDialog.selectedAsset = asset;
       this.paymentDialog.show = true;
@@ -439,7 +503,7 @@ window.app = Vue.createApp({
     async submitPaymentForm() {
       if (this.paymentDialog.inProgress || !this.g.user.wallets.length) return;
       if (!this.paymentDialog.form.paymentRequest) {
-        console.error('Please enter an invoice to pay');
+        LNbits.utils.notifyError('Please enter an invoice to pay');
         return;
       }
 
@@ -474,6 +538,36 @@ window.app = Vue.createApp({
 
       } catch (error) {
         console.error('Payment failed:', error);
+        
+        // Check for specific error patterns
+        let errorMessage = 'Payment failed';
+        
+        if (error.response && error.response.data && error.response.data.detail) {
+          const errorDetail = error.response.data.detail.toLowerCase();
+          
+          // Check for offline channel or channel-related errors
+          if (errorDetail.includes('no asset channel') || 
+              errorDetail.includes('insufficient channel balance') ||
+              errorDetail.includes('channel not found') ||
+              errorDetail.includes('peer') ||
+              errorDetail.includes('offline') ||
+              errorDetail.includes('unavailable')) {
+            
+            errorMessage = 'Channel appears to be offline or unavailable. Refreshing assets...';
+            
+            // Automatically refresh assets to get updated channel status
+            await this.getAssets();
+            
+            // Close the dialog
+            this.paymentDialog.show = false;
+          } else {
+            // Use the server-provided error message
+            errorMessage = error.response.data.detail;
+          }
+        }
+        
+        // Show error notification
+        LNbits.utils.notifyError(errorMessage);
       } finally {
         this.paymentDialog.inProgress = false;
       }
@@ -531,6 +625,7 @@ window.app = Vue.createApp({
     startAutoRefresh() {
       this.stopAutoRefresh();
       this.refreshInterval = setInterval(() => {
+        this.getAssets();
         this.getInvoices();
         this.getPayments();
       }, 10000); // 10 seconds

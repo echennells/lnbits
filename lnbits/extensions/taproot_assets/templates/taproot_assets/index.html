@@ -28,23 +28,30 @@
       </q-card-section>
 
       <q-card-section>
-        <div v-if="assets && assets.length === 0" class="text-center text-grey-6">
+        <div v-if="filteredAssets && filteredAssets.length === 0" class="text-center text-grey-6">
           No assets found. Connect to a Taproot Assets daemon in the settings.
         </div>
-        <div v-if="assets && assets.length > 0">
+        <div v-if="filteredAssets && filteredAssets.length > 0">
           <h6 class="text-subtitle1 q-my-none">Your Assets</h6>
           <q-separator class="q-my-sm"></q-separator>
-          <div v-for="asset in assets" :key="asset.name || asset.type" class="asset-card">
+          <div v-for="asset in filteredAssets" :key="asset.name || asset.type" 
+               class="asset-card" 
+               :class="{'inactive-channel': asset.channel_info && asset.channel_info.active === false}">
             <div class="row items-center no-wrap">
               <div class="col">
                 <span class="asset-name">{% raw %}{{ asset.name ? asset.name : 'Unknown' }}{% endraw %}</span>
+                <q-badge v-if="asset.channel_info && asset.channel_info.active === false" 
+                         color="grey" 
+                         class="q-ml-sm">Inactive</q-badge>
               </div>
               <div class="col-auto">
-                <q-btn flat color="primary" @click="openInvoiceDialog(asset)" class="q-mr-sm">
+                <q-btn flat color="primary" @click="openInvoiceDialog(asset)" class="q-mr-sm"
+                       :disabled="asset.channel_info && asset.channel_info.active === false">
                   <q-icon left name="arrow_upward"></q-icon>
                   RECEIVE
                 </q-btn>
-                <q-btn flat color="primary" @click="openPaymentDialog(asset)">
+                <q-btn flat color="primary" @click="openPaymentDialog(asset)"
+                       :disabled="asset.channel_info && asset.channel_info.active === false">
                   <q-icon left name="arrow_downward"></q-icon>
                   SEND
                 </q-btn>

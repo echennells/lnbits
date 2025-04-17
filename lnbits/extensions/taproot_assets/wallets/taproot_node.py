@@ -209,6 +209,10 @@ class TaprootAssetsNodeExtension:
             # Handle large integers
             elif isinstance(value, int) and value > 2**53 - 1:
                 result[field_name] = str(value)
+            # Special handling for active status in channel
+            elif field_name == 'active':
+                # Make sure active status is explicitly set to True or False
+                result[field_name] = bool(value)
             # Handle other values
             else:
                 result[field_name] = value

@@ -218,8 +218,12 @@ async def api_create_invoice(
         
         if "multiple asset channels found" in error_details and "please specify the peer pubkey" in error_details:
             detail = f"Multiple channels found for asset {data.asset_id}. Please select a specific channel."
-        elif "no asset channel balance found for asset" in error_details:
-            detail = f"No channel balance found for asset {data.asset_id}. Create a channel first."
+        elif "no asset channel found for asset" in error_details:
+            detail = f"Channel appears to be offline or unavailable for asset {data.asset_id}. Please refresh and try again."
+        elif "no asset channel balance found" in error_details:
+            detail = f"Channel appears to be offline or has insufficient balance for asset {data.asset_id}. Please refresh and try again."
+        elif "peer" in error_details.lower() and "channel" in error_details.lower():
+            detail = f"Channel with peer appears to be offline or unavailable. Please refresh and try again."
         else:
             detail = f"gRPC error: {error_details}"
 
@@ -310,8 +314,12 @@ async def api_pay_invoice(
         # Handle gRPC errors with specific error messages
         error_details = e.details()
         
-        if "no asset channel balance found for asset" in error_details:
-            detail = "Insufficient channel balance for this asset."
+        if "no asset channel found for asset" in error_details:
+            detail = "Channel appears to be offline or unavailable. Please refresh and try again."
+        elif "no asset channel balance found" in error_details:
+            detail = "Insufficient channel balance for this asset. Please refresh and try again."
+        elif "peer" in error_details.lower() and "channel" in error_details.lower():
+            detail = "Channel with peer appears to be offline. Please refresh and try again."
         else:
             detail = f"gRPC error: {error_details}"
             

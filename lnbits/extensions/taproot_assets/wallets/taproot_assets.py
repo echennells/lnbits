@@ -84,15 +84,20 @@ class TaprootAssetManager:
                         "local_balance": channel["local_balance"],
                         "remote_balance": channel["remote_balance"],
                         "peer_pubkey": channel["remote_pubkey"],
-                        "channel_id": channel["channel_id"]
+                        "channel_id": channel["channel_id"],
+                        "active": channel.get("active", True)  # Add active status
                     }
                     asset_with_channel["amount"] = str(channel["local_balance"])
                     result_assets.append(asset_with_channel)
             
-            # Add remaining assets without channels
-            for asset_id, asset in asset_map.items():
-                if asset_id not in channel_assets_by_id:
-                    result_assets.append(asset)
+            # We're not adding non-channel assets anymore, per the requirements
+            # The commented code below would add regular assets without channels
+            # which we now want to filter out
+            
+            # # Add remaining assets without channels
+            # for asset_id, asset in asset_map.items():
+            #     if asset_id not in channel_assets_by_id:
+            #         result_assets.append(asset)
 
             return result_assets
         except Exception as e:
@@ -155,7 +160,8 @@ class TaprootAssetManager:
                             "capacity": asset.get("capacity", 0),
                             "local_balance": asset.get("local_balance", 0),
                             "remote_balance": asset.get("remote_balance", 0),
-                            "commitment_type": str(channel.commitment_type)
+                            "commitment_type": str(channel.commitment_type),
+                            "active": channel.active  # Include active status from channel
                         }
                         
                         channel_assets.append(asset_info)
