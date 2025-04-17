@@ -9,7 +9,7 @@ import traceback
 from lnbits.db import Connection, Database
 from lnbits.helpers import urlsafe_short_hash
 
-from .models import TaprootSettings, TaprootAsset, TaprootInvoice, FeeTransaction
+from .models import TaprootSettings, TaprootAsset, TaprootInvoice, FeeTransaction, TaprootPayment
 
 # Create a database instance for the extension
 db = Database("ext_taproot_assets")
@@ -206,7 +206,6 @@ async def get_asset(asset_id: str) -> Optional[TaprootAsset]:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
-
 
 async def create_invoice(
     asset_id: str,
@@ -498,3 +497,91 @@ async def get_fee_transactions(user_id: Optional[str] = None) -> List[FeeTransac
             transactions.append(transaction)
 
         return transactions
+
+# New functions for payments
+
+async def create_payment_record(
+    payment_hash: str, 
+    payment_request: str,
+    asset_id: str, 
+    asset_amount: int,
+    fee_sats: int,
+    user_id: str,
+    wallet_id: str,
+    memo: Optional[str] = None,
+    preimage: Optional[str] = None
+) -> TaprootPayment:
+    """Create a record of a sent payment."""
+    async with db.connect() as conn:
+        payment_id = urlsafe_short_hash()
+        now = datetime.now()
+        
+        await conn.execute(
+            """
+            INSERT INTO payments (
+                id, payment_hash, payment_request, asset_id, asset_amount, fee_sats, 
+                memo, status, user_id, wallet_id, created_at, preimage
+            )
+            VALUES (
+                :id, :payment_hash, :payment_request, :asset_id, :asset_amount, :fee_sats, 
+                :memo, :status, :user_id, :wallet_id, :created_at, :preimage
+            )
+            """,
+            {
+                "id": payment_id,
+                "payment_hash": payment_hash, 
+                "payment_request": payment_request,
+                "asset_id": asset_id, 
+                "asset_amount": asset_amount,
+                "fee_sats": fee_sats,
+                "memo": memo,
+                "status": "completed",
+                "user_id": user_id,
+                "wallet_id": wallet_id,
+                "created_at": now,
+                "preimage": preimage
+            },
+        )
+        
+        return TaprootPayment(
+            id=payment_id,
+            payment_hash=payment_hash,
+            payment_request=payment_request,
+            asset_id=asset_id,
+            asset_amount=asset_amount,
+            fee_sats=fee_sats,
+            memo=memo,
+            status="completed",
+            user_id=user_id,
+            wallet_id=wallet_id,
+            created_at=now,
+            preimage=preimage
+        )
+
+async def get_user_payments(user_id: str) -> List[TaprootPayment]:
+    """Get all sent payments for a user."""
+    async with db.connect() as conn:
+        rows = await conn.fetchall(
+            "SELECT * FROM payments WHERE user_id = :user_id ORDER BY created_at DESC",
+            {"user_id": user_id},
+        )
+        
+        payments = []
+        for row in rows:
+            payment = TaprootPayment(
+                id=row["id"],
+                payment_hash=row["payment_hash"],
+                payment_request=row["payment_request"],
+                asset_id=row["asset_id"], 
+                asset_amount=row["asset_amount"],
+                fee_sats=row["fee_sats"],
+                memo=row["memo"],
+                status=row["status"],
+                user_id=row["user_id"],
+                wallet_id=row["wallet_id"],
+                created_at=row["created_at"],
+                preimage=row["preimage"]
+            )
+            payments.append(payment)
+            
+        return payments

@@ -1,4 +1,3 @@
-# /home/ubuntu/lnbits/lnbits/extensions/taproot_assets/models.py
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -66,6 +65,22 @@ class TaprootInvoice(BaseModel):
     created_at: datetime
     expires_at: Optional[datetime] = None
     paid_at: Optional[datetime] = None
+
+
+class TaprootPayment(BaseModel):
+    """Model for a Taproot Asset payment."""
+    id: str
+    payment_hash: str
+    payment_request: str
+    asset_id: str
+    asset_amount: int
+    fee_sats: int
+    memo: Optional[str] = None
+    status: str = "completed"
+    user_id: str
+    wallet_id: str
+    created_at: datetime
+    preimage: Optional[str] = None
 
 
 class FeeTransaction(BaseModel):

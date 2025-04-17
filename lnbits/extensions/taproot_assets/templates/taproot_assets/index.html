@@ -68,15 +68,15 @@
       </q-card-section>
     </q-card>
 
-    <!-- Invoices Table -->
+    <!-- Transactions Table -->
     <q-card>
       <q-card-section>
         <div class="row items-center no-wrap q-mb-sm">
           <div class="col">
-            <h5 class="text-subtitle1 q-my-none">Recent Invoices</h5>
+            <h5 class="text-subtitle1 q-my-none">Recent Transactions</h5>
           </div>
           <div class="col-auto">
-            <q-btn flat round dense icon="refresh" color="primary" @click="refreshInvoices">
+            <q-btn flat round dense icon="refresh" color="primary" @click="refreshTransactions">
               <q-tooltip>Refresh</q-tooltip>
             </q-btn>
           </div>
@@ -85,20 +85,20 @@
       </q-card-section>
 
       <q-card-section>
-        <div v-if="invoicesLoading" class="text-center q-pa-md">
+        <div v-if="transactionsLoading" class="text-center q-pa-md">
           <q-spinner color="primary" size="2em" />
-          <div class="q-mt-sm text-grey">Loading invoices...</div>
+          <div class="q-mt-sm text-grey">Loading transactions...</div>
         </div>
 
         <q-table
           v-else
-          ref="invoicesTable"
+          ref="transactionsTable"
           flat
           dense
-          :rows="invoices"
-          :columns="invoicesTable.columns"
+          :rows="combinedTransactions"
+          :columns="transactionsTable.columns"
           row-key="id"
-          :pagination="invoicesTable.pagination"
+          :pagination="transactionsTable.pagination"
           class="invoices-table"
         >
           <!-- Date column -->
@@ -108,10 +108,24 @@
             </q-td>
           </template>
 
-          <!-- Status column - Using Quasar badge component correctly -->
+          <!-- Direction column - simple text like other table cells -->
+          <template v-slot:body-cell-direction="props">
+            <q-td :props="props">
+              {% raw %}{{ props.row.direction === 'incoming' ? 'RECEIVED' : 'SENT' }}{% endraw %}
+            </q-td>
+          </template>
+
+          <!-- Amount column -->
+          <template v-slot:body-cell-amount="props">
+            <q-td :props="props" class="text-right">
+              {% raw %}{{ props.row.asset_amount || props.row.extra?.asset_amount || '0' }}{% endraw %}
+            </q-td>
+          </template>
+
+          <!-- Status column -->
           <template v-slot:body-cell-status="props">
             <q-td :props="props">
-              <q-badge 
+              <q-badge
                 :color="getStatusColor(props.row.status)"
                 :class="{'status-changed': props.row._statusChanged}"
               >
@@ -123,7 +137,7 @@
           <!-- No data message -->
           <template v-slot:no-data>
             <div class="text-center text-grey-6 q-py-md">
-              No invoices found
+              No transactions found
             </div>
           </template>
         </q-table>
@@ -286,7 +300,7 @@
 </q-dialog>
 
 <!-- Payment success dialog -->
-<q-dialog v-model="successDialog.show" @hide="getAssets(); refreshInvoices();">
+<q-dialog v-model="successDialog.show" @hide="getAssets(); refreshTransactions();">
   <q-card class="q-pa-lg">
     <q-card-section class="row items-center">
       <q-avatar icon="check_circle" color="positive" text-color="white" />

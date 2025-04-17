@@ -2,92 +2,96 @@
 
 /* Asset card styling */
 .asset-card {
-  padding: 10px;
-  margin-bottom: 10px;
-  border-radius: 4px;
-  background-color: rgba(0, 0, 0, 0.03);
-}
-
-.dark .asset-card {
-  background-color: rgba(255, 255, 255, 0.05);
+  padding: 15px;
+  margin-bottom: 15px;
+  border-radius: 8px;
+  background-color: rgba(255, 255, 255, 0.1);
+  color: white;
 }
 
 .asset-name {
   font-weight: bold;
-  font-size: 1.1em;
+  font-size: 16px;
+  color: white;
 }
 
 .asset-detail {
   margin-top: 5px;
   font-size: 0.9em;
-  color: rgba(255, 255, 255, 0.85); /* Increased contrast for better visibility */
+  color: rgba(255, 255, 255, 0.8);
 }
 
 /* Invoice form styling */
 .invoice-form-container {
-  padding: 10px;
+  position: relative;
+  padding: 16px;
 }
 
 .selected-asset-info {
-  margin-bottom: 20px;
+  margin-bottom: 15px;
   padding: 10px;
-  border-radius: 4px;
-  background-color: rgba(0, 0, 0, 0.1);
-}
-
-.dark .selected-asset-info {
-  background-color: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  background-color: rgba(255, 255, 255, 0.08);
 }
 
 .invoice-form {
   margin-top: 15px;
+  background-color: rgba(255, 255, 255, 0.05);
+  padding: 15px;
+  border-radius: 8px;
 }
 
 .invoice-form-row {
   display: flex;
-  flex-direction: column;
-  gap: 15px;
-  margin-bottom: 20px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 
 .invoice-form-col {
+  flex: 1;
   position: relative;
 }
 
 .invoice-input-label {
   display: block;
   margin-bottom: 5px;
-  font-size: 0.9em;
-  color: white;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.8);
 }
 
 .invoice-input {
   width: 100%;
-  padding: 8px 10px;
+  padding: 10px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 4px;
-  background-color: rgba(0, 0, 0, 0.1);
+  background-color: rgba(255, 255, 255, 0.1);
   color: white;
+  margin-bottom: 10px;
 }
 
 .invoice-button-container {
   display: flex;
-  justify-content: center;
-  margin-top: 20px;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-top: 15px;
 }
 
 .invoice-buttons {
   display: flex;
-  gap: 10px;
+  flex-direction: column;
+  width: 100%;
 }
 
 .create-invoice-btn {
   padding: 8px 16px;
-  background-color: #1976d2;
+  background-color: #6a36e5;
   color: white;
+  font-weight: bold;
   border: none;
-  border-radius: 4px;
+  border-radius: 4px 4px 0 0;
   cursor: pointer;
+  width: 100%;
+  text-align: center;
 }
 
 .create-invoice-btn:disabled {
@@ -97,26 +101,30 @@
 
 .cancel-btn {
   padding: 8px 16px;
-  background-color: transparent;
+  background-color: #6a36e5;
   color: white;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 4px;
+  border: none;
+  border-radius: 0 0 4px 4px;
   cursor: pointer;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  width: 100%;
+  text-align: center;
 }
 
 /* Created invoice display */
 .invoice-created-container {
-  padding: 10px;
+  padding: 10px 5px;
 }
 
 .invoice-label {
-  font-size: 0.9em;
+  font-size: 14px;
   color: rgba(255, 255, 255, 0.7);
-  margin-bottom: 2px;
+  margin-bottom: 5px;
 }
 
 .invoice-value {
-  font-weight: bold;
+  font-size: 16px;
+  font-weight: 500;
   color: white;
   margin-bottom: 10px;
 }
@@ -124,17 +132,18 @@
 .invoice-amount-row {
   display: flex;
   justify-content: space-between;
-  margin: 15px 0;
+  margin: 10px 0;
 }
 
 .full-invoice {
-  margin-top: 5px;
-  padding: 10px;
-  background-color: rgba(0, 0, 0, 0.1);
-  border-radius: 4px;
+  margin-top: 8px;
+  padding: 15px;
+  background-color: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
   word-break: break-all;
   font-family: monospace;
-  color: white;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.9);
 }
 
 /* Make sure Quasar badge styling is preserved */
@@ -144,7 +153,7 @@
   border-radius: 1em;
   font-size: 0.8em;
   font-weight: bold;
-  
+
   /* Ensure proper colors */
   color: white !important;
 }
@@ -186,6 +195,21 @@
   background-color: #9E9E9E !important; /* Grey for cancelled */
 }
 
+/* Transaction direction styling */
+.transaction-direction {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.direction-incoming {
+  color: #21BA45 !important; /* Green for received */
+}
+
+.direction-outgoing {
+  color: #C10015 !important; /* Red for sent */
+}
+
 /* Transition effects for invoice table updates */
 .invoices-table .q-table__middle {
   transition: opacity 0.3s ease;
@@ -204,6 +228,19 @@
 /* New invoice animation */
 .invoices-table .new-invoice {
   animation: fade-in-row 1s ease;
+}
+
+/* Helper classes */
+.text-white {
+  color: white !important;
+}
+
+.text-light {
+  color: rgba(255, 255, 255, 0.8) !important;
+}
+
+.mt-4 {
+  margin-top: 20px;
 }
 
 @keyframes pulse-badge {
@@ -234,7 +271,7 @@
   .invoice-form-row {
     flex-direction: row;
   }
-  
+
   .invoice-form-col {
     flex: 1;
   }

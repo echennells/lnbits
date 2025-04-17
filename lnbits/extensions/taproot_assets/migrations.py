@@ -1,4 +1,3 @@
-# /home/ubuntu/lnbits/lnbits/extensions/taproot_assets/migrations.py
 from loguru import logger
 
 async def m001_initial(db):
@@ -75,20 +74,19 @@ async def m002_add_sat_fee_column(db):
             "SELECT name FROM pragma_table_info('taproot_assets.settings')"
         )
         column_names = [col["name"] for col in columns]
-        
+
         # Add column if it doesn't exist
         if "default_sat_fee" not in column_names:
             await db.execute(
                 """
-                ALTER TABLE taproot_assets.settings 
+                ALTER TABLE taproot_assets.settings
                 ADD COLUMN default_sat_fee INTEGER NOT NULL DEFAULT 1;
                 """
             )
             logger.info("Added default_sat_fee column to taproot_assets.settings table")
         else:
-            logger.info("default_sat_fee column already exists in taproot_assets.settings table")
+            logger.debug("default_sat_fee column already exists in settings table")
     except Exception as e:
-        # This is a more graceful way to handle the error if the column already exists
         logger.warning(f"Error in migration m002_add_sat_fee_column: {str(e)}")
 
 
@@ -113,3 +111,50 @@ async def m003_create_fee_transactions_table(db):
         logger.info("Created taproot_assets.fee_transactions table")
     except Exception as e:
         logger.warning(f"Error in migration m003_create_fee_transactions_table: {str(e)}")
+
+
+async def m004_create_payments_table(db):
+    """
+    Migration to create a table for tracking sent payments of Taproot Assets.
+    """
+    try:
+        # Create the payments table with indices
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS taproot_assets.payments (
+                id TEXT PRIMARY KEY,
+                payment_hash TEXT NOT NULL,
+                payment_request TEXT NOT NULL,
+                asset_id TEXT NOT NULL,
+                asset_amount INTEGER NOT NULL,
+                fee_sats INTEGER NOT NULL DEFAULT 0,
+                memo TEXT,
+                status TEXT NOT NULL DEFAULT 'completed',
+                user_id TEXT NOT NULL,
+                wallet_id TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                preimage TEXT
+            );
+            """
+        )
+        
+        # Add index on payment_hash for faster lookups
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS payments_payment_hash_idx 
+            ON taproot_assets.payments (payment_hash);
+            """
+        )
+        
+        # Add index on user_id for faster user-specific queries
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS payments_user_id_idx 
+            ON taproot_assets.payments (user_id);
+            """
+        )
+        
+        logger.info("Created taproot_assets.payments table with indices")
+    except Exception as e:
+        # Log just the error message without a full stack trace for migrations
+        logger.warning(f"Error in migration m004_create_payments_table: {str(e)}")
