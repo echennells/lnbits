@@ -10,7 +10,8 @@ from .taproot_adapter import (
     taprootassets_pb2,
     tapchannel_pb2,
     lightning_pb2,
-    router_pb2
+    router_pb2,
+    invoices_pb2
 )
 
 class TaprootPaymentManager:
@@ -60,18 +61,32 @@ class TaprootPaymentManager:
                 payment_hash = decoded.payment_hash
                 logger.info(f"Payment hash: {payment_hash}")
                 
-                # Extract asset ID from invoice if not provided
-                if not asset_id:
-                    for tag in decoded.tags:
-                        if tag[0] == 'd' and 'asset_id=' in tag[1]:
-                            asset_id_match = re.search(r'asset_id=([a-fA-F0-9]{64})', tag[1])
-                            if asset_id_match:
-                                asset_id = asset_id_match.group(1)
-                                logger.info(f"Extracted asset_id from invoice: {asset_id}")
-                                break
+                # Extract asset ID from invoice description if not provided
+                if not asset_id and hasattr(decoded, 'description'):
+                    desc = decoded.description
+                    logger.info(f"Checking description: {desc}")
+                    if desc and 'asset_id=' in desc:
+                        asset_id_match = re.search(r'asset_id=([a-fA-F0-9]{64})', desc)
+                        if asset_id_match:
+                            asset_id = asset_id_match.group(1)
+                            logger.info(f"Extracted asset_id from description: {asset_id}")
             except Exception as e:
                 logger.error(f"Failed to decode invoice: {str(e)}")
                 raise Exception(f"Invalid invoice format: {str(e)}")
+
+            # If asset_id is still not available, try to get it from available assets
+            if not asset_id:
+                try:
+                    logger.debug("Asset ID not found in invoice, checking available assets")
+                    assets = await self.node.asset_manager.list_assets()
+                    if assets and len(assets) > 0:
+                        asset_id = assets[0]["asset_id"]
+                        logger.debug(f"Using first available asset: {asset_id}")
+                    else:
+                        raise Exception("No asset ID provided and no assets available")
+                except Exception as e:
+                    logger.error(f"Failed to get assets: {e}")
+                    raise Exception("No asset ID provided and failed to get available assets")
 
             # Verify we have required parameters
             if not payment_hash:
@@ -236,13 +251,16 @@ class TaprootPaymentManager:
             if not asset_id:
                 try:
                     decoded = bolt11.decode(payment_request)
-                    for tag in decoded.tags:
-                        if tag[0] == 'd' and 'asset_id=' in tag[1]:
-                            asset_id_match = re.search(r'asset_id=([a-fA-F0-9]{64})', tag[1])
+                    
+                    # Try to extract from description
+                    if hasattr(decoded, 'description') and decoded.description:
+                        desc = decoded.description
+                        if 'asset_id=' in desc:
+                            asset_id_match = re.search(r'asset_id=([a-fA-F0-9]{64})', desc)
                             if asset_id_match:
                                 asset_id = asset_id_match.group(1)
-                                logger.info(f"Extracted asset_id from invoice: {asset_id}")
-                                break
+                                logger.info(f"Extracted asset_id from description: {asset_id}")
+                
                 except Exception as e:
                     logger.warning(f"Failed to extract asset ID from invoice: {str(e)}")
 
