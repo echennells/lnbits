@@ -1,4 +1,3 @@
-# /home/ubuntu/lnbits/lnbits/extensions/taproot_assets/tapd_settings.py
 import json
 import os
 from loguru import logger
@@ -35,23 +34,24 @@ class TapdSettingsManager:
         try:
             if os.path.exists(self.config_path):
                 with open(self.config_path, "r") as f:
-                    self.config = json.load(f)
+                    config = json.load(f)
                     
-                    # Load each setting from the config if it exists
-                    self.tapd_host = self.config.get("tapd_host", self.tapd_host)
-                    self.tapd_network = self.config.get("tapd_network", self.tapd_network)
-                    self.tapd_tls_cert_path = self.config.get("tapd_tls_cert_path", self.tapd_tls_cert_path)
-                    self.tapd_macaroon_path = self.config.get("tapd_macaroon_path", self.tapd_macaroon_path)
-                    self.tapd_macaroon_hex = self.config.get("tapd_macaroon_hex", self.tapd_macaroon_hex)
-                    self.lnd_macaroon_path = self.config.get("lnd_macaroon_path", self.lnd_macaroon_path)
-                    self.lnd_macaroon_hex = self.config.get("lnd_macaroon_hex", self.lnd_macaroon_hex)
-                    self.default_sat_fee = self.config.get("default_sat_fee", self.default_sat_fee)
+                    # Load settings from config
+                    for key in [
+                        "tapd_host", "tapd_network", "tapd_tls_cert_path",
+                        "tapd_macaroon_path", "tapd_macaroon_hex",
+                        "lnd_macaroon_path", "lnd_macaroon_hex",
+                        "default_sat_fee"
+                    ]:
+                        if key in config:
+                            setattr(self, key, config[key])
+                    
+                    self.config = config
             else:
                 self.config = {}
-                logger.debug(f"Taproot Assets daemon config file not found at {self.config_path}")
         except Exception as e:
-            self.config = {}
             logger.error(f"Failed to load Taproot Assets daemon config: {str(e)}")
+            self.config = {}
 
     def save(self):
         """
@@ -69,6 +69,9 @@ class TapdSettingsManager:
                 "lnd_macaroon_hex": self.lnd_macaroon_hex,
                 "default_sat_fee": self.default_sat_fee
             }
+            
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
             
             # Save to file
             with open(self.config_path, "w") as f:

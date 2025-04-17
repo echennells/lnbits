@@ -42,17 +42,12 @@ class TaprootAssetsNodeExtension:
         """Store a preimage for a given payment hash."""
         self.__class__._preimage_cache[payment_hash] = preimage
         logger.debug(f"Stored preimage for payment hash: {payment_hash}")
-        logger.debug(f"Current preimage cache size: {len(self.__class__._preimage_cache)}")
-        logger.debug(f"Available payment hashes: {list(self.__class__._preimage_cache.keys())}")
 
     def _get_preimage(self, payment_hash: str) -> Optional[str]:
         """Retrieve a preimage for a given payment hash."""
         preimage = self.__class__._preimage_cache.get(payment_hash)
-        if preimage:
-            logger.debug(f"Retrieved preimage for payment hash: {payment_hash}")
-        else:
+        if not preimage:
             logger.debug(f"No preimage found for payment hash: {payment_hash}")
-            logger.debug(f"Available payment hashes: {list(self.__class__._preimage_cache.keys())}")
         return preimage
 
     def __init__(
@@ -88,7 +83,6 @@ class TaprootAssetsNodeExtension:
 
         # Read Taproot macaroon
         if tapd_macaroon_hex:
-            # Use the hex-encoded macaroon from settings
             self.macaroon = tapd_macaroon_hex
         else:
             try:
@@ -97,9 +91,8 @@ class TaprootAssetsNodeExtension:
             except Exception as e:
                 raise Exception(f"Failed to read Taproot macaroon from {macaroon_path}: {str(e)}")
 
-        # Read Lightning macaroon (for invoice creation)
+        # Read Lightning macaroon
         if ln_macaroon_hex:
-            # Use the hex-encoded macaroon from settings
             self.ln_macaroon = ln_macaroon_hex
         else:
             try:
@@ -108,7 +101,7 @@ class TaprootAssetsNodeExtension:
             except Exception as e:
                 raise Exception(f"Failed to read Lightning macaroon from {ln_macaroon_path}: {str(e)}")
 
-        # Setup gRPC auth credentials for Taproot
+        # Setup gRPC credentials for Taproot
         self.credentials = grpc.ssl_channel_credentials(self.cert)
         self.auth_creds = grpc.metadata_call_credentials(
             lambda context, callback: callback([("macaroon", self.macaroon)], None)
@@ -117,7 +110,7 @@ class TaprootAssetsNodeExtension:
             self.credentials, self.auth_creds
         )
 
-        # Setup gRPC auth credentials for Lightning
+        # Setup gRPC credentials for Lightning
         self.ln_auth_creds = grpc.metadata_call_credentials(
             lambda context, callback: callback([("macaroon", self.ln_macaroon)], None)
         )
@@ -125,16 +118,16 @@ class TaprootAssetsNodeExtension:
             self.credentials, self.ln_auth_creds
         )
 
-        # Create async gRPC channels
+        # Create gRPC channels
         self.channel = grpc.aio.secure_channel(self.host, self.combined_creds)
         self.stub = create_taprootassets_client(self.channel)
 
-        # Create Lightning gRPC channel for invoice creation
+        # Create Lightning gRPC channel
         self.ln_channel = grpc.aio.secure_channel(self.host, self.ln_combined_creds)
         self.ln_stub = create_lightning_client(self.ln_channel)
         self.invoices_stub = create_invoices_client(self.ln_channel)
 
-        # Create TaprootAssetChannels gRPC channel for asset invoice creation
+        # Create TaprootAssetChannels gRPC channel
         self.tap_channel = grpc.aio.secure_channel(self.host, self.combined_creds)
         self.tapchannel_stub = create_tapchannel_client(self.tap_channel)
 
@@ -145,9 +138,8 @@ class TaprootAssetsNodeExtension:
         self.transfer_manager = TaprootTransferManager(self)
 
         # Start monitoring asset transfers
-        logger.info("=== STARTING ASSET TRANSFER MONITORING TASK ===")
+        logger.info("Starting asset transfer monitoring")
         self.monitoring_task = asyncio.create_task(self.transfer_manager.monitor_asset_transfers())
-        logger.info(f"Monitoring task created: {self.monitoring_task}")
 
     def _protobuf_to_dict(self, pb_obj):
         """Convert a protobuf object to a JSON-serializable dict."""
@@ -157,26 +149,28 @@ class TaprootAssetsNodeExtension:
         result = {}
         for field_name in pb_obj.DESCRIPTOR.fields_by_name:
             value = getattr(pb_obj, field_name)
+            
+            # Convert bytes to hex strings
             if isinstance(value, bytes):
                 result[field_name] = value.hex()
+            # Handle nested messages
             elif hasattr(value, 'DESCRIPTOR'):
-                # Handle nested messages like FixedPoint
                 nested_dict = self._protobuf_to_dict(value)
                 if nested_dict is not None:
                     result[field_name] = nested_dict
+            # Handle lists
             elif isinstance(value, (list, tuple)):
                 result[field_name] = [
                     self._protobuf_to_dict(item) if hasattr(item, 'DESCRIPTOR') else item
                     for item in value
                 ]
-            elif isinstance(value, int):
-                # Convert large integers to strings to avoid JSON serialization issues
-                if value > 2**53 - 1:  # JavaScript's Number.MAX_SAFE_INTEGER
-                    result[field_name] = str(value)
-                else:
-                    result[field_name] = value
+            # Handle large integers
+            elif isinstance(value, int) and value > 2**53 - 1:
+                result[field_name] = str(value)
+            # Handle other values
             else:
                 result[field_name] = value
+                
         return result
 
     # Delegate methods to the appropriate managers
@@ -229,11 +223,9 @@ class TaprootAssetsNodeExtension:
         """
         Monitor a specific invoice for state changes.
         
-        This method now delegates to the transfer_manager's implementation
-        which includes direct settlement logic, rather than the invoice_manager's
-        implementation which relies on the heartbeat process.
+        This method delegates to the transfer_manager's implementation
+        which includes direct settlement logic.
         """
-        logger.info(f"🔀 NODE: Delegating monitor_invoice to transfer_manager for {payment_hash}")
         return await self.transfer_manager.monitor_invoice(payment_hash)
 
     async def manually_settle_invoice(self, payment_hash: str, script_key: Optional[str] = None):

@@ -46,47 +46,6 @@ class PaymentResponse:
         self.error_message = error_message
 
 
-class PaymentStatus:
-    """Status of a payment."""
-
-    def __init__(
-        self,
-        paid: bool = False,
-        pending: bool = False,
-        failed: bool = False,
-        fee_msat: Optional[int] = None,
-    ):
-        self.paid = paid
-        self.pending = pending
-        self.failed = failed
-        self.fee_msat = fee_msat
-
-    @property
-    def success(self) -> bool:
-        return self.paid
-
-
-class PaymentPendingStatus(PaymentStatus):
-    """Payment is pending."""
-
-    def __init__(self):
-        super().__init__(pending=True)
-
-
-class PaymentSuccessStatus(PaymentStatus):
-    """Payment was successful."""
-
-    def __init__(self, fee_msat: Optional[int] = None):
-        super().__init__(paid=True, fee_msat=fee_msat)
-
-
-class PaymentFailedStatus(PaymentStatus):
-    """Payment failed."""
-
-    def __init__(self):
-        super().__init__(failed=True)
-
-
 class TaprootWalletExtension:
     """
     Wallet implementation for Taproot Assets.
@@ -102,7 +61,6 @@ class TaprootWalletExtension:
     async def _init_connection(self):
         """Initialize the connection to tapd."""
         if self.initialized:
-            logger.debug("Connection already initialized, reusing existing node")
             return
 
         # Create a node instance
@@ -114,8 +72,7 @@ class TaprootWalletExtension:
 
     async def cleanup(self):
         """Close any open connections."""
-        # In the core implementation, this method doesn't actually close the connections
-        # We'll keep the connections open to match the core implementation
+        # This is a no-op for compatibility with the interface
         pass
 
     async def list_assets(self) -> List[Dict[str, Any]]:
@@ -146,25 +103,12 @@ class TaprootWalletExtension:
         """
         try:
             await self._init_connection()
-
-            # Call the node's manually_settle_invoice method
-            logger.info(f"Manually settling invoice with payment_hash={payment_hash}")
-            if script_key:
-                logger.info(f"Using script_key={script_key} for lookup")
-
-            success = await self.node.manually_settle_invoice(
+            return await self.node.manually_settle_invoice(
                 payment_hash=payment_hash,
                 script_key=script_key
             )
-
-            if success:
-                logger.info(f"Successfully manually settled invoice with payment_hash={payment_hash}")
-            else:
-                logger.error(f"Failed to manually settle invoice with payment_hash={payment_hash}")
-
-            return success
         except Exception as e:
-            logger.error(f"Error in manual settlement: {str(e)}", exc_info=True)
+            logger.error(f"Error in manual settlement: {str(e)}")
             return False
         finally:
             await self.cleanup()
@@ -199,25 +143,18 @@ class TaprootWalletExtension:
         # Extract asset_id from kwargs
         asset_id = kwargs.get("asset_id")
         if not asset_id:
-            logger.warning("Missing asset_id parameter in create_invoice")
             return InvoiceResponse(False, None, None, "Missing asset_id parameter", None)
 
         try:
-            # Get channel assets to check if we have multiple channels for this asset
-            channel_assets = await self.node.list_channel_assets()
-            asset_channels = [ca for ca in channel_assets if ca.get("asset_id") == asset_id]
-            channel_count = len(asset_channels)
-
-            logger.info(f"Found {channel_count} channels for asset_id={asset_id}")
-            for idx, channel in enumerate(asset_channels):
-                logger.info(f"Channel {idx+1}: channel_point={channel.get('channel_point')}, local_balance={channel.get('local_balance')}")
-
-            # Create the invoice
+            # Get peer_pubkey from kwargs if provided
             peer_pubkey = kwargs.get("peer_pubkey")
+            
+            # Create the invoice
             invoice_result = await self.create_asset_invoice(
                 memo=memo or "Taproot Asset Transfer",
                 asset_id=asset_id,
                 asset_amount=amount,
+                expiry=expiry,
                 peer_pubkey=peer_pubkey
             )
 
@@ -230,7 +167,6 @@ class TaprootWalletExtension:
                 "type": "taproot_asset",
                 "asset_id": asset_id,
                 "asset_amount": amount,
-                "channel_count": channel_count,
                 "buy_quote": invoice_result.get("accepted_buy_quote", {})
             }
 
@@ -241,7 +177,7 @@ class TaprootWalletExtension:
                 extra=extra
             )
         except Exception as e:
-            logger.error(f"Failed to create invoice: {str(e)}", exc_info=True)
+            logger.error(f"Failed to create invoice: {str(e)}")
             return InvoiceResponse(
                 ok=False,
                 error_message=f"Failed to create invoice: {str(e)}"
@@ -284,7 +220,7 @@ class TaprootWalletExtension:
                 peer_pubkey=peer_pubkey
             )
         except Exception as e:
-            logger.error(f"Failed to create asset invoice: {str(e)}", exc_info=True)
+            logger.error(f"Failed to create asset invoice: {str(e)}")
             raise Exception(f"Failed to create asset invoice: {str(e)}")
         finally:
             await self.cleanup()
@@ -299,9 +235,6 @@ class TaprootWalletExtension:
         """
         Pay a Taproot Asset invoice.
 
-        WARNING: This method is now deprecated for direct use.
-        Use update_taproot_assets_after_payment instead after making the payment with LNbits wallet.
-
         Args:
             invoice: The payment request (BOLT11 invoice)
             fee_limit_sats: Optional fee limit in satoshis
@@ -312,7 +245,6 @@ class TaprootWalletExtension:
         Returns:
             PaymentResponse: Contains information about the payment
         """
-        logger.warning("pay_asset_invoice is deprecated - payments should be made through LNbits wallet system")
         try:
             await self._init_connection()
 
@@ -339,7 +271,7 @@ class TaprootWalletExtension:
                 preimage=preimage
             )
         except Exception as e:
-            logger.error(f"Failed to pay invoice: {str(e)}", exc_info=True)
+            logger.error(f"Failed to pay invoice: {str(e)}")
             return PaymentResponse(
                 ok=False,
                 error_message=f"Failed to pay invoice: {str(e)}"
@@ -387,7 +319,7 @@ class TaprootWalletExtension:
                 preimage=update_result.get("preimage", "")
             )
         except Exception as e:
-            logger.error(f"Failed to update Taproot Assets after payment: {str(e)}", exc_info=True)
+            logger.error(f"Failed to update Taproot Assets after payment: {str(e)}")
             return PaymentResponse(
                 ok=False,
                 checking_id=payment_hash,

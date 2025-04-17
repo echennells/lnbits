@@ -125,16 +125,13 @@ async def api_list_assets(
     user: User = Depends(check_user_exists),
 ):
     """List all Taproot Assets for the current user."""
-    logger.info(f"Starting asset listing for user {user.id}")
     try:
         # Create a wallet instance to communicate with tapd
         wallet = TaprootWalletExtension()
 
         # Get assets from tapd
         assets_data = await wallet.list_assets()
-        logger.info(f"Retrieved {len(assets_data)} assets from tapd")
-
-        # Return assets directly without storing in database
+        
         return assets_data
     except Exception as e:
         logger.error(f"Failed to list assets: {str(e)}")
@@ -173,105 +170,52 @@ async def api_create_invoice(
     logger.info(f"Creating invoice for asset_id={data.asset_id}, amount={data.amount}")
     try:
         # Create a wallet instance to communicate with tapd
-        try:
-            taproot_wallet = TaprootWalletExtension()
-        except Exception as e:
-            logger.error(f"Failed to create TaprootWalletExtension: {str(e)}")
-            raise HTTPException(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to initialize Taproot wallet: {str(e)}",
-            )
+        taproot_wallet = TaprootWalletExtension()
 
-        # Create the invoice using the TaprootWalletExtension
-        try:
-            invoice_response = await taproot_wallet.create_invoice(
-                amount=data.amount,
-                memo=data.memo or "Taproot Asset Transfer",
-                asset_id=data.asset_id,
-                expiry=data.expiry,
-                peer_pubkey=data.peer_pubkey,  # Pass peer_pubkey to create_invoice
-            )
-        except Exception as e:
-            logger.error(f"Failed in taproot_wallet.create_invoice: {str(e)}")
-            raise HTTPException(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to create invoice in wallet: {str(e)}",
-            )
+        # Create the invoice
+        invoice_response = await taproot_wallet.create_invoice(
+            amount=data.amount,
+            memo=data.memo or "Taproot Asset Transfer",
+            asset_id=data.asset_id,
+            expiry=data.expiry,
+            peer_pubkey=data.peer_pubkey,
+        )
 
         if not invoice_response.ok:
-            logger.error(f"Invoice creation failed: {invoice_response.error_message}")
             raise HTTPException(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Failed to create invoice: {invoice_response.error_message}",
             )
 
-        # Extract data from the invoice response
-        payment_request = invoice_response.payment_request
-
-        # Extract payment hash from the BOLT11 payment request (primary method)
-        try:
-            decoded = bolt11.decode(payment_request)
-            payment_hash = decoded.payment_hash
-            logger.info(f"Extracted payment hash from BOLT11: {payment_hash}")
-        except Exception as e:
-            logger.error(f"Failed to extract payment hash from BOLT11: {e}")
-
-            # Fallback to the response's payment_hash if extraction fails
-            payment_hash = invoice_response.payment_hash
-            logger.info(f"Falling back to response payment_hash: {payment_hash or 'None'}")
-
-        # Ensure we have a valid payment hash
-        if not payment_hash:
-            logger.error("No payment hash available - cannot create invoice!")
-            raise HTTPException(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail="Failed to get payment hash for invoice",
-            )
-
-        # Get satoshi fee from settings (for database record, not deduction)
+        # Get satoshi fee from settings
         satoshi_amount = taproot_settings.default_sat_fee
 
-        # Create an invoice record in the database
-        try:
-            invoice = await create_invoice(
-                asset_id=data.asset_id,
-                asset_amount=data.amount,
-                satoshi_amount=satoshi_amount,
-                payment_hash=payment_hash,
-                payment_request=payment_request,
-                user_id=wallet.wallet.user,
-                wallet_id=wallet.wallet.id,
-                memo=data.memo or f"Taproot Asset Transfer: {data.asset_id}",
-                expiry=data.expiry,
-            )
-        except Exception as e:
-            logger.error(f"Failed to create invoice record: {str(e)}")
-            raise HTTPException(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to store invoice in database: {str(e)}",
-            )
+        # Create invoice record in the database
+        invoice = await create_invoice(
+            asset_id=data.asset_id,
+            asset_amount=data.amount,
+            satoshi_amount=satoshi_amount,
+            payment_hash=invoice_response.payment_hash,
+            payment_request=invoice_response.payment_request,
+            user_id=wallet.wallet.user,
+            wallet_id=wallet.wallet.id,
+            memo=data.memo or f"Taproot Asset Transfer: {data.asset_id}",
+            expiry=data.expiry,
+        )
 
-        # Prepare final response
-        try:
-            response_data = {
-                "payment_hash": payment_hash,
-                "payment_request": payment_request,
-                "asset_id": data.asset_id,
-                "asset_amount": data.amount,
-                "satoshi_amount": satoshi_amount,
-                "checking_id": invoice.id if invoice else "",
-            }
-            logger.info(f"Successfully created invoice for asset_id={data.asset_id}")
-            return response_data
-        except Exception as e:
-            logger.error(f"Failed to prepare response: {str(e)}")
-            raise HTTPException(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to format response: {str(e)}",
-            )
+        # Return response data
+        return {
+            "payment_hash": invoice_response.payment_hash,
+            "payment_request": invoice_response.payment_request,
+            "asset_id": data.asset_id,
+            "asset_amount": data.amount,
+            "satoshi_amount": satoshi_amount,
+            "checking_id": invoice.id,
+        }
+        
     except Exception as e:
-        # Handle common error cases with user-friendly messages
-        if "multiple asset channels found for asset" in str(e) and "please specify the peer pubkey" in str(e):
+        # Create user-friendly error messages for common issues
+        if "multiple asset channels found" in str(e) and "please specify the peer pubkey" in str(e):
             detail = f"Multiple channels found for asset {data.asset_id}. Please select a specific channel from the asset list."
         elif isinstance(e, grpc.RpcError) and "no asset channel balance found for asset" in str(e):
             detail = f"No channel balance found for asset {data.asset_id}. You need to create a channel with this asset first."
@@ -280,7 +224,7 @@ async def api_create_invoice(
 
         logger.error(f"Error creating invoice: {str(e)}")
 
-        # Don't propagate HTTPExceptions
+        # Don't re-wrap HTTPExceptions
         if isinstance(e, HTTPException):
             raise
 
@@ -296,114 +240,52 @@ async def api_pay_invoice(
     wallet: WalletTypeInfo = Depends(require_admin_key),
 ):
     """Pay a Taproot Asset invoice."""
-    logger.info(f"Processing payment request")
-    
     try:
-        # Initialize variables
-        user_wallet = wallet.wallet
+        # Initialize taproot wallet
         taproot_wallet = TaprootWalletExtension()
-        fee_limit_sats = max(taproot_settings.default_sat_fee, 10)
-        asset_id = None
-        asset_amount = 0
-        memo = None
         
-        # Extract invoice information if possible
-        try:
-            decoded_invoice = bolt11.decode(data.payment_request)
-            memo = decoded_invoice.description
-            
-            # Look for asset info in tags
-            if decoded_invoice.tags:
-                for tag in decoded_invoice.tags:
-                    if not isinstance(tag, tuple) or len(tag) < 2:
-                        continue
-                        
-                    tag_type, tag_data = tag[0], tag[1]
-                    
-                    # Try to extract asset ID
-                    if tag_type == 'd' and 'asset_id=' in tag_data:
-                        match = re.search(r'asset_id=([a-fA-F0-9]{64})', tag_data)
-                        if match:
-                            asset_id = match.group(1)
-                    
-                    # Try to extract asset amount
-                    if tag_type == 'd' and 'asset_amount=' in tag_data:
-                        match = re.search(r'asset_amount=(\d+)', tag_data)
-                        if match:
-                            asset_amount = int(match.group(1))
-        except Exception as e:
-            # Continue even if decode fails
-            logger.debug(f"Invoice decode error (non-critical): {str(e)}")
+        # Set fee limit
+        fee_limit_sats = max(taproot_settings.default_sat_fee, 10)
         
         # Make the payment
-        logger.info("Sending payment")
         payment = await taproot_wallet.pay_asset_invoice(
             invoice=data.payment_request,
             fee_limit_sats=fee_limit_sats,
             peer_pubkey=data.peer_pubkey
         )
 
-        # The original code expects payment.extra to exist - if it doesn't, we'll create it
-        if not hasattr(payment, 'extra'):
-            payment.extra = {}
-
         # Verify payment success
         if not payment.ok:
             raise Exception(f"Payment failed: {payment.error_message}")
             
-        logger.info(f"Payment completed: {payment.checking_id}")
-        
         # Calculate routing fees
         routing_fees_sats = payment.fee_msat // 1000 if payment.fee_msat else 0
         
+        # Get payment details
+        payment_hash = payment.checking_id
+        preimage = payment.preimage or ""
+        
         # Record the payment
         try:
-            # Find asset ID if not already known
-            if not asset_id:
-                assets = await taproot_wallet.list_assets()
-                if assets:
-                    asset_id = assets[0]["asset_id"]
-                    logger.debug(f"Using first available asset ID: {asset_id}")
-                else:
-                    asset_id = ""
-            
-            # Find asset name for better description
-            asset_name = None
-            if asset_id:
-                assets = await taproot_wallet.list_assets()
-                for asset in assets:
-                    if asset.get("asset_id") == asset_id:
-                        asset_name = asset.get("name")
-                        break
+            # Extract asset info from payment extra data
+            asset_id = payment.extra.get("asset_id", "")
+            asset_amount = payment.extra.get("asset_amount", 0)
             
             # Create descriptive memo
-            payment_memo = memo or "Taproot Asset Transfer"
-            if asset_name:
-                payment_memo = f"Taproot Asset Transfer: {asset_name}"
-            elif asset_id:
-                payment_memo = f"Taproot Asset Transfer: {asset_id[:8]}..."
+            memo = f"Taproot Asset Transfer"
             
-            # Determine asset amount - use the value from the request or default
-            if hasattr(payment, 'extra') and payment.extra:
-                if 'accepted_sell_order' in payment.extra:
-                    sell_order = payment.extra['accepted_sell_order']
-                    if 'asset_amount' in sell_order:
-                        asset_amount = int(sell_order['asset_amount'])
-                        
-            # Record payment with all available information
+            # Record payment with available information
             await create_payment_record(
-                payment_hash=payment.checking_id,
+                payment_hash=payment_hash,
                 payment_request=data.payment_request,
                 asset_id=asset_id,
-                asset_amount=asset_amount or 2,  # Default if not found
+                asset_amount=asset_amount,
                 fee_sats=routing_fees_sats,
-                user_id=user_wallet.user,
-                wallet_id=user_wallet.id,
-                memo=payment_memo,
-                preimage=payment.preimage
+                user_id=wallet.wallet.user,
+                wallet_id=wallet.wallet.id,
+                memo=memo,
+                preimage=preimage
             )
-            logger.info(f"Payment record created")
-        
         except Exception as e:
             # Don't fail if payment record creation fails
             logger.error(f"Failed to store payment record: {str(e)}")
@@ -411,8 +293,8 @@ async def api_pay_invoice(
         # Return success response
         return {
             "success": True,
-            "payment_hash": payment.checking_id,
-            "preimage": payment.preimage or "",
+            "payment_hash": payment_hash,
+            "preimage": preimage,
             "fee_msat": payment.fee_msat or 0,
             "sat_fee_paid": 0,  # No service fee
             "routing_fees_sats": routing_fees_sats,
@@ -425,9 +307,9 @@ async def api_pay_invoice(
         
     except Exception as e:
         # Create user-friendly error message
-        detail = f"Failed to pay Taproot Asset invoice: {str(e)}"
+        detail = str(e)
         
-        if isinstance(e, grpc.RpcError) and "no asset channel balance found for asset" in str(e):
+        if "no asset channel balance found for asset" in str(e):
             detail = "Insufficient channel balance for this asset."
             
         logger.error(f"Payment error: {str(e)}")

@@ -1,6 +1,6 @@
 import asyncio
 import hashlib
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Any, Dict
 import grpc
 import grpc.aio
 from loguru import logger
@@ -13,13 +13,18 @@ from .taproot_adapter import (
 # Import database functions
 from ..crud import get_invoice_by_payment_hash, update_invoice_status
 
-# Singleton instance for manager
-_transfer_manager_instance = None
-_transfer_monitor_task = None
-
 # Module-level direct settlement function
-async def direct_settle_invoice(node, payment_hash):
-    """Direct settlement function at module level to bypass any method overriding."""
+async def direct_settle_invoice(node, payment_hash: str) -> bool:
+    """
+    Settle an invoice directly using the stored preimage.
+    
+    Args:
+        node: The node instance
+        payment_hash: The payment hash of the invoice to settle
+        
+    Returns:
+        bool: True if settled successfully, False otherwise
+    """
     logger.info(f"Settling invoice for payment hash {payment_hash}")
 
     try:
@@ -32,11 +37,6 @@ async def direct_settle_invoice(node, payment_hash):
 
         # Convert the preimage to bytes
         preimage_bytes = bytes.fromhex(preimage_hex)
-
-        # Validate preimage length
-        if len(preimage_bytes) != 32:
-            logger.error(f"Invalid preimage length: {len(preimage_bytes)}")
-            return False
 
         # Create settlement request
         settle_request = invoices_pb2.SettleInvoiceMsg(
@@ -61,6 +61,7 @@ async def direct_settle_invoice(node, payment_hash):
                 logger.warning(f"No invoice found with payment_hash: {payment_hash}")
         except Exception as db_error:
             logger.error(f"Error updating invoice status: {str(db_error)}")
+            # Continue even if DB update fails - the important part is settlement
 
         return True
 
@@ -68,24 +69,12 @@ async def direct_settle_invoice(node, payment_hash):
         logger.error(f"Failed to settle invoice: {str(e)}")
         return False
 
+
 class TaprootTransferManager:
     """
     Handles Taproot Asset transfer monitoring.
     This class is responsible for monitoring asset transfers and settling HODL invoices.
     """
-
-    # Map of send state enum values to their string representations
-    SEND_STATES = {
-        0: "SEND_STATE_VIRTUAL_INPUT_SELECT",
-        1: "SEND_STATE_VIRTUAL_SIGN",
-        2: "SEND_STATE_ANCHOR_SIGN",
-        3: "SEND_STATE_LOG_COMMITMENT",
-        4: "SEND_STATE_BROADCAST",
-        5: "SEND_STATE_WAIT_CONFIRMATION",
-        6: "SEND_STATE_STORE_PROOFS",
-        7: "SEND_STATE_TRANSFER_PROOFS",
-        8: "SEND_STATE_COMPLETED"
-    }
 
     def __init__(self, node):
         """
@@ -96,70 +85,7 @@ class TaprootTransferManager:
         """
         self.node = node
         self.is_monitoring = False
-        
-        # Create singleton instance
-        global _transfer_manager_instance
-        _transfer_manager_instance = self
-        
         logger.info("TaprootTransferManager initialized")
-
-    @classmethod
-    def get_instance(cls, node=None):
-        """Get or create the singleton instance of the TransferManager."""
-        global _transfer_manager_instance
-        if _transfer_manager_instance is None and node is not None:
-            _transfer_manager_instance = cls(node)
-        return _transfer_manager_instance
-
-    @classmethod
-    def start_monitoring(cls, node=None):
-        """Start the transfer monitoring process if not already running."""
-        global _transfer_monitor_task, _transfer_manager_instance
-        
-        if _transfer_monitor_task is None or _transfer_monitor_task.done():
-            manager = cls.get_instance(node)
-            if manager and not manager.is_monitoring:
-                _transfer_monitor_task = asyncio.create_task(manager.monitor_asset_transfers())
-                logger.info("Asset transfer monitoring started")
-            else:
-                logger.info("Transfer monitoring already active, reusing existing task")
-        else:
-            logger.info("Monitoring task already running")
-        
-        return _transfer_monitor_task
-
-    async def process_payment_stream(self, payment_stream) -> Tuple[bool, Any, Optional[str]]:
-        """
-        Process a payment stream and handle any errors gracefully.
-
-        Args:
-            payment_stream: The payment stream to process
-
-        Returns:
-            tuple: (success, payment_result, error_message)
-        """
-        try:
-            async for response in payment_stream:
-                # Check if we have an accepted sell order
-                if hasattr(response, 'accepted_sell_order') and response.accepted_sell_order:
-                    logger.info("Received sell order acceptance")
-                    continue
-
-                # Check if we have a payment result
-                if hasattr(response, 'payment_result') and response.payment_result:
-                    status = response.payment_result.status
-                    logger.info(f"Payment status: {status}")
-                    return True, response.payment_result, None
-
-            return False, None, "No payment result received in stream"
-
-        except grpc.aio.AioRpcError as e:
-            logger.error(f"gRPC error in payment stream: {e.code()}: {e.details()}")
-            return False, None, f"gRPC error: {e.details()}"
-
-        except Exception as e:
-            logger.error(f"Error processing payment stream: {str(e)}")
-            return False, None, str(e)
 
     async def monitor_asset_transfers(self):
         """
@@ -174,7 +100,7 @@ class TaprootTransferManager:
 
         RETRY_DELAY = 5  # seconds
         MAX_RETRIES = 3  # number of retries before giving up
-        HEARTBEAT_INTERVAL = 10  # seconds
+        HEARTBEAT_INTERVAL = 30  # seconds
 
         async def check_unprocessed_payments():
             """Check for any unprocessed payments and attempt to settle them."""
@@ -183,10 +109,8 @@ class TaprootTransferManager:
             if not script_key_mappings:
                 return
                 
-            logger.info(f"Checking {len(script_key_mappings)} pending payments")
-            
             for script_key in script_key_mappings:
-                payment_hash = self.node.invoice_manager._script_key_to_payment_hash.get(script_key)
+                payment_hash = self.node.invoice_manager._get_payment_hash_from_script_key(script_key)
                 if payment_hash and payment_hash in self.node._preimage_cache:
                     logger.info(f"Found unprocessed payment, attempting settlement")
                     await direct_settle_invoice(self.node, payment_hash)
@@ -197,12 +121,12 @@ class TaprootTransferManager:
             while True:
                 try:
                     counter += 1
-                    logger.debug(f"Asset transfer monitoring heartbeat #{counter}")
+                    logger.debug(f"Transfer monitoring heartbeat #{counter}")
                     
                     # Check for unprocessed payments
                     await check_unprocessed_payments()
                     
-                    # Log cache size only if not empty
+                    # Log cache size if not empty
                     cache_size = len(self.node._preimage_cache)
                     if cache_size > 0:
                         logger.info(f"Preimage cache size: {cache_size}")
@@ -231,8 +155,8 @@ class TaprootTransferManager:
                 # Process incoming events
                 async for event in send_events:
                     logger.debug("Received send event")
-                    # Asset transfer happens through the Lightning layer
                     # We only monitor these events for informational purposes
+                    # The actual settlement happens through HODL invoice mechanisms
 
             except grpc.aio.AioRpcError as grpc_error:
                 logger.error(f"gRPC error in subscription: {grpc_error.code()}: {grpc_error.details()}")
@@ -270,7 +194,7 @@ class TaprootTransferManager:
 
         try:
             # Convert payment hash to bytes
-            payment_hash_bytes = bytes.fromhex(payment_hash) if isinstance(payment_hash, str) else payment_hash
+            payment_hash_bytes = bytes.fromhex(payment_hash)
             request = invoices_pb2.SubscribeSingleInvoiceRequest(r_hash=payment_hash_bytes)
 
             # Subscribe to invoice updates
@@ -281,42 +205,32 @@ class TaprootTransferManager:
                 logger.info(f"Invoice {payment_hash}: {state_name}")
 
                 # Process ACCEPTED state (3)
-                if invoice.state == 3:
-                    logger.info(f"Invoice {payment_hash} is ACCEPTED")
-                    script_key = await self._extract_script_key_from_invoice(invoice, payment_hash)
+                if invoice.state == 3:  # ACCEPTED state
+                    logger.info(f"Invoice {payment_hash} is ACCEPTED - attempting to settle")
+                    script_key_hex = await self._extract_script_key_from_invoice(invoice)
                     
-                    if script_key:
-                        await self._process_accepted_invoice(payment_hash, script_key)
-                    else:
-                        logger.warning(f"Cannot process invoice: missing script key")
-
-                # Process SETTLED state (1)
-                elif invoice.state == 1:
-                    logger.info(f"Invoice {payment_hash} is SETTLED")
-                    try:
-                        invoice_db = await get_invoice_by_payment_hash(payment_hash)
-                        if invoice_db:
-                            await update_invoice_status(invoice_db.id, "paid")
-                            logger.info(f"Database updated: Invoice {invoice_db.id} paid")
-                    except Exception as db_error:
-                        logger.error(f"Error updating database: {str(db_error)}")
+                    if script_key_hex:
+                        self.node.invoice_manager._store_script_key_mapping(script_key_hex, payment_hash)
+                    
+                    # Attempt settlement
+                    await direct_settle_invoice(self.node, payment_hash)
+                    break
+                    
+                # Process already SETTLED state (1)
+                elif invoice.state == 1:  # SETTLED state
+                    logger.info(f"Invoice {payment_hash} is already SETTLED")
                     break
                     
                 # Process CANCELED state (2)
-                elif invoice.state == 2:
+                elif invoice.state == 2:  # CANCELED state
                     logger.warning(f"Invoice {payment_hash} was CANCELED")
                     break
 
         except Exception as e:
             logger.error(f"Error monitoring invoice: {str(e)}")
 
-    async def _extract_script_key_from_invoice(self, invoice, payment_hash):
-        """Extract script key and asset details from invoice HTLCs."""
-        script_key_hex = None
-        asset_id = None
-        asset_amount = None
-        script_key_found = False
-        
+    async def _extract_script_key_from_invoice(self, invoice) -> Optional[str]:
+        """Extract script key from invoice HTLCs."""
         if not hasattr(invoice, 'htlcs') or not invoice.htlcs:
             return None
             
@@ -324,98 +238,33 @@ class TaprootTransferManager:
             if not hasattr(htlc, 'custom_records') or not htlc.custom_records:
                 continue
                 
-            records = htlc.custom_records
-            
             # Process asset transfer record (65543)
-            if 65543 in records and isinstance(records[65543], bytes):
-                value = records[65543]
-                
+            if 65543 in htlc.custom_records:
                 try:
-                    # Extract asset ID
-                    asset_id_marker = b'\x00\x20'
+                    value = htlc.custom_records[65543]
+                    
+                    # Extract asset ID marker
+                    asset_id_marker = bytes.fromhex("0020")
                     asset_id_pos = value.find(asset_id_marker)
+                    
                     if asset_id_pos >= 0:
-                        asset_id_start = asset_id_pos + 2
-                        asset_id_end = asset_id_start + 32
-                        asset_id_bytes = value[asset_id_start:asset_id_end]
-                        asset_id = asset_id_bytes.hex()
+                        asset_id_end = asset_id_pos + 2 + 32
                         
                         # Extract script key
-                        script_key_marker = b'\x01\x40'
+                        script_key_marker = bytes.fromhex("0140")
                         script_key_pos = value.find(script_key_marker, asset_id_end)
+                        
                         if script_key_pos >= 0:
                             script_key_start = script_key_pos + 2
                             script_key_end = script_key_start + 33
                             script_key = value[script_key_start:script_key_end]
-                            script_key_hex = script_key.hex()
-                            
-                            # Store mapping
-                            self.node.invoice_manager._store_script_key_mapping(script_key_hex, payment_hash)
-                            logger.info(f"Stored script key mapping for {payment_hash}")
-                            script_key_found = True
+                            return script_key.hex()
                 except Exception as e:
                     logger.error(f"Error extracting script key: {str(e)}")
-            
-            # Process asset info record (65536)
-            if 65536 in records and isinstance(records[65536], bytes):
-                value = records[65536]
-                
-                try:
-                    # Extract asset ID and amount
-                    asset_id_marker = b'\x00\x20'
-                    asset_id_pos = value.find(asset_id_marker)
-                    if asset_id_pos >= 0:
-                        asset_id_start = asset_id_pos + 2
-                        asset_id_end = asset_id_start + 32
-                        asset_id_bytes = value[asset_id_start:asset_id_end]
-                        asset_id = asset_id_bytes.hex()
-                        
-                        # Extract amount from last byte
-                        if len(value) >= 1:
-                            amount_bytes = value[-1:]
-                            asset_amount = int.from_bytes(amount_bytes, byteorder='little')
-                except Exception as e:
-                    logger.error(f"Error processing asset info: {str(e)}")
         
-        # Fallback mapping if no script key found
-        if not script_key_found:
-            self.node.invoice_manager._store_script_key_mapping(payment_hash, payment_hash)
-            logger.info(f"No script key found, used payment hash as key")
-            script_key_hex = payment_hash
-        
-        logger.info(f"Asset transfer details - ID: {asset_id}, Amount: {asset_amount}")
-        return script_key_hex
+        return None
 
-    async def _process_accepted_invoice(self, payment_hash, script_key_hex):
-        """Process an accepted invoice to verify and settle."""
-        try:
-            # Get asset details from script key mapping
-            asset_id = None  # This would typically come from another mapping
-            asset_amount = 1  # Default value
-            
-            logger.info(f"Verifying asset transfer")
-            
-            # Call node's asset_manager.send_asset for verification
-            transfer_result = await self.node.asset_manager.send_asset(
-                asset_id=asset_id or "placeholder",
-                script_key=script_key_hex,
-                amount=asset_amount
-            )
-            
-            # Proceed to direct settlement
-            logger.info(f"Proceeding to settlement")
-            settlement_result = await direct_settle_invoice(self.node, payment_hash)
-            
-            if not settlement_result:
-                logger.error(f"Settlement failed for {payment_hash}")
-        except Exception as e:
-            logger.error(f"Error processing accepted invoice: {str(e)}")
-
-    async def settle_invoice_with_preimage(self, payment_hash: str):
-        """Settle an invoice using the stored preimage."""
-        return await direct_settle_invoice(self.node, payment_hash)
-
-    async def manually_settle_invoice(self, payment_hash: str, script_key: Optional[str] = None):
+    async def manually_settle_invoice(self, payment_hash: str, script_key: Optional[str] = None) -> bool:
         """Manually settle a HODL invoice. Used as a fallback if automatic settlement fails."""
         logger.info(f"Manual settlement attempt for {payment_hash}")
         

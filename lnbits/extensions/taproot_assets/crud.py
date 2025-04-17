@@ -1,10 +1,8 @@
-# /home/ubuntu/lnbits/lnbits/extensions/taproot_assets/crud.py
 import json
 import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from loguru import logger
-import traceback
 
 from lnbits.db import Connection, Database
 from lnbits.helpers import urlsafe_short_hash
@@ -50,6 +48,7 @@ async def get_or_create_settings() -> TaprootSettings:
         )
         return settings
 
+
 async def update_settings(settings: TaprootSettings) -> TaprootSettings:
     """Update Taproot Assets extension settings."""
     async with db.connect() as conn:
@@ -82,6 +81,7 @@ async def update_settings(settings: TaprootSettings) -> TaprootSettings:
         )
         return settings
 
+
 async def create_asset(asset_data: Dict[str, Any], user_id: str) -> TaprootAsset:
     """Create a new Taproot Asset record."""
     async with db.connect() as conn:
@@ -91,7 +91,6 @@ async def create_asset(asset_data: Dict[str, Any], user_id: str) -> TaprootAsset
         # Convert channel_info to JSON string if present
         channel_info_json = json.dumps(asset_data.get("channel_info")) if asset_data.get("channel_info") else None
 
-        # Changed from tuple to dictionary with named parameters
         await conn.execute(
             """
             INSERT INTO assets (
@@ -123,7 +122,6 @@ async def create_asset(asset_data: Dict[str, Any], user_id: str) -> TaprootAsset
             },
         )
 
-        # Create a TaprootAsset object from the inserted data
         return TaprootAsset(
             id=asset_id,
             name=asset_data.get("name", "Unknown"),
@@ -140,6 +138,7 @@ async def create_asset(asset_data: Dict[str, Any], user_id: str) -> TaprootAsset
             created_at=now,
             updated_at=now,
         )
+
 
 async def get_assets(user_id: str) -> List[TaprootAsset]:
     """Get all Taproot Assets for a user."""
@@ -178,7 +177,6 @@ async def get_assets(user_id: str) -> List[TaprootAsset]:
 async def get_asset(asset_id: str) -> Optional[TaprootAsset]:
     """Get a specific Taproot Asset by ID."""
     async with db.connect() as conn:
-        # Changed to use named parameters for consistency
         row = await conn.fetchone(
             "SELECT * FROM assets WHERE id = :id",
             {"id": asset_id},
@@ -207,6 +205,7 @@ async def get_asset(asset_id: str) -> Optional[TaprootAsset]:
             updated_at=row["updated_at"],
         )
 
+
 async def create_invoice(
     asset_id: str,
     asset_amount: int,
@@ -219,8 +218,6 @@ async def create_invoice(
     expiry: Optional[int] = None,
 ) -> TaprootInvoice:
     """Create a new Taproot Asset invoice."""
-    logger.info(f"Creating invoice with payment_hash={payment_hash}")
-
     async with db.connect() as conn:
         invoice_id = urlsafe_short_hash()
         now = datetime.now()
@@ -241,7 +238,6 @@ async def create_invoice(
             "expires_at": expires_at,
         }
 
-        # Changed to not include buy_quote field
         await conn.execute(
             """
             INSERT INTO invoices (
@@ -258,7 +254,6 @@ async def create_invoice(
             params
         )
 
-        # Create a TaprootInvoice object from the inserted data
         return TaprootInvoice(
             id=invoice_id,
             payment_hash=payment_hash,
@@ -278,7 +273,6 @@ async def create_invoice(
 async def get_invoice(invoice_id: str) -> Optional[TaprootInvoice]:
     """Get a specific Taproot Asset invoice by ID."""
     async with db.connect() as conn:
-        # Changed to use named parameters for consistency
         row = await conn.fetchone(
             "SELECT * FROM invoices WHERE id = :id",
             {"id": invoice_id},
@@ -306,17 +300,13 @@ async def get_invoice(invoice_id: str) -> Optional[TaprootInvoice]:
 
 async def get_invoice_by_payment_hash(payment_hash: str) -> Optional[TaprootInvoice]:
     """Get a specific Taproot Asset invoice by payment hash."""
-    logger.info(f"Looking up invoice by payment_hash={payment_hash}")
-
     async with db.connect() as conn:
-        # Changed to use named parameters for consistency
         row = await conn.fetchone(
             "SELECT * FROM invoices WHERE payment_hash = :payment_hash",
             {"payment_hash": payment_hash},
         )
 
         if not row:
-            logger.warning(f"No invoice found with payment_hash={payment_hash}")
             return None
 
         return TaprootInvoice(
@@ -342,8 +332,6 @@ async def update_invoice_status(invoice_id: str, status: str) -> Optional[Taproo
         now = datetime.now()
         paid_at = now if status == "paid" else None
 
-        logger.info(f"Updating invoice {invoice_id} status to {status}")
-
         # Update the invoice status
         await conn.execute(
             """
@@ -358,19 +346,16 @@ async def update_invoice_status(invoice_id: str, status: str) -> Optional[Taproo
             },
         )
 
-        # Fetch the updated invoice within the SAME connection
-        # instead of calling get_invoice() which would create a new connection
+        # Fetch the updated invoice
         row = await conn.fetchone(
             "SELECT * FROM invoices WHERE id = :id",
             {"id": invoice_id},
         )
 
         if not row:
-            logger.error(f"Failed to retrieve invoice {invoice_id} after update")
             return None
 
-        # Create TaprootInvoice object from row data
-        updated = TaprootInvoice(
+        return TaprootInvoice(
             id=row["id"],
             payment_hash=row["payment_hash"],
             payment_request=row["payment_request"],
@@ -386,7 +371,6 @@ async def update_invoice_status(invoice_id: str, status: str) -> Optional[Taproo
             paid_at=row["paid_at"],
         )
 
-        return updated
 
 async def get_user_invoices(user_id: str) -> List[TaprootInvoice]:
     """Get all Taproot Asset invoices for a user."""
@@ -397,36 +381,30 @@ async def get_user_invoices(user_id: str) -> List[TaprootInvoice]:
                 {"user_id": user_id},
             )
 
-            # Process rows
             invoices = []
-            for idx, row in enumerate(rows):
-                try:
-                    invoice = TaprootInvoice(
-                        id=row["id"],
-                        payment_hash=row["payment_hash"],
-                        payment_request=row["payment_request"],
-                        asset_id=row["asset_id"],
-                        asset_amount=row["asset_amount"],
-                        satoshi_amount=row["satoshi_amount"],
-                        memo=row["memo"],
-                        status=row["status"],
-                        user_id=row["user_id"],
-                        wallet_id=row["wallet_id"],
-                        created_at=row["created_at"],
-                        expires_at=row["expires_at"],
-                        paid_at=row["paid_at"],
-                    )
-                    invoices.append(invoice)
-                except Exception as row_error:
-                    logger.error(f"Failed to create invoice object for row {idx+1}: {str(row_error)}")
-                    logger.error(f"Row data: {row}")
-                    # Continue processing other rows instead of failing completely
+            for row in rows:
+                invoice = TaprootInvoice(
+                    id=row["id"],
+                    payment_hash=row["payment_hash"],
+                    payment_request=row["payment_request"],
+                    asset_id=row["asset_id"],
+                    asset_amount=row["asset_amount"],
+                    satoshi_amount=row["satoshi_amount"],
+                    memo=row["memo"],
+                    status=row["status"],
+                    user_id=row["user_id"],
+                    wallet_id=row["wallet_id"],
+                    created_at=row["created_at"],
+                    expires_at=row["expires_at"],
+                    paid_at=row["paid_at"],
+                )
+                invoices.append(invoice)
 
             return invoices
     except Exception as e:
-        logger.error(f"Error in get_user_invoices: {str(e)}", exc_info=True)
-        logger.error(f"Full traceback: {traceback.format_exc()}")
+        logger.error(f"Error in get_user_invoices: {str(e)}")
         raise
+
 
 async def create_fee_transaction(
     user_id: str,
@@ -470,6 +448,7 @@ async def create_fee_transaction(
             created_at=now
         )
 
+
 async def get_fee_transactions(user_id: Optional[str] = None) -> List[FeeTransaction]:
     """Get fee transactions, optionally filtered by user ID."""
     async with db.connect() as conn:
@@ -498,7 +477,6 @@ async def get_fee_transactions(user_id: Optional[str] = None) -> List[FeeTransac
 
         return transactions
 
-# New functions for payments
 
 async def create_payment_record(
     payment_hash: str, 
@@ -557,6 +535,7 @@ async def create_payment_record(
             created_at=now,
             preimage=preimage
         )
+
 
 async def get_user_payments(user_id: str) -> List[TaprootPayment]:
     """Get all sent payments for a user."""
