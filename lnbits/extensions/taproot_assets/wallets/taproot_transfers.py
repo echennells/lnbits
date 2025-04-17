@@ -12,7 +12,10 @@ from .taproot_adapter import (
 )
 
 # Import database functions
-from ..crud import get_invoice_by_payment_hash, update_invoice_status
+from ..crud import get_invoice_by_payment_hash, update_invoice_status, get_user_invoices
+
+# Import WebSocket manager
+from ..websocket import ws_manager
 
 # Singleton tracking for monitoring instances
 _monitoring_instances = set()
@@ -62,6 +65,29 @@ async def direct_settle_invoice(node, payment_hash: str) -> bool:
             updated_invoice = await update_invoice_status(invoice.id, "paid")
             if updated_invoice and updated_invoice.status == "paid":
                 logger.info(f"Database updated: Invoice {invoice.id} status set to paid")
+                
+                # Send WebSocket notification of the invoice update
+                await ws_manager.notify_invoice_update(
+                    invoice.user_id, 
+                    {
+                        "id": invoice.id,
+                        "payment_hash": payment_hash,
+                        "status": "paid",
+                        "asset_id": invoice.asset_id,
+                        "asset_amount": invoice.asset_amount,
+                        "paid_at": updated_invoice.paid_at.isoformat() if updated_invoice.paid_at else None
+                    }
+                )
+                
+                # Fetch assets to update balances
+                try:
+                    assets = await node.list_assets()
+                    # Only send the channel assets which have balances
+                    filtered_assets = [asset for asset in assets if asset.get("channel_info")]
+                    if filtered_assets:
+                        await ws_manager.notify_assets_update(invoice.user_id, filtered_assets)
+                except Exception as asset_err:
+                    logger.error(f"Failed to fetch assets for WebSocket update: {str(asset_err)}")
             else:
                 logger.error(f"Failed to update invoice status in database")
         else:
@@ -76,8 +102,31 @@ async def direct_settle_invoice(node, payment_hash: str) -> bool:
             
             # Still update the database if needed
             if invoice and invoice.status != "paid":
-                await update_invoice_status(invoice.id, "paid")
+                updated_invoice = await update_invoice_status(invoice.id, "paid")
                 logger.info(f"Updated previously settled invoice {invoice.id} status in database")
+                
+                # Send WebSocket notification for this case too
+                if updated_invoice:
+                    await ws_manager.notify_invoice_update(
+                        invoice.user_id, 
+                        {
+                            "id": invoice.id,
+                            "payment_hash": payment_hash,
+                            "status": "paid",
+                            "asset_id": invoice.asset_id,
+                            "asset_amount": invoice.asset_amount,
+                            "paid_at": updated_invoice.paid_at.isoformat() if updated_invoice.paid_at else None
+                        }
+                    )
+                    
+                    # Also update assets for balance changes
+                    try:
+                        assets = await node.list_assets()
+                        filtered_assets = [asset for asset in assets if asset.get("channel_info")]
+                        if filtered_assets:
+                            await ws_manager.notify_assets_update(invoice.user_id, filtered_assets)
+                    except Exception as asset_err:
+                        logger.error(f"Failed to fetch assets for WebSocket update: {str(asset_err)}")
             
             return True
             

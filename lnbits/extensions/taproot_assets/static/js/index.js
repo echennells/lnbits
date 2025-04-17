@@ -120,6 +120,15 @@ window.app = Vue.createApp({
         }
       },
 
+      // WebSocket connection
+      websockets: {
+        invoices: null,
+        payments: null,
+        balances: null
+      },
+      websocketConnected: false,
+      websocketReconnectTimeout: null,
+      
       // Refresh state tracking
       refreshInterval: null,
       refreshCount: 0,
@@ -367,6 +376,188 @@ window.app = Vue.createApp({
       return hasChanges;
     },
     
+    // Setup WebSocket connections
+    setupWebSockets() {
+      if (!this.g.user.wallets.length) return;
+      
+      const wallet = this.g.user.wallets[0];
+      const userId = this.g.user.id;
+      
+      // Close any existing connections
+      this.closeWebSockets();
+      
+      // Create WebSocket connections
+      try {
+        // Connect to invoice updates
+        const invoicesWsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/v1/ws/taproot-assets-invoices-${userId}`;
+        this.websockets.invoices = new WebSocket(invoicesWsUrl);
+        this.websockets.invoices.onmessage = this.handleInvoiceWebSocketMessage;
+        this.websockets.invoices.onclose = () => this.handleWebSocketClose('invoices');
+        this.websockets.invoices.onerror = (err) => console.error('Invoice WebSocket error:', err);
+        
+        // Connect to payment updates
+        const paymentsWsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/v1/ws/taproot-assets-payments-${userId}`;
+        this.websockets.payments = new WebSocket(paymentsWsUrl);
+        this.websockets.payments.onmessage = this.handlePaymentWebSocketMessage;
+        this.websockets.payments.onclose = () => this.handleWebSocketClose('payments');
+        this.websockets.payments.onerror = (err) => console.error('Payment WebSocket error:', err);
+        
+        // Connect to balances updates
+        const balancesWsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/v1/ws/taproot-assets-balances-${userId}`;
+        this.websockets.balances = new WebSocket(balancesWsUrl);
+        this.websockets.balances.onmessage = this.handleBalancesWebSocketMessage;
+        this.websockets.balances.onclose = () => this.handleWebSocketClose('balances');
+        this.websockets.balances.onerror = (err) => console.error('Balances WebSocket error:', err);
+        
+        this.websocketConnected = true;
+        console.log('WebSocket connections established');
+      } catch (e) {
+        console.error('Failed to setup WebSockets:', e);
+        this.websocketConnected = false;
+        // Fallback to polling
+        this.startAutoRefresh();
+      }
+    },
+    
+    handleInvoiceWebSocketMessage(event) {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('Invoice WebSocket message:', data);
+        
+        if (data.type === 'invoice_update' && data.data) {
+          // Find existing invoice
+          const index = this.invoices.findIndex(invoice => invoice.id === data.data.id);
+          
+          if (index !== -1) {
+            // Update existing invoice - using Vue 3 reactive approach
+            const updatedInvoice = mapInvoice({
+              ...this.invoices[index],
+              ...data.data
+            });
+            
+            // Mark as updated for animation
+            updatedInvoice._statusChanged = true;
+            
+            // Update in array (Vue 3 way)
+            this.invoices[index] = updatedInvoice;
+            
+            // Notify user about paid invoices
+            if (data.data.status === 'paid' && this.invoices[index].status !== 'paid') {
+              const assetName = this.findAssetName(data.data.asset_id) || 'Unknown Asset';
+              const amount = data.data.asset_amount || this.invoices[index].asset_amount;
+              LNbits.utils.notifySuccess(`Invoice Paid: ${amount} ${assetName}`);
+            }
+          } else {
+            // Add new invoice
+            const newInvoice = mapInvoice(data.data);
+            newInvoice._isNew = true;
+            this.invoices.push(newInvoice);
+          }
+          
+          // Update combined transactions
+          this.combineTransactions();
+        }
+      } catch (e) {
+        console.error('Error handling invoice WebSocket message:', e);
+      }
+    },
+    
+    handlePaymentWebSocketMessage(event) {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('Payment WebSocket message:', data);
+        
+        if (data.type === 'payment_update' && data.data) {
+          // Find existing payment
+          const index = this.payments.findIndex(payment => payment.id === data.data.id);
+          
+          if (index !== -1) {
+            // Update existing payment - using Vue 3 reactive approach
+            const updatedPayment = mapPayment({
+              ...this.payments[index],
+              ...data.data
+            });
+            
+            // Mark as updated for animation
+            updatedPayment._statusChanged = true;
+            
+            // Update in array (Vue 3 way)
+            this.payments[index] = updatedPayment;
+          } else {
+            // Add new payment
+            const newPayment = mapPayment(data.data);
+            newPayment._isNew = true;
+            this.payments.push(newPayment);
+          }
+          
+          // Update combined transactions
+          this.combineTransactions();
+        }
+      } catch (e) {
+        console.error('Error handling payment WebSocket message:', e);
+      }
+    },
+    
+    handleBalancesWebSocketMessage(event) {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('Balances WebSocket message:', data);
+        
+        if (data.type === 'assets_update' && Array.isArray(data.data)) {
+          // Update assets with new data
+          this.assets = data.data;
+          
+          // Update transaction descriptions
+          this.updateTransactionDescriptions();
+        }
+      } catch (e) {
+        console.error('Error handling balances WebSocket message:', e);
+      }
+    },
+    
+    handleWebSocketClose(type) {
+      console.log(`WebSocket ${type} connection closed`);
+      this.websockets[type] = null;
+      
+      // Check if all connections are closed
+      if (Object.values(this.websockets).every(ws => ws === null)) {
+        this.websocketConnected = false;
+        
+        // Try to reconnect after delay
+        if (!this.websocketReconnectTimeout) {
+          this.websocketReconnectTimeout = setTimeout(() => {
+            this.setupWebSockets();
+            this.websocketReconnectTimeout = null;
+          }, 5000);
+        }
+        
+        // Fallback to polling while disconnected
+        this.startAutoRefresh();
+      }
+    },
+    
+    closeWebSockets() {
+      // Close all WebSocket connections
+      Object.keys(this.websockets).forEach(key => {
+        if (this.websockets[key]) {
+          try {
+            this.websockets[key].close();
+          } catch (e) {
+            console.error(`Error closing ${key} WebSocket:`, e);
+          }
+          this.websockets[key] = null;
+        }
+      });
+      
+      // Clear reconnect timeout if exists
+      if (this.websocketReconnectTimeout) {
+        clearTimeout(this.websocketReconnectTimeout);
+        this.websocketReconnectTimeout = null;
+      }
+      
+      this.websocketConnected = false;
+    },
+    
     // Invoice dialog methods
     openInvoiceDialog(asset) {
       // Refresh assets first to ensure we have the latest channel status
@@ -430,7 +621,7 @@ window.app = Vue.createApp({
           // Copy to clipboard
           this.copyInvoice(response.data.payment_request || response.data.id);
 
-          // Refresh transactions list
+          // WebSockets will handle UI updates, but refresh just in case
           this.refreshTransactions();
         })
         .catch(err => {
@@ -533,8 +724,10 @@ window.app = Vue.createApp({
         // Show success and refresh data
         this.paymentDialog.show = false;
         this.successDialog.show = true;
-        await this.getAssets();
+        
+        // WebSockets will handle UI updates, but refresh just in case
         await this.refreshTransactions();
+        await this.getAssets();
 
       } catch (error) {
         console.error('Payment failed:', error);
@@ -623,6 +816,9 @@ window.app = Vue.createApp({
     },
     
     startAutoRefresh() {
+      // Only start polling if WebSockets are not connected
+      if (this.websocketConnected) return;
+      
       this.stopAutoRefresh();
       this.refreshInterval = setInterval(() => {
         this.getAssets();
@@ -645,7 +841,9 @@ window.app = Vue.createApp({
       this.getAssets();
       this.getInvoices(true);
       this.getPayments(true);
-      this.startAutoRefresh();
+      
+      // Try to setup WebSockets first
+      this.setupWebSockets();
     }
   },
   
@@ -661,7 +859,11 @@ window.app = Vue.createApp({
       this.resetPaymentForm();
       this.refreshTransactions();
       this.getAssets();
-      this.startAutoRefresh();
+      
+      // Try to reconnect WebSockets if disconnected
+      if (!this.websocketConnected) {
+        this.setupWebSockets();
+      }
     }
   },
   
@@ -671,5 +873,6 @@ window.app = Vue.createApp({
   
   beforeUnmount() {
     this.stopAutoRefresh();
+    this.closeWebSockets();
   }
 });

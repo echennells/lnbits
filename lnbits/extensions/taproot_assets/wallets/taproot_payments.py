@@ -14,6 +14,10 @@ from .taproot_adapter import (
     invoices_pb2
 )
 
+# Import WebSocket manager
+from ..websocket import ws_manager
+from ..crud import create_payment_record
+
 class TaprootPaymentManager:
     """
     Handles Taproot Asset payment processing.
@@ -190,6 +194,53 @@ class TaprootPaymentManager:
                     logger.error(f"Error in payment stream: {str(e)}")
                     raise Exception(f"Payment error: {str(e)}")
             
+            # Get the asset amount from decoded invoice
+            asset_amount = decoded.amount_msat // 1000 if hasattr(decoded, "amount_msat") else 0
+            
+            # Create payment record if we have a user ID associated with the node
+            if hasattr(self.node, 'wallet') and self.node.wallet:
+                user_id = self.node.wallet.user
+                wallet_id = self.node.wallet.id
+                memo = "Taproot Asset Transfer"
+                try:
+                    payment_record = await create_payment_record(
+                        payment_hash=payment_hash,
+                        payment_request=payment_request,
+                        asset_id=asset_id,
+                        asset_amount=asset_amount,
+                        fee_sats=fee_msat // 1000,
+                        user_id=user_id,
+                        wallet_id=wallet_id,
+                        memo=memo,
+                        preimage=preimage
+                    )
+                    
+                    # Send payment update via WebSocket
+                    await ws_manager.send_payment_update(
+                        user_id,
+                        {
+                            "id": payment_record.id,
+                            "payment_hash": payment_hash,
+                            "status": status,
+                            "asset_id": asset_id,
+                            "asset_amount": asset_amount,
+                            "fee_sats": fee_msat // 1000,
+                            "created_at": payment_record.created_at.isoformat()
+                        }
+                    )
+                    
+                    # Also update asset balances
+                    try:
+                        assets = await self.node.list_assets()
+                        filtered_assets = [asset for asset in assets if asset.get("channel_info")]
+                        if filtered_assets:
+                            await ws_manager.send_assets_update(user_id, filtered_assets)
+                    except Exception as asset_err:
+                        logger.error(f"Failed to fetch assets for WebSocket update: {str(asset_err)}")
+                        
+                except Exception as db_err:
+                    logger.error(f"Failed to create payment record: {str(db_err)}")
+            
             # Return response with all available information
             return {
                 "payment_hash": payment_hash,
@@ -198,7 +249,7 @@ class TaprootPaymentManager:
                 "status": status,
                 "payment_request": payment_request,
                 "asset_id": asset_id,
-                "asset_amount": decoded.amount_msat // 1000 if hasattr(decoded, "amount_msat") else 0
+                "asset_amount": asset_amount
             }
 
         except grpc.aio.AioRpcError as e:
@@ -282,6 +333,18 @@ class TaprootPaymentManager:
                 raise Exception("Settlement failed")
 
             logger.info("=== SETTLEMENT COMPLETED ===")
+            
+            # If we have a wallet, update assets via WebSocket
+            if hasattr(self.node, 'wallet') and self.node.wallet:
+                user_id = self.node.wallet.user
+                try:
+                    assets = await self.node.list_assets()
+                    filtered_assets = [asset for asset in assets if asset.get("channel_info")]
+                    if filtered_assets:
+                        await ws_manager.send_assets_update(user_id, filtered_assets)
+                except Exception as asset_err:
+                    logger.error(f"Failed to fetch assets for WebSocket update: {str(asset_err)}")
+            
             return {
                 "success": True,
                 "payment_hash": payment_hash,

@@ -31,6 +31,7 @@ from .crud import (
 from .models import TaprootSettings, TaprootAsset, TaprootInvoice, TaprootInvoiceRequest, TaprootPaymentRequest
 from .wallets.taproot_wallet import TaprootWalletExtension
 from .tapd_settings import taproot_settings
+from .websocket import ws_manager
 
 # The parent router in __init__.py already adds the "/taproot_assets" prefix
 # So we only need to add the API path here
@@ -131,6 +132,11 @@ async def api_list_assets(
 
         # Get assets from tapd
         assets_data = await wallet.list_assets()
+        
+        # Send WebSocket notification with assets data
+        if assets_data:
+            await ws_manager.notify_assets_update(user.id, assets_data)
+            
         return assets_data
     except Exception as e:
         logger.error(f"Failed to list assets: {str(e)}")
@@ -201,6 +207,20 @@ async def api_create_invoice(
             memo=data.memo or f"Taproot Asset Transfer: {data.asset_id}",
             expiry=data.expiry,
         )
+
+        # Send WebSocket notification for new invoice
+        invoice_data = {
+            "id": invoice.id,
+            "payment_hash": invoice_response.payment_hash,
+            "payment_request": invoice_response.payment_request,
+            "asset_id": data.asset_id,
+            "asset_amount": data.amount,
+            "satoshi_amount": satoshi_amount,
+            "memo": invoice.memo,
+            "status": "pending",
+            "created_at": invoice.created_at.isoformat() if hasattr(invoice.created_at, "isoformat") else str(invoice.created_at)
+        }
+        await ws_manager.notify_invoice_update(wallet.wallet.user, invoice_data)
 
         # Return response
         return {
@@ -284,7 +304,7 @@ async def api_pay_invoice(
         
         # Record the payment
         try:
-            await create_payment_record(
+            payment_record = await create_payment_record(
                 payment_hash=payment_hash,
                 payment_request=data.payment_request,
                 asset_id=asset_id,
@@ -295,6 +315,31 @@ async def api_pay_invoice(
                 memo=memo,
                 preimage=preimage
             )
+            
+            # Send WebSocket notification of payment
+            if payment_record:
+                payment_data = {
+                    "id": payment_record.id,
+                    "payment_hash": payment_hash,
+                    "asset_id": asset_id,
+                    "asset_amount": asset_amount,
+                    "fee_sats": routing_fees_sats,
+                    "memo": memo,
+                    "status": "completed",
+                    "created_at": payment_record.created_at.isoformat() if hasattr(payment_record.created_at, "isoformat") else str(payment_record.created_at)
+                }
+                await ws_manager.notify_payment_update(wallet.wallet.user, payment_data)
+                
+                # Also update asset balances via WebSocket
+                try:
+                    taproot_wallet = TaprootWalletExtension()  # Create a fresh instance
+                    assets = await taproot_wallet.list_assets()
+                    filtered_assets = [asset for asset in assets if asset.get("channel_info")]
+                    if filtered_assets:
+                        await ws_manager.notify_assets_update(wallet.wallet.user, filtered_assets)
+                except Exception as asset_err:
+                    logger.error(f"Failed to update assets after payment: {str(asset_err)}")
+                
         except Exception as db_error:
             # Don't fail if payment record creation fails
             logger.error(f"Failed to store payment record: {str(db_error)}")
@@ -439,4 +484,16 @@ async def api_update_invoice_status(
         )
 
     updated_invoice = await update_invoice_status(invoice_id, status)
+    
+    # Send WebSocket notification about status update
+    if updated_invoice:
+        invoice_data = {
+            "id": updated_invoice.id,
+            "payment_hash": updated_invoice.payment_hash,
+            "status": updated_invoice.status,
+            "asset_id": updated_invoice.asset_id,
+            "asset_amount": updated_invoice.asset_amount
+        }
+        await ws_manager.notify_invoice_update(user.id, invoice_data)
+    
     return updated_invoice
