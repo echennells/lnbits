@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
-from typing import Optional, Tuple, Any, Dict
+import time
+from typing import Optional, Tuple, Any, Dict, Set
 import grpc
 import grpc.aio
 from loguru import logger
@@ -12,6 +13,9 @@ from .taproot_adapter import (
 
 # Import database functions
 from ..crud import get_invoice_by_payment_hash, update_invoice_status
+
+# Singleton tracking for monitoring instances
+_monitoring_instances = set()
 
 # Module-level direct settlement function
 async def direct_settle_invoice(node, payment_hash: str) -> bool:
@@ -25,9 +29,15 @@ async def direct_settle_invoice(node, payment_hash: str) -> bool:
     Returns:
         bool: True if settled successfully, False otherwise
     """
-    logger.info(f"Settling invoice for payment hash {payment_hash}")
-
     try:
+        # First check if invoice is already settled in the database
+        invoice = await get_invoice_by_payment_hash(payment_hash)
+        if invoice and invoice.status == "paid":
+            logger.debug(f"Invoice {payment_hash} is already marked as paid in the database, skipping settlement")
+            return True
+
+        logger.info(f"Settling invoice for payment hash {payment_hash}")
+
         # Get the preimage for this payment hash
         preimage_hex = node._get_preimage(payment_hash)
 
@@ -48,23 +58,31 @@ async def direct_settle_invoice(node, payment_hash: str) -> bool:
         logger.info(f"Invoice {payment_hash} successfully settled")
 
         # Update the invoice status in the database
-        try:
-            invoice = await get_invoice_by_payment_hash(payment_hash)
-
-            if invoice:
-                updated_invoice = await update_invoice_status(invoice.id, "paid")
-                if updated_invoice and updated_invoice.status == "paid":
-                    logger.info(f"Database updated: Invoice {invoice.id} status set to paid")
-                else:
-                    logger.error(f"Failed to update invoice status in database")
+        if invoice:
+            updated_invoice = await update_invoice_status(invoice.id, "paid")
+            if updated_invoice and updated_invoice.status == "paid":
+                logger.info(f"Database updated: Invoice {invoice.id} status set to paid")
             else:
-                logger.warning(f"No invoice found with payment_hash: {payment_hash}")
-        except Exception as db_error:
-            logger.error(f"Error updating invoice status: {str(db_error)}")
-            # Continue even if DB update fails - the important part is settlement
+                logger.error(f"Failed to update invoice status in database")
+        else:
+            logger.warning(f"No invoice found with payment_hash: {payment_hash}")
 
         return True
 
+    except grpc.aio.AioRpcError as e:
+        # If invoice is already settled, consider it success
+        if "invoice is already settled" in e.details().lower():
+            logger.info(f"Invoice {payment_hash} was already settled on the node")
+            
+            # Still update the database if needed
+            if invoice and invoice.status != "paid":
+                await update_invoice_status(invoice.id, "paid")
+                logger.info(f"Updated previously settled invoice {invoice.id} status in database")
+            
+            return True
+            
+        logger.error(f"gRPC error in settle_invoice: {e.code()}: {e.details()}")
+        return False
     except Exception as e:
         logger.error(f"Failed to settle invoice: {str(e)}")
         return False
@@ -75,6 +93,9 @@ class TaprootTransferManager:
     Handles Taproot Asset transfer monitoring.
     This class is responsible for monitoring asset transfers and settling HODL invoices.
     """
+    # Class variables for tracking monitoring state
+    _is_monitoring = False
+    _settled_payment_hashes = set()
 
     def __init__(self, node):
         """
@@ -84,56 +105,137 @@ class TaprootTransferManager:
             node: The TaprootAssetsNodeExtension instance
         """
         self.node = node
-        self.is_monitoring = False
+        # Add this instance to the set of monitoring instances
+        global _monitoring_instances
+        _monitoring_instances.add(self)
         logger.info("TaprootTransferManager initialized")
 
     async def monitor_asset_transfers(self):
         """
         Monitor asset transfers and settle HODL invoices when transfers complete.
         """
-        if self.is_monitoring:
+        # Use class-level flag to prevent duplicate monitoring
+        if TaprootTransferManager._is_monitoring:
             logger.info("Monitoring already active, ignoring duplicate call")
             return
             
-        self.is_monitoring = True
+        TaprootTransferManager._is_monitoring = True
         logger.info("Starting asset transfer monitoring")
 
         RETRY_DELAY = 5  # seconds
         MAX_RETRIES = 3  # number of retries before giving up
-        HEARTBEAT_INTERVAL = 30  # seconds
+        HEARTBEAT_INTERVAL = 300  # 5 minutes between heartbeats
+
+        # Set up last cache size for efficient logging
+        last_cache_size = 0
+        last_heartbeat_time = time.time()
 
         async def check_unprocessed_payments():
-            """Check for any unprocessed payments and attempt to settle them."""
-            # Get all script key mappings
-            script_key_mappings = list(self.node.invoice_manager._script_key_to_payment_hash.keys())
-            if not script_key_mappings:
-                return
-                
-            for script_key in script_key_mappings:
-                payment_hash = self.node.invoice_manager._get_payment_hash_from_script_key(script_key)
-                if payment_hash and payment_hash in self.node._preimage_cache:
+            """Check for unprocessed payments and attempt to settle them."""
+            try:
+                # Get all script key mappings
+                script_key_mappings = list(self.node.invoice_manager._script_key_to_payment_hash.keys())
+                if not script_key_mappings:
+                    return
+                    
+                # Count of newly processed payments
+                newly_processed = 0
+                    
+                for script_key in script_key_mappings:
+                    payment_hash = self.node.invoice_manager._get_payment_hash_from_script_key(script_key)
+                    
+                    # Skip already settled payments
+                    if payment_hash in TaprootTransferManager._settled_payment_hashes:
+                        continue
+                    
+                    # Skip payments without preimage
+                    if not payment_hash or payment_hash not in self.node._preimage_cache:
+                        continue
+                    
+                    # Check if already settled in database
+                    invoice = await get_invoice_by_payment_hash(payment_hash)
+                    if invoice and invoice.status == "paid":
+                        TaprootTransferManager._settled_payment_hashes.add(payment_hash)
+                        continue
+                    
+                    # Attempt settlement
                     logger.info(f"Found unprocessed payment, attempting settlement")
-                    await direct_settle_invoice(self.node, payment_hash)
+                    success = await direct_settle_invoice(self.node, payment_hash)
+                    
+                    # Track settlement status
+                    if success:
+                        TaprootTransferManager._settled_payment_hashes.add(payment_hash)
+                        newly_processed += 1
+                
+                # Return the number of newly processed payments
+                return newly_processed
+            except Exception as e:
+                logger.error(f"Error checking unprocessed payments: {str(e)}")
+                return 0
 
         async def log_heartbeat():
-            """Log periodic heartbeat and check for unprocessed payments."""
-            counter = 0
+            """
+            Periodically check for unprocessed payments and clean up expired preimages.
+            Only logs when there's something meaningful to report.
+            """
+            nonlocal last_cache_size, last_heartbeat_time
+            
             while True:
                 try:
-                    counter += 1
-                    logger.debug(f"Transfer monitoring heartbeat #{counter}")
+                    current_time = time.time()
                     
-                    # Check for unprocessed payments
-                    await check_unprocessed_payments()
-                    
-                    # Log cache size if not empty
-                    cache_size = len(self.node._preimage_cache)
-                    if cache_size > 0:
-                        logger.info(f"Preimage cache size: {cache_size}")
+                    # Perform cleanup and settlement at each heartbeat interval
+                    if current_time - last_heartbeat_time >= HEARTBEAT_INTERVAL:
+                        last_heartbeat_time = current_time
+                        
+                        # Clean up expired preimages
+                        expired_count = await self._cleanup_preimage_cache()
+                        
+                        # Check for and process unprocessed payments
+                        processed_count = await check_unprocessed_payments()
+                        
+                        # Get current cache size
+                        current_cache_size = len(self.node._preimage_cache)
+                        
+                        # Only log if something changed or action was taken
+                        if (current_cache_size != last_cache_size or 
+                            expired_count > 0 or processed_count > 0):
+                            logger.info(f"Heartbeat: Preimage cache size: {current_cache_size}, " +
+                                       f"Expired: {expired_count}, Newly processed: {processed_count}")
+                            last_cache_size = current_cache_size
 
-                    await asyncio.sleep(HEARTBEAT_INTERVAL)
+                    # Sleep for a shorter period to allow cancellation
+                    await asyncio.sleep(10)
                 except asyncio.CancelledError:
+                    logger.info("Heartbeat task cancelled")
                     break
+                except Exception as e:
+                    logger.error(f"Error in heartbeat: {str(e)}")
+                    await asyncio.sleep(10)
+
+        async def _cleanup_preimage_cache() -> int:
+            """
+            Clean up expired preimages from the cache.
+            
+            Returns:
+                int: Number of expired entries removed
+            """
+            now = time.time()
+            expired_count = 0
+            
+            # Get a list of expired payment hashes
+            expired_hashes = []
+            for payment_hash, entry in self.node._preimage_cache.items():
+                if isinstance(entry, dict) and 'expiry' in entry:
+                    if entry['expiry'] < now:
+                        expired_hashes.append(payment_hash)
+            
+            # Remove expired entries
+            for payment_hash in expired_hashes:
+                del self.node._preimage_cache[payment_hash]
+                expired_count += 1
+                
+            return expired_count
 
         for retry in range(MAX_RETRIES):
             try:
@@ -155,8 +257,8 @@ class TaprootTransferManager:
                 # Process incoming events
                 async for event in send_events:
                     logger.debug("Received send event")
+                    # Asset transfer happens through the Lightning layer
                     # We only monitor these events for informational purposes
-                    # The actual settlement happens through HODL invoice mechanisms
 
             except grpc.aio.AioRpcError as grpc_error:
                 logger.error(f"gRPC error in subscription: {grpc_error.code()}: {grpc_error.details()}")
@@ -181,7 +283,7 @@ class TaprootTransferManager:
         logger.warning("Max retries reached for monitoring")
         
         # Reset monitoring state to allow future attempts
-        self.is_monitoring = False
+        TaprootTransferManager._is_monitoring = False
         
         # Create a new monitoring task
         asyncio.create_task(self.monitor_asset_transfers())
@@ -194,7 +296,7 @@ class TaprootTransferManager:
 
         try:
             # Convert payment hash to bytes
-            payment_hash_bytes = bytes.fromhex(payment_hash)
+            payment_hash_bytes = bytes.fromhex(payment_hash) if isinstance(payment_hash, str) else payment_hash
             request = invoices_pb2.SubscribeSingleInvoiceRequest(r_hash=payment_hash_bytes)
 
             # Subscribe to invoice updates
@@ -213,12 +315,19 @@ class TaprootTransferManager:
                         self.node.invoice_manager._store_script_key_mapping(script_key_hex, payment_hash)
                     
                     # Attempt settlement
-                    await direct_settle_invoice(self.node, payment_hash)
+                    success = await direct_settle_invoice(self.node, payment_hash)
+                    
+                    # Track settlement status
+                    if success:
+                        TaprootTransferManager._settled_payment_hashes.add(payment_hash)
+                    
                     break
                     
                 # Process already SETTLED state (1)
                 elif invoice.state == 1:  # SETTLED state
                     logger.info(f"Invoice {payment_hash} is already SETTLED")
+                    # Add to settled set
+                    TaprootTransferManager._settled_payment_hashes.add(payment_hash)
                     break
                     
                 # Process CANCELED state (2)
@@ -268,6 +377,11 @@ class TaprootTransferManager:
         """Manually settle a HODL invoice. Used as a fallback if automatic settlement fails."""
         logger.info(f"Manual settlement attempt for {payment_hash}")
         
+        # Check if already settled
+        if payment_hash in TaprootTransferManager._settled_payment_hashes:
+            logger.info(f"Invoice {payment_hash} is already marked as settled, skipping")
+            return True
+        
         try:
             # Try to get the preimage directly from the payment hash
             preimage_hex = self.node._get_preimage(payment_hash)
@@ -280,7 +394,10 @@ class TaprootTransferManager:
             
             # Use the direct settle function
             if preimage_hex:
-                return await direct_settle_invoice(self.node, payment_hash)
+                success = await direct_settle_invoice(self.node, payment_hash)
+                if success:
+                    TaprootTransferManager._settled_payment_hashes.add(payment_hash)
+                return success
             else:
                 logger.error(f"No preimage found for {payment_hash}")
                 return False

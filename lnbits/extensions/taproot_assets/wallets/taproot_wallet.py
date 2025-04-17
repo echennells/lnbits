@@ -38,12 +38,14 @@ class PaymentResponse:
         fee_msat: Optional[int] = None,
         preimage: Optional[str] = None,
         error_message: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
     ):
         self.ok = ok
         self.checking_id = checking_id
         self.fee_msat = fee_msat
         self.preimage = preimage
         self.error_message = error_message
+        self.extra = extra or {}
 
 
 class TaprootWalletExtension:
@@ -81,6 +83,7 @@ class TaprootWalletExtension:
             await self._init_connection()
             return await self.node.list_assets()
         except Exception as e:
+            logger.error(f"Failed to list assets: {str(e)}")
             raise Exception(f"Failed to list assets: {str(e)}")
         finally:
             await self.cleanup()
@@ -263,12 +266,19 @@ class TaprootWalletExtension:
             payment_hash = payment_result.get("payment_hash", "")
             preimage = payment_result.get("payment_preimage", "")
             fee_msat = payment_result.get("fee_sats", 0) * 1000  # Convert sats to msats
+            
+            # Get extra information
+            extra = {
+                "asset_id": payment_result.get("asset_id", ""),
+                "asset_amount": payment_result.get("asset_amount", 0)
+            }
 
             return PaymentResponse(
                 ok=True,
                 checking_id=payment_hash,
                 fee_msat=fee_msat,
-                preimage=preimage
+                preimage=preimage,
+                extra=extra
             )
         except Exception as e:
             logger.error(f"Failed to pay invoice: {str(e)}")
@@ -313,7 +323,7 @@ class TaprootWalletExtension:
             )
 
             return PaymentResponse(
-                ok=True,
+                ok=update_result.get("success", False),
                 checking_id=payment_hash,
                 fee_msat=0,  # No additional fee as it was already paid via LNbits
                 preimage=update_result.get("preimage", "")

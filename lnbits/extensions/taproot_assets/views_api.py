@@ -131,7 +131,6 @@ async def api_list_assets(
 
         # Get assets from tapd
         assets_data = await wallet.list_assets()
-        
         return assets_data
     except Exception as e:
         logger.error(f"Failed to list assets: {str(e)}")
@@ -169,9 +168,9 @@ async def api_create_invoice(
     """Create an invoice for a Taproot Asset."""
     logger.info(f"Creating invoice for asset_id={data.asset_id}, amount={data.amount}")
     try:
-        # Create a wallet instance to communicate with tapd
+        # Create a wallet instance
         taproot_wallet = TaprootWalletExtension()
-
+        
         # Create the invoice
         invoice_response = await taproot_wallet.create_invoice(
             amount=data.amount,
@@ -190,7 +189,7 @@ async def api_create_invoice(
         # Get satoshi fee from settings
         satoshi_amount = taproot_settings.default_sat_fee
 
-        # Create invoice record in the database
+        # Create invoice record
         invoice = await create_invoice(
             asset_id=data.asset_id,
             asset_amount=data.amount,
@@ -203,7 +202,7 @@ async def api_create_invoice(
             expiry=data.expiry,
         )
 
-        # Return response data
+        # Return response
         return {
             "payment_hash": invoice_response.payment_hash,
             "payment_request": invoice_response.payment_request,
@@ -213,24 +212,33 @@ async def api_create_invoice(
             "checking_id": invoice.id,
         }
         
-    except Exception as e:
-        # Create user-friendly error messages for common issues
-        if "multiple asset channels found" in str(e) and "please specify the peer pubkey" in str(e):
-            detail = f"Multiple channels found for asset {data.asset_id}. Please select a specific channel from the asset list."
-        elif isinstance(e, grpc.RpcError) and "no asset channel balance found for asset" in str(e):
-            detail = f"No channel balance found for asset {data.asset_id}. You need to create a channel with this asset first."
+    except grpc.aio.AioRpcError as e:
+        # Handle gRPC errors with specific error messages
+        error_details = e.details()
+        
+        if "multiple asset channels found" in error_details and "please specify the peer pubkey" in error_details:
+            detail = f"Multiple channels found for asset {data.asset_id}. Please select a specific channel."
+        elif "no asset channel balance found for asset" in error_details:
+            detail = f"No channel balance found for asset {data.asset_id}. Create a channel first."
         else:
-            detail = f"Failed to create Taproot Asset invoice: {str(e)}"
+            detail = f"gRPC error: {error_details}"
 
-        logger.error(f"Error creating invoice: {str(e)}")
-
-        # Don't re-wrap HTTPExceptions
-        if isinstance(e, HTTPException):
-            raise
-
+        logger.error(f"gRPC error creating invoice: {e.code()}: {error_details}")
+        
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             detail=detail,
+        )
+    except HTTPException:
+        # Don't re-wrap HTTPExceptions
+        raise
+    except Exception as e:
+        # General error handling
+        logger.error(f"Error creating invoice: {str(e)}")
+        
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create Taproot Asset invoice: {str(e)}",
         )
 
 
@@ -241,7 +249,7 @@ async def api_pay_invoice(
 ):
     """Pay a Taproot Asset invoice."""
     try:
-        # Initialize taproot wallet
+        # Initialize wallet
         taproot_wallet = TaprootWalletExtension()
         
         # Set fee limit
@@ -258,23 +266,20 @@ async def api_pay_invoice(
         if not payment.ok:
             raise Exception(f"Payment failed: {payment.error_message}")
             
-        # Calculate routing fees
-        routing_fees_sats = payment.fee_msat // 1000 if payment.fee_msat else 0
-        
         # Get payment details
         payment_hash = payment.checking_id
         preimage = payment.preimage or ""
+        routing_fees_sats = payment.fee_msat // 1000 if payment.fee_msat else 0
+        
+        # Get asset details from extra
+        asset_id = payment.extra.get("asset_id", "")
+        asset_amount = payment.extra.get("asset_amount", 0)
+        
+        # Create descriptive memo
+        memo = f"Taproot Asset Transfer"
         
         # Record the payment
         try:
-            # Extract asset info from payment extra data
-            asset_id = payment.extra.get("asset_id", "")
-            asset_amount = payment.extra.get("asset_amount", 0)
-            
-            # Create descriptive memo
-            memo = f"Taproot Asset Transfer"
-            
-            # Record payment with available information
             await create_payment_record(
                 payment_hash=payment_hash,
                 payment_request=data.payment_request,
@@ -286,9 +291,9 @@ async def api_pay_invoice(
                 memo=memo,
                 preimage=preimage
             )
-        except Exception as e:
+        except Exception as db_error:
             # Don't fail if payment record creation fails
-            logger.error(f"Failed to store payment record: {str(e)}")
+            logger.error(f"Failed to store payment record: {str(db_error)}")
         
         # Return success response
         return {
@@ -301,19 +306,32 @@ async def api_pay_invoice(
             "asset_amount": asset_amount
         }
     
+    except grpc.aio.AioRpcError as e:
+        # Handle gRPC errors with specific error messages
+        error_details = e.details()
+        
+        if "no asset channel balance found for asset" in error_details:
+            detail = "Insufficient channel balance for this asset."
+        else:
+            detail = f"gRPC error: {error_details}"
+            
+        logger.error(f"gRPC error in payment: {e.code()}: {error_details}")
+        
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail=detail
+        )
     except HTTPException:
         # Let HTTP exceptions propagate
         raise
-        
     except Exception as e:
-        # Create user-friendly error message
-        detail = str(e)
-        
-        if "no asset channel balance found for asset" in str(e):
-            detail = "Insufficient channel balance for this asset."
-            
+        # General error handling
         logger.error(f"Payment error: {str(e)}")
-        raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=detail)
+        
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, 
+            detail=f"Failed to pay Taproot Asset invoice: {str(e)}"
+        )
 
 
 @taproot_assets_api_router.get("/payments", status_code=HTTPStatus.OK)

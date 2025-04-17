@@ -25,10 +25,12 @@ class TaprootInvoiceManager:
         self._script_key_to_payment_hash = {}
 
     def _store_script_key_mapping(self, script_key: str, payment_hash: str):
+        """Store mapping from script key to payment hash."""
         self._script_key_to_payment_hash[script_key] = payment_hash
         logger.debug(f"Stored script key mapping: {script_key} -> {payment_hash}")
 
     def _get_payment_hash_from_script_key(self, script_key: str) -> Optional[str]:
+        """Retrieve payment hash from script key mapping."""
         payment_hash = self._script_key_to_payment_hash.get(script_key)
         if not payment_hash:
             logger.debug(f"No payment hash found for script key {script_key}")
@@ -76,7 +78,8 @@ class TaprootInvoiceManager:
             # Extract quote information
             selected_quote = buy_order_response.accepted_quote
             quote_id = selected_quote.id.hex() if isinstance(selected_quote.id, bytes) else selected_quote.id
-            logger.info(f"Quote accepted - ID: {quote_id}, SCID: {hex(selected_quote.scid)}")
+            quote_scid = hex(selected_quote.scid) if isinstance(selected_quote.scid, int) else selected_quote.scid
+            logger.info(f"Quote accepted - ID: {quote_id}, SCID: {quote_scid}")
 
             # Generate a preimage and payment hash
             preimage = os.urandom(32)
@@ -85,28 +88,28 @@ class TaprootInvoiceManager:
             payment_hash_hex = payment_hash.hex()
             logger.info(f"Generated payment_hash: {payment_hash_hex}")
 
-            # Store the preimage for settlement
+            # Store the preimage with expiry for settlement
             self.node._store_preimage(payment_hash_hex, preimage_hex)
 
-            # Create the invoice
+            # Create the invoice request
+            request = tapchannel_pb2.AddInvoiceRequest(
+                asset_id=asset_id_bytes,
+                asset_amount=asset_amount
+            )
+            
+            # Add invoice details
             invoice = lightning_pb2.Invoice(
                 memo=memo or "Taproot Asset Transfer",
                 value=0,  # No Bitcoin value
                 private=True,
                 expiry=expiry or 3600
             )
-
-            # Create HODL invoice
+            request.invoice_request.MergeFrom(invoice)
+            
+            # Add HODL invoice
             hodl_invoice = tapchannel_pb2.HodlInvoice(
                 payment_hash=payment_hash
             )
-
-            # Create full invoice request
-            request = tapchannel_pb2.AddInvoiceRequest(
-                asset_id=asset_id_bytes,
-                asset_amount=asset_amount
-            )
-            request.invoice_request.MergeFrom(invoice)
             request.hodl_invoice.MergeFrom(hodl_invoice)
 
             # Add peer pubkey if provided
@@ -124,7 +127,7 @@ class TaprootInvoiceManager:
                 logger.error(f"gRPC error in AddInvoice: {e.code()}: {e.details()}")
                 raise Exception(f"Failed to add invoice: {e.details()}")
             
-            # Extract and return payment details
+            # Extract payment details
             return {
                 "accepted_buy_quote": self.node._protobuf_to_dict(response.accepted_buy_quote) 
                                      if hasattr(response, 'accepted_buy_quote') else {},
@@ -138,71 +141,8 @@ class TaprootInvoiceManager:
             logger.error(f"gRPC error in create_asset_invoice: {e.code()}: {e.details()}")
             raise Exception(f"gRPC error: {e.details()}")
         except Exception as e:
-            logger.error(f"Failed to create asset invoice: {str(e)}", exc_info=True)
+            logger.error(f"Failed to create asset invoice: {str(e)}")
             raise Exception(f"Failed to create asset invoice: {str(e)}")
-
-    async def monitor_invoice(self, payment_hash: str):
-        """Monitor a specific invoice for state changes."""
-        logger.info(f"Starting invoice monitoring for payment_hash={payment_hash}")
-
-        try:
-            # Convert payment hash to bytes
-            payment_hash_bytes = bytes.fromhex(payment_hash) if isinstance(payment_hash, str) else payment_hash
-            request = invoices_pb2.SubscribeSingleInvoiceRequest(r_hash=payment_hash_bytes)
-
-            try:
-                # Subscribe to invoice updates
-                invoice_stream = self.node.invoices_stub.SubscribeSingleInvoice(request)
-                async for invoice in invoice_stream:
-                    # Map state to human-readable form
-                    state_map = {0: "OPEN", 1: "SETTLED", 2: "CANCELED", 3: "ACCEPTED"}
-                    state_name = state_map.get(invoice.state, f"UNKNOWN({invoice.state})")
-                    logger.info(f"Invoice update: {payment_hash}, State: {state_name}")
-
-                    # Handle ACCEPTED state
-                    if invoice.state == 3:  # ACCEPTED state
-                        logger.info(f"Invoice {payment_hash} is ACCEPTED (state=3)")
-                        
-                        # Process HTLCs to extract script key
-                        script_key_hex = None
-                        
-                        if hasattr(invoice, 'htlcs') and invoice.htlcs:
-                            for htlc in invoice.htlcs:
-                                if hasattr(htlc, 'custom_records') and htlc.custom_records:
-                                    # Process asset transfer record (65543)
-                                    if 65543 in htlc.custom_records:
-                                        value = htlc.custom_records[65543]
-                                        script_key_hex = self._extract_script_key_from_record(value, payment_hash)
-                        
-                        # Store mapping and attempt settlement
-                        if script_key_hex:
-                            self._store_script_key_mapping(script_key_hex, payment_hash)
-                            
-                            # Delegate to transfer manager for settlement
-                            from .taproot_transfers import direct_settle_invoice
-                            await direct_settle_invoice(self.node, payment_hash)
-                            break
-                        else:
-                            logger.warning(f"No script key found for {payment_hash}, trying fallback settlement")
-                            from .taproot_transfers import direct_settle_invoice
-                            await direct_settle_invoice(self.node, payment_hash)
-                            break
-                    
-                    # Handle other terminal states
-                    elif invoice.state == 1:  # SETTLED state
-                        logger.info(f"Invoice {payment_hash} is already SETTLED")
-                        break
-                    elif invoice.state == 2:  # CANCELED state
-                        logger.warning(f"Invoice {payment_hash} was CANCELED")
-                        break
-            except grpc.aio.AioRpcError as e:
-                logger.error(f"gRPC error in SubscribeSingleInvoice: {e.code()}: {e.details()}")
-                raise Exception(f"Failed to subscribe to invoice: {e.details()}")
-
-        except grpc.aio.AioRpcError as e:
-            logger.error(f"gRPC error in monitor_invoice: {e.code()}: {e.details()}")
-        except Exception as e:
-            logger.error(f"Error monitoring invoice {payment_hash}: {e}", exc_info=True)
 
     def _extract_script_key_from_record(self, record_value: bytes, payment_hash: str) -> Optional[str]:
         """Extract script key from the custom record data."""

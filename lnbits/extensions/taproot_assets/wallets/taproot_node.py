@@ -35,20 +35,59 @@ class TaprootAssetsNodeExtension:
     Implementation of Taproot Assets node functionality for the extension.
     This mirrors the core TaprootAssetsNode class.
     """
-    # Class-level cache to store preimages
+    # Class-level cache to store preimages with expiry times
     _preimage_cache = {}
+    
+    # Default expiry time for preimages (24 hours)
+    DEFAULT_PREIMAGE_EXPIRY = 86400
 
     def _store_preimage(self, payment_hash: str, preimage: str):
-        """Store a preimage for a given payment hash."""
-        self.__class__._preimage_cache[payment_hash] = preimage
+        """
+        Store a preimage for a given payment hash with expiry time.
+        
+        Args:
+            payment_hash: The payment hash
+            preimage: The preimage corresponding to the payment hash
+        """
+        expiry = int(time.time()) + self.DEFAULT_PREIMAGE_EXPIRY
+        self.__class__._preimage_cache[payment_hash] = {
+            "preimage": preimage,
+            "expiry": expiry
+        }
         logger.debug(f"Stored preimage for payment hash: {payment_hash}")
 
     def _get_preimage(self, payment_hash: str) -> Optional[str]:
-        """Retrieve a preimage for a given payment hash."""
-        preimage = self.__class__._preimage_cache.get(payment_hash)
-        if not preimage:
-            logger.debug(f"No preimage found for payment hash: {payment_hash}")
-        return preimage
+        """
+        Retrieve a preimage for a given payment hash, checking expiry.
+        
+        Args:
+            payment_hash: The payment hash to look up
+            
+        Returns:
+            str: The preimage if found and not expired, None otherwise
+        """
+        entry = self.__class__._preimage_cache.get(payment_hash)
+        
+        # No entry found
+        if not entry:
+            return None
+            
+        # Handle legacy plain preimage strings (backward compatibility)
+        if isinstance(entry, str):
+            return entry
+            
+        # Check for expiry if it's a dict with expiry
+        if isinstance(entry, dict):
+            # If expired, remove and return None
+            if entry.get("expiry") and entry["expiry"] < int(time.time()):
+                del self.__class__._preimage_cache[payment_hash]
+                return None
+                
+            # Return the preimage
+            return entry.get("preimage")
+            
+        # Unexpected entry type
+        return None
 
     def __init__(
         self,
@@ -137,9 +176,12 @@ class TaprootAssetsNodeExtension:
         self.payment_manager = TaprootPaymentManager(self)
         self.transfer_manager = TaprootTransferManager(self)
 
-        # Start monitoring asset transfers
-        logger.info("Starting asset transfer monitoring")
-        self.monitoring_task = asyncio.create_task(self.transfer_manager.monitor_asset_transfers())
+        # Start monitoring asset transfers (if not already running)
+        if not TaprootTransferManager._is_monitoring:
+            logger.info("Starting asset transfer monitoring")
+            self.monitoring_task = asyncio.create_task(self.transfer_manager.monitor_asset_transfers())
+        else:
+            logger.debug("Asset transfer monitoring already active")
 
     def _protobuf_to_dict(self, pb_obj):
         """Convert a protobuf object to a JSON-serializable dict."""

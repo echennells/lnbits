@@ -73,7 +73,10 @@ class TaprootPaymentManager:
                 logger.error(f"Failed to decode invoice: {str(e)}")
                 raise Exception(f"Invalid invoice format: {str(e)}")
 
-            # Require a valid asset ID
+            # Verify we have required parameters
+            if not payment_hash:
+                raise Exception("Could not extract payment hash from invoice")
+                
             if not asset_id:
                 raise Exception("No asset ID provided or found in invoice")
             
@@ -102,18 +105,25 @@ class TaprootPaymentManager:
 
             # Send payment and process stream responses
             logger.info(f"Sending payment for asset_id={asset_id}")
-            response_stream = self.node.tapchannel_stub.SendPayment(request)
+            
+            try:
+                response_stream = self.node.tapchannel_stub.SendPayment(request)
+            except grpc.aio.AioRpcError as e:
+                logger.error(f"gRPC error starting payment: {e.code()}: {e.details()}")
+                raise Exception(f"Failed to start payment: {e.details()}")
             
             # Process the stream responses
             preimage = ""
             fee_msat = 0
             status = "success"  # Default to success unless error occurs
+            accepted_sell_order_seen = False
             
             try:
                 async for response in response_stream:
                     # Handle accepted sell order
                     if hasattr(response, 'accepted_sell_order') and response.HasField('accepted_sell_order'):
                         logger.info("Received accepted sell order response")
+                        accepted_sell_order_seen = True
                         continue
                         
                     # Handle payment result
@@ -121,7 +131,7 @@ class TaprootPaymentManager:
                         result = response.payment_result
                         status_code = result.status if hasattr(result, 'status') else -1
                         
-                        # Map status to action
+                        # Map status code to action
                         if status_code == 2:  # SUCCEEDED
                             if hasattr(result, 'payment_preimage'):
                                 preimage = result.payment_preimage.hex() if isinstance(result.payment_preimage, bytes) else str(result.payment_preimage)
@@ -129,7 +139,7 @@ class TaprootPaymentManager:
                             if hasattr(result, 'fee_msat'):
                                 fee_msat = result.fee_msat
                                 
-                            logger.info(f"Payment succeeded: hash={payment_hash}, preimage={preimage}, fee={fee_msat//1000} sat")
+                            logger.info(f"Payment succeeded: hash={payment_hash}, fee={fee_msat//1000} sat")
                             
                         elif status_code == 3:  # FAILED
                             status = "failed"
@@ -137,39 +147,62 @@ class TaprootPaymentManager:
                             logger.error(f"Payment failed: {failure_reason}")
                             raise Exception(f"Payment failed: {failure_reason}")
                 
-                # Stream completed without error
-                logger.info("Payment completed successfully")
+                # Stream completed without explicit error
+                logger.info("Payment stream completed")
+                
+                # If we've seen an accepted_sell_order but no final status,
+                # consider it potentially successful
+                if accepted_sell_order_seen and status != "failed":
+                    logger.info("Payment appears to be in progress (saw accepted sell order)")
+                    status = "success"
                 
             except grpc.aio.AioRpcError as e:
-                # Check if the error appears to indicate payment in progress
-                if any(msg in e.details().lower() for msg in ["payment initiated", "in progress", "in flight"]):
+                # Check if the error indicates payment in progress
+                error_str = e.details().lower()
+                if any(msg in error_str for msg in ["payment initiated", "in progress", "in flight"]):
                     logger.info("Payment appears to be in progress, treating as potentially successful")
+                    status = "success"
                 else:
-                    logger.error(f"gRPC error: {e.code()}: {e.details()}")
+                    logger.error(f"gRPC error in payment stream: {e.code()}: {e.details()}")
                     raise Exception(f"Payment error: {e.details()}")
+            except Exception as e:
+                if accepted_sell_order_seen:
+                    # If we've seen an accepted_sell_order, the payment might still succeed
+                    logger.info(f"Payment stream ended with error after accepted_sell_order: {str(e)}")
+                    logger.info("Considering payment as potentially successful")
+                    status = "success"
+                else:
+                    logger.error(f"Error in payment stream: {str(e)}")
+                    raise Exception(f"Payment error: {str(e)}")
             
-            # Return successful response
+            # Return response with all available information
             return {
                 "payment_hash": payment_hash,
                 "payment_preimage": preimage,
                 "fee_sats": fee_msat // 1000,
                 "status": status,
-                "payment_request": payment_request
+                "payment_request": payment_request,
+                "asset_id": asset_id,
+                "asset_amount": decoded.amount_msat // 1000 if hasattr(decoded, "amount_msat") else 0
             }
 
-        except Exception as e:
-            logger.error(f"Payment failed: {str(e)}", exc_info=True)
+        except grpc.aio.AioRpcError as e:
+            logger.error(f"gRPC error in pay_asset_invoice: {e.code()}: {e.details()}")
             
             # Create user-friendly error message
-            error_message = str(e).lower()
-            if "multiple asset channels found" in error_message:
+            error_details = e.details().lower()
+            if "multiple asset channels found" in error_details:
                 detail = "Multiple channels found for this asset. Please select a specific channel."
-            elif "no asset channel balance found" in error_message:
+            elif "no asset channel balance found" in error_details:
                 detail = "Insufficient channel balance for this asset."
             else:
-                detail = f"Failed to pay Taproot Asset invoice: {str(e)}"
+                detail = f"gRPC error: {e.details()}"
                 
             raise Exception(detail)
+            
+        except Exception as e:
+            logger.error(f"Payment failed: {str(e)}")
+            raise Exception(f"Failed to pay Taproot Asset invoice: {str(e)}")
 
     async def update_after_payment(
         self,
@@ -197,7 +230,21 @@ class TaprootPaymentManager:
         try:
             logger.info(f"=== SETTLEMENT PROCESS STARTING ===")
             logger.info(f"Payment hash: {payment_hash}")
-            logger.info(f"Asset ID: {asset_id}")
+            logger.info(f"Asset ID: {asset_id or 'Not specified'}")
+
+            # Extract asset ID from invoice if not provided
+            if not asset_id:
+                try:
+                    decoded = bolt11.decode(payment_request)
+                    for tag in decoded.tags:
+                        if tag[0] == 'd' and 'asset_id=' in tag[1]:
+                            asset_id_match = re.search(r'asset_id=([a-fA-F0-9]{64})', tag[1])
+                            if asset_id_match:
+                                asset_id = asset_id_match.group(1)
+                                logger.info(f"Extracted asset_id from invoice: {asset_id}")
+                                break
+                except Exception as e:
+                    logger.warning(f"Failed to extract asset ID from invoice: {str(e)}")
 
             # Retrieve the preimage for this payment hash
             preimage_hex = self.node._get_preimage(payment_hash)
@@ -207,9 +254,8 @@ class TaprootPaymentManager:
                 raise Exception(f"Cannot settle HODL invoice: no preimage found for {payment_hash}")
 
             logger.info(f"Found preimage: {preimage_hex}")
-            preimage_bytes = bytes.fromhex(preimage_hex)
 
-            # Create settlement request
+            # Manually settle the invoice
             from .taproot_transfers import direct_settle_invoice
             settlement_success = await direct_settle_invoice(self.node, payment_hash)
 
@@ -225,6 +271,9 @@ class TaprootPaymentManager:
                 "preimage": preimage_hex
             }
 
+        except grpc.aio.AioRpcError as e:
+            logger.error(f"gRPC error in update_after_payment: {e.code()}: {e.details()}")
+            raise Exception(f"gRPC error: {e.details()}")
         except Exception as e:
-            logger.error(f"Failed to update Taproot Assets after payment: {str(e)}", exc_info=True)
+            logger.error(f"Failed to update Taproot Assets after payment: {str(e)}")
             raise Exception(f"Failed to update Taproot Assets: {str(e)}")
