@@ -163,103 +163,144 @@
   color: rgba(255, 255, 255, 0.9);
 }
 
-/* Make sure Quasar badge styling is preserved */
+/* LNbits exact transaction table styling */
+.lnbits-transactions-table {
+  width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+  font-size: 0.85rem;
+}
+
+.lnbits-transactions-table thead {
+  background-color: rgba(0, 0, 0, 0.2);
+}
+
+.lnbits-transactions-table th,
+.lnbits-transactions-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.lnbits-transactions-table th .q-field,
+.lnbits-transactions-table th .q-select {
+  margin-bottom: 0;
+}
+
+/* Column widths to match LNbits */
+.lnbits-transactions-table .type-col {
+  width: 50px;
+  text-align: center;
+}
+
+.lnbits-transactions-table .date-col {
+  width: 140px;
+}
+
+.lnbits-transactions-table .amount-col {
+  width: 100px;
+  text-align: right;
+}
+
+.lnbits-transactions-table .status-col {
+  width: 95px;
+}
+
+.lnbits-transactions-table .desc-col {
+  width: auto;
+}
+
+.lnbits-transactions-table .hash-col {
+  width: 150px;
+}
+
+/* Icon styling */
+.lnbits-transactions-table .q-icon {
+  font-size: 18px;
+}
+
+/* Search inputs in headers */
+.lnbits-transactions-table th .q-field__control {
+  height: 30px;
+  min-height: 30px;
+  padding: 0 4px;
+}
+
+.lnbits-transactions-table th .q-field__marginal {
+  height: 30px;
+  min-height: 30px;
+}
+
+.lnbits-transactions-table .status-select .q-field__control {
+  padding-right: 8px;
+}
+
+/* Status badges */
 .q-badge {
-  /* Basic pill shape */
-  padding: 0.2em 0.6em;
-  border-radius: 1em;
-  font-size: 0.8em;
-  font-weight: bold;
-
-  /* Ensure proper colors */
-  color: white !important;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.75em;
+  font-weight: normal;
+  text-transform: lowercase;
+  line-height: normal;
 }
 
-.q-badge.text-positive,
-.q-badge.bg-positive {
-  background-color: #21BA45 !important; /* Green for paid */
+/* Specific status colors to match LNbits */
+.q-badge[color="positive"],
+.q-badge[color="green"] {
+  background-color: #21BA45 !important;
 }
 
-.q-badge.text-warning,
-.q-badge.bg-warning {
-  background-color: #F2C037 !important; /* Yellow/orange for pending */
+.q-badge[color="warning"],
+.q-badge[color="orange"] {
+  background-color: #F2C037 !important;
 }
 
-.q-badge.text-negative,
-.q-badge.bg-negative {
-  background-color: #C10015 !important; /* Red for expired */
+.q-badge[color="negative"],
+.q-badge[color="red"] {
+  background-color: #C10015 !important;
 }
 
-.q-badge.text-grey,
-.q-badge.bg-grey {
-  background-color: #9E9E9E !important; /* Grey for cancelled */
+.q-badge[color="grey"] {
+  background-color: #9E9E9E !important;
 }
 
-/* Status-specific colors to match Quasar standards */
-.q-badge.positive {
-  background-color: #21BA45 !important; /* Green for paid */
+/* LNbits icon colors */
+.text-green, .text-positive {
+  color: #21BA45 !important;
 }
 
-.q-badge.warning {
-  background-color: #F2C037 !important; /* Yellow/orange for pending */
+.text-pink, .text-negative {
+  color: #F50057 !important;
 }
 
-.q-badge.negative {
-  background-color: #C10015 !important; /* Red for expired */
+.text-grey {
+  color: #9E9E9E !important;
 }
 
-.q-badge.grey {
-  background-color: #9E9E9E !important; /* Grey for cancelled */
+.text-orange, .text-warning {
+  color: #F2C037 !important;
 }
 
-/* Transaction direction styling */
-.transaction-direction {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.direction-incoming {
-  color: #21BA45 !important; /* Green for received */
-}
-
-.direction-outgoing {
-  color: #C10015 !important; /* Red for sent */
-}
-
-/* Transition effects for invoice table updates */
-.invoices-table .q-table__middle {
-  transition: opacity 0.3s ease;
-}
-
-/* Ensure text in table is visible */
-.q-table td, .q-table th {
-  color: rgba(255, 255, 255, 0.9) !important; /* High contrast for dark mode */
+/* Ellipsis for long text */
+.ellipsis {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 /* Status change animation */
-.invoices-table .status-changed .q-badge {
+.status-changed .q-badge {
   animation: pulse-badge 1s ease;
 }
 
-/* New invoice animation */
-.invoices-table .new-invoice {
+/* New transaction animation */
+.new-transaction {
   animation: fade-in-row 1s ease;
 }
 
-/* Helper classes */
-.text-white {
-  color: white !important;
-}
-
-.text-light {
-  color: rgba(255, 255, 255, 0.8) !important;
-}
-
-.mt-4 {
-  margin-top: 20px;
-}
-
+/* Animation keyframes */
 @keyframes pulse-badge {
   0% {
     transform: scale(1);
@@ -284,12 +325,38 @@
 }
 
 /* Media queries for responsive design */
-@media (min-width: 768px) {
+@media (max-width: 768px) {
   .invoice-form-row {
-    flex-direction: row;
+    flex-direction: column;
   }
+  
+  .lnbits-transactions-table {
+    font-size: 0.7rem;
+  }
+  
+  .lnbits-transactions-table .hash-col,
+  .lnbits-transactions-table .date-col {
+    display: none;
+  }
+}
 
-  .invoice-form-col {
-    flex: 1;
-  }
+/* Custom pagination styling to match LNbits */
+.q-pagination {
+  font-size: 0.8rem;
+}
+
+.q-pagination .q-btn {
+  padding: 0 4px;
+  min-height: 28px;
+  min-width: 28px;
+}
+
+/* Force body text to be visible on dark mode */
+.body--dark .lnbits-transactions-table {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* Force badge colors to be correct */
+.body--dark .q-badge {
+  color: white !important;
 }

@@ -9,7 +9,8 @@
 
 {% block page %}
 <div class="row q-col-gutter-md">
-  <div class="col-12 col-md-8 col-lg-7 q-gutter-y-md">
+  <div class="col-12 q-gutter-y-md">
+    <!-- Assets Card -->
     <q-card>
       <q-card-section>
         <div class="row items-center no-wrap q-mb-sm">
@@ -73,84 +74,182 @@
       </q-card-section>
     </q-card>
 
-    <!-- Transactions Table -->
+    <!-- Recent Transactions Card - Exact LNbits Copy -->
     <q-card>
-      <q-card-section>
-        <div class="row items-center no-wrap q-mb-sm">
+      <q-card-section class="q-pa-none">
+        <div class="row items-center q-px-md q-py-sm">
           <div class="col">
             <h5 class="text-subtitle1 q-my-none">Recent Transactions</h5>
           </div>
           <div class="col-auto">
-            <q-btn flat round dense icon="refresh" color="primary" @click="refreshTransactions">
-              <q-tooltip>Refresh</q-tooltip>
-            </q-btn>
+            <div class="row q-gutter-x-sm">
+              <q-btn flat round dense icon="calendar_today">
+                <q-popup-proxy cover transition-show="scale" transition-hide="scale">
+                  <q-date v-model="searchDate" mask="YYYY-MM-DD" range />
+                  <div class="row q-pa-sm">
+                    <q-btn label="Search" @click="searchByDate()" color="primary" flat class="col" v-close-popup />
+                    <q-btn v-close-popup @click="clearDateSearch()" label="Clear" class="col" color="grey" flat />
+                  </div>
+                </q-popup-proxy>
+                <q-badge v-if="searchDate?.to || searchDate?.from" class="q-mt-lg q-mr-md" color="primary" rounded floating style="border-radius: 6px" />
+              </q-btn>
+              <q-btn flat round dense icon="filter_list">
+                <q-tooltip>Filter</q-tooltip>
+              </q-btn>
+              <q-btn-dropdown flat round dense icon="more_vert">
+                <q-list>
+                  <q-item clickable v-close-popup @click="exportTransactionsCSV">
+                    <q-item-section avatar>
+                      <q-icon name="content_copy" />
+                    </q-item-section>
+                    <q-item-section>Export to CSV</q-item-section>
+                  </q-item>
+                  <q-item clickable v-close-popup @click="exportTransactionsCSVWithDetails">
+                    <q-item-section avatar>
+                      <q-icon name="list" />
+                    </q-item-section>
+                    <q-item-section>Export to CSV with details</q-item-section>
+                  </q-item>
+                </q-list>
+              </q-btn-dropdown>
+              <q-btn flat round dense icon="refresh" @click="refreshTransactions">
+                <q-tooltip>Refresh</q-tooltip>
+              </q-btn>
+            </div>
           </div>
         </div>
-        <q-separator></q-separator>
+        <q-separator />
       </q-card-section>
 
-      <q-card-section>
-        <div v-if="transactionsLoading" class="text-center q-pa-md">
-          <q-spinner color="primary" size="2em" />
-          <div class="q-mt-sm text-grey">Loading transactions...</div>
-        </div>
+      <div v-if="transactionsLoading" class="text-center q-pa-md">
+        <q-spinner color="primary" size="2em" />
+        <div class="q-mt-sm text-grey">Loading transactions...</div>
+      </div>
 
-        <q-table
-          v-else
-          ref="transactionsTable"
-          flat
-          dense
-          :rows="combinedTransactions"
-          :columns="transactionsTable.columns"
-          row-key="id"
-          :pagination="transactionsTable.pagination"
-          class="invoices-table"
-        >
-          <!-- Date column -->
-          <template v-slot:body-cell-created_at="props">
-            <q-td :props="props">
-              {% raw %}{{ props.row.date }}{% endraw %}
-            </q-td>
-          </template>
-
-          <!-- Direction column - simple text like other table cells -->
-          <template v-slot:body-cell-direction="props">
-            <q-td :props="props">
-              {% raw %}{{ props.row.direction === 'incoming' ? 'RECEIVED' : 'SENT' }}{% endraw %}
-            </q-td>
-          </template>
-
-          <!-- Amount column -->
-          <template v-slot:body-cell-amount="props">
-            <q-td :props="props" class="text-right">
-              {% raw %}{{ props.row.asset_amount || props.row.extra?.asset_amount || '0' }}{% endraw %}
-            </q-td>
-          </template>
-
-          <!-- Status column -->
-          <template v-slot:body-cell-status="props">
-            <q-td :props="props">
-              <q-badge
-                :color="getStatusColor(props.row.status)"
-                :class="{'status-changed': props.row._statusChanged}"
-              >
-                {% raw %}{{ props.row.status }}{% endraw %}
-              </q-badge>
-            </q-td>
-          </template>
-
-          <!-- No data message -->
-          <template v-slot:no-data>
-            <div class="text-center text-grey-6 q-py-md">
-              No transactions found
-            </div>
-          </template>
-        </q-table>
-      </q-card-section>
+      <div v-else class="q-pa-none">
+        <table class="lnbits-transactions-table">
+          <thead>
+            <tr>
+              <th class="type-col"></th>
+              <th class="date-col">Date</th>
+              <th class="amount-col">Amount</th>
+              <th class="status-col">
+                <q-select
+                  v-model="filter.status"
+                  :options="[{label: 'All', value: 'all'}, {label: 'Pending', value: 'pending'}, {label: 'Paid', value: 'paid'}, {label: 'Completed', value: 'completed'}]"
+                  label="Status"
+                  dense
+                  outlined
+                  emit-value
+                  map-options
+                  class="status-select"
+                  @update:model-value="applyFilters"
+                ></q-select>
+              </th>
+              <th class="desc-col">
+                <q-input
+                  v-model="searchData.memo"
+                  dense
+                  outlined
+                  placeholder="Description"
+                  @update:model-value="applyFilters"
+                >
+                  <template v-slot:append>
+                    <q-icon name="search" />
+                  </template>
+                </q-input>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="filteredTransactions.length === 0">
+              <td colspan="5" class="text-center q-py-lg">
+                <q-icon name="warning" color="warning" size="sm" class="q-mr-xs"></q-icon>
+                No data available
+              </td>
+            </tr>
+            <tr v-for="tx in filteredTransactions" :key="tx.id" :class="{'status-changed': tx._statusChanged, 'new-transaction': tx._isNew}">
+              <td class="type-col">
+                <q-icon
+                  v-if="tx.status === 'pending'"
+                  name="downloading"
+                  :style="tx.direction === 'outgoing' ? 'transform: rotate(225deg)' : 'transform: scaleX(-1) rotate(315deg)'"
+                  color="grey"
+                  class="cursor-pointer"
+                >
+                  <q-tooltip>pending</q-tooltip>
+                </q-icon>
+                <q-icon
+                  v-else
+                  :name="tx.direction === 'incoming' ? 'call_received' : 'call_made'"
+                  :color="tx.direction === 'incoming' ? 'green' : 'pink'"
+                  class="cursor-pointer"
+                ></q-icon>
+              </td>
+              <td class="date-col">
+                <q-tooltip>{% raw %}{{ formatTransactionDate(tx.created_at) }}{% endraw %}</q-tooltip>
+                {% raw %}{{ tx.timeFrom }}{% endraw %}
+              </td>
+              <td class="amount-col text-right" :class="tx.direction === 'incoming' ? 'text-positive' : 'text-negative'">
+                {% raw %}{{ tx.asset_amount || tx.extra?.asset_amount || '0' }}{% endraw %}
+              </td>
+              <td class="status-col">
+                <q-badge
+                  :color="getStatusColor(tx.status)"
+                  :class="{'status-changed': tx._statusChanged}"
+                >
+                  {% raw %}{{ tx.status }}{% endraw %}
+                </q-badge>
+              </td>
+              <td class="desc-col">
+                <div class="ellipsis" :title="tx.memo">
+                  {% raw %}{{ tx.memo }}{% endraw %}
+                </div>
+              </td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="5">
+                <div class="row justify-between items-center q-px-sm">
+                  <div>
+                    Records per page:
+                    <q-select
+                      v-model="transactionsTable.pagination.rowsPerPage"
+                      :options="[10, 25, 50, 100]"
+                      dense
+                      borderless
+                      emit-value
+                      map-options
+                      options-dense
+                      style="min-width: 70px; display: inline-block"
+                    />
+                  </div>
+                  <div>
+                    {% raw %}{{ paginationLabel }}{% endraw %}
+                  </div>
+                  <div>
+                    <q-pagination
+                      v-model="transactionsTable.pagination.page"
+                      :max="Math.ceil(filteredTransactions.length / transactionsTable.pagination.rowsPerPage) || 1"
+                      :max-pages="6"
+                      direction-links
+                      boundary-links
+                      dense
+                      size="sm"
+                      @update:model-value="applyFilters"
+                    />
+                  </div>
+                </div>
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
     </q-card>
   </div>
 
-  <div class="col-12 col-md-4 col-lg-5">
+  <div class="col-12 col-md-4 col-lg-5" v-if="invoiceDialog.show || createdInvoice">
     <q-card v-if="invoiceDialog.show">
       <q-card-section>
         <h6 class="text-subtitle1 q-my-none text-white">Create Invoice</h6>
@@ -319,4 +418,4 @@
     </q-card-actions>
   </q-card>
 </q-dialog>
-{% endblock %}
+{% endblock %}:

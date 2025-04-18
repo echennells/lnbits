@@ -7,13 +7,36 @@ const mapTransaction = function(transaction, type) {
   mapped.type = type || (transaction.payment_hash ? 'invoice' : 'payment');
   mapped.direction = mapped.type === 'invoice' ? 'incoming' : 'outgoing';
   
-  // Format date consistently
+  // Format date consistently - exactly like LNbits
   if (mapped.created_at) {
     try {
-      mapped.date = Quasar.date.formatDate(new Date(mapped.created_at), 'YYYY-MM-DD HH:mm');
+      const date = new Date(mapped.created_at);
+      // Format exactly like LNbits: YYYY-MM-DD HH:MM:SS
+      mapped.date = Quasar.date.formatDate(date, 'YYYY-MM-DD HH:mm:ss');
+      
+      // Also calculate "timeFrom" like LNbits
+      const now = new Date();
+      const diffMs = now - date;
+      
+      if (diffMs < 60000) { // less than a minute
+        mapped.timeFrom = 'just now';
+      } else if (diffMs < 3600000) { // less than an hour
+        const mins = Math.floor(diffMs / 60000);
+        mapped.timeFrom = `${mins} minute${mins > 1 ? 's' : ''} ago`;
+      } else if (diffMs < 86400000) { // less than a day
+        const hours = Math.floor(diffMs / 3600000);
+        mapped.timeFrom = `${hours} hour${hours > 1 ? 's' : ''} ago`;
+      } else if (diffMs < 604800000) { // less than a week
+        const days = Math.floor(diffMs / 86400000);
+        mapped.timeFrom = `${days} day${days > 1 ? 's' : ''} ago`;
+      } else {
+        // Just use date for older items
+        mapped.timeFrom = mapped.date;
+      }
     } catch (e) {
       console.error('Error formatting date:', e, mapped.created_at);
-      mapped.date = 'Invalid Date';
+      mapped.date = 'Unknown';
+      mapped.timeFrom = 'Unknown';
     }
   }
   
@@ -69,6 +92,20 @@ window.app = Vue.createApp({
       invoices: [],
       payments: [],
       combinedTransactions: [],
+      filteredTransactions: [],
+      paginatedTransactions: [],
+      searchDate: {from: null, to: null},
+      searchData: {
+        wallet_id: null,
+        payment_hash: null,
+        status: null,
+        memo: null,
+        tag: null
+      },
+      filter: {
+        direction: 'all',
+        status: 'all'
+      },
 
       // Form dialog for creating invoices
       invoiceDialog: {
@@ -107,16 +144,11 @@ window.app = Vue.createApp({
       transactionsLoading: false,
       transitionEnabled: false,
       transactionsTable: {
-        columns: [
-          {name: 'created_at', align: 'left', label: 'Date', field: 'date', sortable: true},
-          {name: 'direction', align: 'center', label: 'Type', field: 'direction'},
-          {name: 'memo', align: 'left', label: 'Description', field: 'memo'},
-          {name: 'amount', align: 'right', label: 'Amount', field: row => row.asset_amount || row.extra?.asset_amount},
-          {name: 'status', align: 'center', label: 'Status', field: 'status'}
-        ],
         pagination: {
           rowsPerPage: 10,
-          page: 1
+          page: 1,
+          sortBy: 'created_at',
+          descending: true
         }
       },
 
@@ -155,6 +187,24 @@ window.app = Vue.createApp({
     isInvoiceAmountValid() {
       if (!this.invoiceDialog.selectedAsset) return false;
       return parseFloat(this.invoiceDialog.form.amount) <= this.maxInvoiceAmount;
+    },
+    // Pagination label (X-Y of Z format like LNbits)
+    paginationLabel() {
+      const { page, rowsPerPage } = this.transactionsTable.pagination;
+      const totalItems = this.filteredTransactions.length;
+      
+      const startIndex = (page - 1) * rowsPerPage + 1;
+      const endIndex = Math.min(startIndex + rowsPerPage - 1, totalItems);
+      
+      if (totalItems === 0) return '0-0 of 0';
+      return `${startIndex}-${endIndex} of ${totalItems}`;
+    },
+    // Get displayed items based on pagination
+    paginatedItems() {
+      const { page, rowsPerPage } = this.transactionsTable.pagination;
+      const startIndex = (page - 1) * rowsPerPage;
+      const endIndex = startIndex + rowsPerPage;
+      return this.filteredTransactions.slice(startIndex, endIndex);
     }
   },
   methods: {
@@ -168,6 +218,56 @@ window.app = Vue.createApp({
     // Check if a channel is active (used for styling)
     isChannelActive(asset) {
       return asset.channel_info && asset.channel_info.active !== false;
+    },
+
+    // Format transaction date consistently
+    formatTransactionDate(dateStr) {
+      try {
+        const date = new Date(dateStr);
+        return Quasar.date.formatDate(date, 'YYYY-MM-DD HH:mm:ss');
+      } catch (e) {
+        return dateStr || 'Unknown date';
+      }
+    },
+    
+    // Shortify long text (like payment hash) - exactly like LNbits
+    shortify(text, maxLength = 10) {
+      if (!text) return '';
+      if (text.length <= maxLength) return text;
+      
+      const half = Math.floor(maxLength / 2);
+      return `${text.substring(0, half)}...${text.substring(text.length - half)}`;
+    },
+    
+    // Copy text to clipboard - fixed to use document.execCommand only
+    copyText(text) {
+      if (!text) return;
+      
+      try {
+        // Create a temporary input element
+        const tempInput = document.createElement('input');
+        tempInput.value = text;
+        document.body.appendChild(tempInput);
+        tempInput.select();
+        document.execCommand('copy');
+        document.body.removeChild(tempInput);
+        
+        // Show notification
+        this.$q.notify({
+          message: 'Copied to clipboard',
+          color: 'positive',
+          icon: 'check',
+          timeout: 1000
+        });
+      } catch (e) {
+        console.error('Failed to copy text:', e);
+        this.$q.notify({
+          message: 'Failed to copy to clipboard',
+          color: 'negative',
+          icon: 'error',
+          timeout: 1000
+        });
+      }
     },
 
     toggleSettings() {
@@ -298,6 +398,8 @@ window.app = Vue.createApp({
 
           // Combine transactions and enable transitions
           this.combineTransactions();
+          this.applyFilters();
+          
           if (!this.transitionEnabled) {
             setTimeout(() => {
               this.transitionEnabled = true;
@@ -340,6 +442,7 @@ window.app = Vue.createApp({
 
           this.payments = processedPayments;
           this.combineTransactions();
+          this.applyFilters();
         })
         .catch(err => {
           console.error('Failed to fetch payments:', err);
@@ -357,6 +460,94 @@ window.app = Vue.createApp({
       ].sort((a, b) => {
         return new Date(b.created_at) - new Date(a.created_at);
       });
+      
+      // Apply filters and search
+      this.applyFilters();
+    },
+    
+    applyFilters() {
+      let result = [...this.combinedTransactions];
+      
+      // Apply direction filter
+      if (this.filter.direction !== 'all') {
+        result = result.filter(tx => tx.direction === this.filter.direction);
+      }
+      
+      // Apply status filter
+      if (this.filter.status !== 'all') {
+        result = result.filter(tx => tx.status === this.filter.status);
+      }
+      
+      // Apply memo search
+      if (this.searchData.memo) {
+        const searchLower = this.searchData.memo.toLowerCase();
+        result = result.filter(tx => 
+          tx.memo && tx.memo.toLowerCase().includes(searchLower)
+        );
+      }
+      
+      // Apply payment hash search
+      if (this.searchData.payment_hash) {
+        const searchLower = this.searchData.payment_hash.toLowerCase();
+        result = result.filter(tx =>
+          tx.payment_hash && tx.payment_hash.toLowerCase().includes(searchLower)
+        );
+      }
+      
+      // Apply date range filter
+      if (this.searchDate.from || this.searchDate.to) {
+        result = result.filter(tx => {
+          const txDate = new Date(tx.created_at);
+          let matches = true;
+          
+          if (this.searchDate.from) {
+            const fromDate = new Date(this.searchDate.from);
+            fromDate.setHours(0, 0, 0, 0);
+            if (txDate < fromDate) matches = false;
+          }
+          
+          if (matches && this.searchDate.to) {
+            const toDate = new Date(this.searchDate.to);
+            toDate.setHours(23, 59, 59, 999);
+            if (txDate > toDate) matches = false;
+          }
+          
+          return matches;
+        });
+      }
+      
+      // Update filtered transactions
+      this.filteredTransactions = result;
+      
+      // Reset to first page when filtering
+      if (this.transactionsTable.pagination.page > 1) {
+        this.transactionsTable.pagination.page = 1;
+      }
+    },
+    
+    searchByDate() {
+      this.applyFilters();
+    },
+    
+    clearDateSearch() {
+      this.searchDate = { from: null, to: null };
+      this.applyFilters();
+    },
+    
+    resetFilters() {
+      this.filter = {
+        direction: 'all',
+        status: 'all'
+      };
+      this.searchData = {
+        wallet_id: null,
+        payment_hash: null,
+        status: null,
+        memo: null,
+        tag: null
+      };
+      this.searchDate = { from: null, to: null };
+      this.applyFilters();
     },
 
     // Check if transactions have changed
@@ -465,10 +656,14 @@ window.app = Vue.createApp({
             if (data.data.status === 'paid' && this.invoices[index].status !== 'paid') {
               const assetName = this.findAssetName(data.data.asset_id) || 'Unknown Asset';
               const amount = data.data.asset_amount || this.invoices[index].asset_amount;
-              LNbits.utils.notifySuccess(`Invoice Paid: ${amount} ${assetName}`);
+              this.$q.notify({
+                message: `Invoice Paid: ${amount} ${assetName}`,
+                color: 'positive',
+                icon: 'check_circle',
+                timeout: 2000
+              });
               
-              // KEY CHANGE: Force a direct refresh of assets after payment
-              // This is the simple fix - just refresh assets after payment
+              // Force a direct refresh of assets after payment
               console.log('Invoice paid - scheduling asset refresh');
               setTimeout(() => {
                 console.log('Running delayed asset refresh');
@@ -597,6 +792,122 @@ window.app = Vue.createApp({
       this.websocketConnected = false;
     },
     
+    // CSV export functions
+    exportTransactionsCSV() {
+      const rows = this.filteredTransactions.map(tx => {
+        // Format data for CSV
+        return {
+          date: this.formatTransactionDate(tx.created_at),
+          type: tx.direction === 'incoming' ? 'RECEIVED' : 'SENT',
+          description: tx.memo || '',
+          amount: tx.asset_amount || tx.extra?.asset_amount || '',
+          asset: this.findAssetName(tx.asset_id) || tx.asset_id || '',
+          status: tx.status || ''
+        };
+      });
+      
+      // Generate CSV
+      this.downloadCSV(rows, 'taproot-asset-transactions.csv');
+    },
+    
+    exportTransactionsCSVWithDetails() {
+      const rows = this.filteredTransactions.map(tx => {
+        // Format data for detailed CSV
+        const baseData = {
+          date: this.formatTransactionDate(tx.created_at),
+          type: tx.direction === 'incoming' ? 'RECEIVED' : 'SENT',
+          description: tx.memo || '',
+          amount: tx.asset_amount || tx.extra?.asset_amount || '',
+          asset: this.findAssetName(tx.asset_id) || tx.asset_id || '',
+          status: tx.status || '',
+          id: tx.id || '',
+          payment_hash: tx.payment_hash || ''
+        };
+        
+        // Add payment-specific fields
+        if (tx.direction === 'outgoing') {
+          baseData.fee_sats = tx.fee_sats || tx.extra?.fee_sats || '';
+          baseData.preimage = tx.preimage || '';
+        }
+        
+        // Add invoice-specific fields
+        if (tx.direction === 'incoming') {
+          baseData.satoshi_amount = tx.satoshi_amount || '';
+          baseData.expires_at = tx.expires_at ? this.formatTransactionDate(tx.expires_at) : '';
+          baseData.paid_at = tx.paid_at ? this.formatTransactionDate(tx.paid_at) : '';
+        }
+        
+        return baseData;
+      });
+      
+      // Generate CSV with more details
+      this.downloadCSV(rows, 'taproot-asset-transactions-details.csv');
+    },
+    
+    downloadCSV(rows, filename) {
+      if (!rows || rows.length === 0) {
+        this.$q.notify({
+          message: 'No data to export',
+          color: 'warning',
+          timeout: 2000
+        });
+        return;
+      }
+      
+      // Get headers from first row
+      const headers = Object.keys(rows[0]);
+      
+      // Create CSV content
+      let csvContent = headers.join(',') + '\n';
+      
+      // Add rows
+      rows.forEach(row => {
+        const csvRow = headers.map(header => {
+          // Handle values that might contain commas or quotes
+          const value = row[header] !== undefined && row[header] !== null ? row[header].toString() : '';
+          if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+            // Properly escape quotes by doubling them and wrap in quotes
+            return '"' + value.replace(/"/g, '""') + '"';
+          }
+          return value;
+        });
+        csvContent += csvRow.join(',') + '\n';
+      });
+      
+      // Create download link
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', filename);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      this.$q.notify({
+        message: 'Transactions exported successfully',
+        color: 'positive',
+        icon: 'check_circle',
+        timeout: 2000
+      });
+    },
+    
+    getStatusColor(status) {
+      switch (status) {
+        case 'paid':
+        case 'completed':
+          return 'positive';
+        case 'pending':
+          return 'warning';
+        case 'expired':
+          return 'negative';
+        case 'cancelled':
+        default:
+          return 'grey';
+      }
+    },
+    
     // Invoice dialog methods
     openInvoiceDialog(asset) {
       // Refresh assets first to ensure we have the latest channel status
@@ -604,7 +915,12 @@ window.app = Vue.createApp({
       
       // Don't allow creating invoices for inactive channels
       if (asset.channel_info && asset.channel_info.active === false) {
-        LNbits.utils.notifyError('Cannot create invoice for inactive channel');
+        this.$q.notify({
+          message: 'Cannot create invoice for inactive channel',
+          color: 'negative',
+          icon: 'warning',
+          timeout: 2000
+        });
         return;
       }
       
@@ -694,7 +1010,12 @@ window.app = Vue.createApp({
           }
           
           // Show error notification
-          LNbits.utils.notifyError(errorMessage);
+          this.$q.notify({
+            message: errorMessage,
+            color: 'negative',
+            icon: 'warning',
+            timeout: 2000
+          });
         })
         .finally(() => {
           this.isSubmitting = false;
@@ -708,7 +1029,12 @@ window.app = Vue.createApp({
       
       // Don't allow payments from inactive channels
       if (asset.channel_info && asset.channel_info.active === false) {
-        LNbits.utils.notifyError('Cannot send payment from inactive channel');
+        this.$q.notify({
+          message: 'Cannot send payment from inactive channel',
+          color: 'negative',
+          icon: 'warning',
+          timeout: 2000
+        });
         return;
       }
       
@@ -733,7 +1059,12 @@ window.app = Vue.createApp({
     async submitPaymentForm() {
       if (this.paymentDialog.inProgress || !this.g.user.wallets.length) return;
       if (!this.paymentDialog.form.paymentRequest) {
-        LNbits.utils.notifyError('Please enter an invoice to pay');
+        this.$q.notify({
+          message: 'Please enter an invoice to pay',
+          color: 'negative',
+          icon: 'warning',
+          timeout: 2000
+        });
         return;
       }
 
@@ -804,56 +1135,27 @@ window.app = Vue.createApp({
         }
         
         // Show error notification
-        LNbits.utils.notifyError(errorMessage);
+        this.$q.notify({
+          message: errorMessage,
+          color: 'negative',
+          icon: 'warning',
+          timeout: 2000
+        });
       } finally {
         this.paymentDialog.inProgress = false;
       }
     },
     
-    // Utility methods
+    // Invoice copy helper
     copyInvoice(invoice) {
       const textToCopy = typeof invoice === 'string'
         ? invoice
         : (invoice.payment_request || invoice.id || JSON.stringify(invoice) || 'No invoice data available');
 
-      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-        navigator.clipboard.writeText(textToCopy)
-          .then(() => {
-            console.log('Invoice copied to clipboard');
-          })
-          .catch(err => {
-            console.error('Clipboard API failed:', err);
-            this.fallbackCopy(textToCopy);
-          });
-      } else {
-        this.fallbackCopy(textToCopy);
-      }
+      this.copyText(textToCopy);
     },
     
-    fallbackCopy(text) {
-      const tempInput = document.createElement('input');
-      tempInput.value = text;
-      document.body.appendChild(tempInput);
-      tempInput.select();
-      document.execCommand('copy');
-      document.body.removeChild(tempInput);
-    },
-    
-    getStatusColor(status) {
-      switch (status) {
-        case 'paid':
-        case 'completed':
-          return 'positive';
-        case 'pending':
-          return 'warning';
-        case 'expired':
-          return 'negative';
-        case 'cancelled':
-        default:
-          return 'grey';
-      }
-    },
-    
+    // Refresh methods
     refreshTransactions() {
       this.getInvoices(true);
       this.getPayments(true);
