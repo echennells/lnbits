@@ -209,10 +209,30 @@ window.app = Vue.createApp({
       this.isRefreshing = true;
       const wallet = this.g.user.wallets[0];
 
+      console.log('Fetching assets...');
+      
       LNbits.api
         .request('GET', '/taproot_assets/api/v1/taproot/listassets', wallet.adminkey)
         .then(response => {
-          this.assets = Array.isArray(response.data) ? response.data : [];
+          console.log('Assets received:', response.data);
+          
+          // Create a new array instead of modifying the existing one
+          const newAssets = Array.isArray(response.data) ? JSON.parse(JSON.stringify(response.data)) : [];
+          
+          // Log asset balances for debugging
+          if (newAssets.length > 0) {
+            const balances = newAssets
+              .filter(asset => asset.channel_info)
+              .map(asset => ({
+                name: asset.name,
+                balance: asset.channel_info.local_balance
+              }));
+            console.log('Current asset balances:', balances);
+          }
+          
+          // Replace the assets array
+          this.assets = newAssets;
+          
           if (this.assets.length > 0) {
             this.updateTransactionDescriptions();
           }
@@ -441,11 +461,19 @@ window.app = Vue.createApp({
             // Update in array (Vue 3 way)
             this.invoices[index] = updatedInvoice;
             
-            // Notify user about paid invoices
+            // Notify user about paid invoices and force asset refresh
             if (data.data.status === 'paid' && this.invoices[index].status !== 'paid') {
               const assetName = this.findAssetName(data.data.asset_id) || 'Unknown Asset';
               const amount = data.data.asset_amount || this.invoices[index].asset_amount;
               LNbits.utils.notifySuccess(`Invoice Paid: ${amount} ${assetName}`);
+              
+              // KEY CHANGE: Force a direct refresh of assets after payment
+              // This is the simple fix - just refresh assets after payment
+              console.log('Invoice paid - scheduling asset refresh');
+              setTimeout(() => {
+                console.log('Running delayed asset refresh');
+                this.getAssets();
+              }, 500);
             }
           } else {
             // Add new invoice
@@ -504,10 +532,21 @@ window.app = Vue.createApp({
         console.log('Balances WebSocket message:', data);
         
         if (data.type === 'assets_update' && Array.isArray(data.data)) {
-          // Update assets with new data
-          this.assets = data.data;
+          console.log('New assets data from WebSocket:', data.data);
           
-          // Update transaction descriptions
+          // Create a completely new array with deep copies of each asset
+          const newAssets = JSON.parse(JSON.stringify(data.data));
+          
+          // Log the current assets for comparison
+          console.log('Current assets before update:', this.assets);
+          
+          // Replace the assets array with the new data
+          this.assets = newAssets;
+          
+          // Log the updated assets
+          console.log('Assets after update:', this.assets);
+          
+          // Update transaction descriptions with new asset names
           this.updateTransactionDescriptions();
         }
       } catch (e) {
@@ -727,7 +766,12 @@ window.app = Vue.createApp({
         
         // WebSockets will handle UI updates, but refresh just in case
         await this.refreshTransactions();
-        await this.getAssets();
+        
+        // Force asset refresh after sending payment
+        setTimeout(() => {
+          console.log('Payment completed - refreshing assets directly');
+          this.getAssets();
+        }, 500);
 
       } catch (error) {
         console.error('Payment failed:', error);

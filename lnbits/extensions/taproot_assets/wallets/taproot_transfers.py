@@ -66,6 +66,14 @@ async def direct_settle_invoice(node, payment_hash: str) -> bool:
             if updated_invoice and updated_invoice.status == "paid":
                 logger.info(f"Database updated: Invoice {invoice.id} status set to paid")
                 
+                # ADDED LOGGING: Get current asset balances for debugging
+                logger.info(f"BALANCE UPDATE: Invoice {invoice.id} paid, trying to find asset: {invoice.asset_id}")
+                assets = await node.list_assets()
+                if assets:
+                    for asset in assets:
+                        if asset.get('channel_info'):
+                            logger.info(f"BALANCE UPDATE: Asset {asset.get('name')} (ID: {asset.get('asset_id')[:10]}...) Balance: {asset.get('channel_info', {}).get('local_balance')}")
+                
                 # Send WebSocket notification of the invoice update
                 await ws_manager.notify_invoice_update(
                     invoice.user_id, 
@@ -85,6 +93,12 @@ async def direct_settle_invoice(node, payment_hash: str) -> bool:
                     # Only send the channel assets which have balances
                     filtered_assets = [asset for asset in assets if asset.get("channel_info")]
                     if filtered_assets:
+                        # ADDED LOGGING: Show what we're sending via WebSocket
+                        logger.info(f"BALANCE UPDATE: Sending {len(filtered_assets)} assets via WebSocket")
+                        for asset in filtered_assets:
+                            if asset.get('channel_info'):
+                                logger.info(f"BALANCE UPDATE: Sending asset {asset.get('name')} with balance {asset.get('channel_info').get('local_balance')}")
+                        
                         await ws_manager.notify_assets_update(invoice.user_id, filtered_assets)
                 except Exception as asset_err:
                     logger.error(f"Failed to fetch assets for WebSocket update: {str(asset_err)}")
@@ -105,6 +119,14 @@ async def direct_settle_invoice(node, payment_hash: str) -> bool:
                 updated_invoice = await update_invoice_status(invoice.id, "paid")
                 logger.info(f"Updated previously settled invoice {invoice.id} status in database")
                 
+                # ADDED LOGGING: Get current asset balances for already settled invoices
+                logger.info(f"BALANCE UPDATE (already settled): Invoice {invoice.id} paid, trying to find asset: {invoice.asset_id}")
+                assets = await node.list_assets()
+                if assets:
+                    for asset in assets:
+                        if asset.get('channel_info'):
+                            logger.info(f"BALANCE UPDATE (already settled): Asset {asset.get('name')} (ID: {asset.get('asset_id')[:10]}...) Balance: {asset.get('channel_info', {}).get('local_balance')}")
+                
                 # Send WebSocket notification for this case too
                 if updated_invoice:
                     await ws_manager.notify_invoice_update(
@@ -124,6 +146,12 @@ async def direct_settle_invoice(node, payment_hash: str) -> bool:
                         assets = await node.list_assets()
                         filtered_assets = [asset for asset in assets if asset.get("channel_info")]
                         if filtered_assets:
+                            # ADDED LOGGING: Show what we're sending
+                            logger.info(f"BALANCE UPDATE (already settled): Sending {len(filtered_assets)} assets via WebSocket")
+                            for asset in filtered_assets:
+                                if asset.get('channel_info'):
+                                    logger.info(f"BALANCE UPDATE (already settled): Sending asset {asset.get('name')} with balance {asset.get('channel_info').get('local_balance')}")
+                            
                             await ws_manager.notify_assets_update(invoice.user_id, filtered_assets)
                     except Exception as asset_err:
                         logger.error(f"Failed to fetch assets for WebSocket update: {str(asset_err)}")
