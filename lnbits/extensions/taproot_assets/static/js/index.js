@@ -14,12 +14,12 @@ const mapTransaction = function(transaction, type) {
       // Format exactly like LNbits: YYYY-MM-DD HH:MM:SS
       mapped.date = Quasar.date.formatDate(date, 'YYYY-MM-DD HH:mm:ss');
       
-      // Also calculate "timeFrom" like LNbits
+      // Calculate "timeFrom" like LNbits
       const now = new Date();
       const diffMs = now - date;
       
       if (diffMs < 60000) { // less than a minute
-        mapped.timeFrom = 'just now';
+        mapped.timeFrom = 'a minute ago';
       } else if (diffMs < 3600000) { // less than an hour
         const mins = Math.floor(diffMs / 60000);
         mapped.timeFrom = `${mins} minute${mins > 1 ? 's' : ''} ago`;
@@ -193,11 +193,14 @@ window.app = Vue.createApp({
       const { page, rowsPerPage } = this.transactionsTable.pagination;
       const totalItems = this.filteredTransactions.length;
       
-      const startIndex = (page - 1) * rowsPerPage + 1;
-      const endIndex = Math.min(startIndex + rowsPerPage - 1, totalItems);
+      // Always show actual count when there are items
+      if (totalItems > 0) {
+        const startIndex = Math.min((page - 1) * rowsPerPage + 1, totalItems);
+        const endIndex = Math.min(startIndex + rowsPerPage - 1, totalItems);
+        return `${startIndex}-${endIndex} of ${totalItems}`;
+      }
       
-      if (totalItems === 0) return '0-0 of 0';
-      return `${startIndex}-${endIndex} of ${totalItems}`;
+      return '0-0 of 0';
     },
     // Get displayed items based on pagination
     paginatedItems() {
@@ -213,6 +216,11 @@ window.app = Vue.createApp({
       if (!assetId || !this.assets || this.assets.length === 0) return null;
       const asset = this.assets.find(a => a.asset_id === assetId);
       return asset ? asset.name : null;
+    },
+
+    // Get just the asset name without "Taproot Asset Transfer:" prefix
+    getAssetNameFromId(assetId) {
+      return this.findAssetName(assetId);
     },
 
     // Check if a channel is active (used for styling)
@@ -521,6 +529,12 @@ window.app = Vue.createApp({
       
       // Reset to first page when filtering
       if (this.transactionsTable.pagination.page > 1) {
+        this.transactionsTable.pagination.page = 1;
+      }
+      
+      // Force correct pagination display if needed
+      if (this.filteredTransactions.length > 0 && 
+          (this.transactionsTable.pagination.page - 1) * this.transactionsTable.pagination.rowsPerPage >= this.filteredTransactions.length) {
         this.transactionsTable.pagination.page = 1;
       }
     },

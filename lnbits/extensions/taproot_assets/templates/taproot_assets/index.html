@@ -132,38 +132,13 @@
             <tr>
               <th class="type-col"></th>
               <th class="date-col">Date</th>
+              <th class="asset-col">Asset</th>
               <th class="amount-col">Amount</th>
-              <th class="status-col">
-                <q-select
-                  v-model="filter.status"
-                  :options="[{label: 'All', value: 'all'}, {label: 'Pending', value: 'pending'}, {label: 'Paid', value: 'paid'}, {label: 'Completed', value: 'completed'}]"
-                  label="Status"
-                  dense
-                  outlined
-                  emit-value
-                  map-options
-                  class="status-select"
-                  @update:model-value="applyFilters"
-                ></q-select>
-              </th>
-              <th class="desc-col">
-                <q-input
-                  v-model="searchData.memo"
-                  dense
-                  outlined
-                  placeholder="Description"
-                  @update:model-value="applyFilters"
-                >
-                  <template v-slot:append>
-                    <q-icon name="search" />
-                  </template>
-                </q-input>
-              </th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="filteredTransactions.length === 0">
-              <td colspan="5" class="text-center q-py-lg">
+              <td colspan="4" class="text-center q-py-lg">
                 <q-icon name="warning" color="warning" size="sm" class="q-mr-xs"></q-icon>
                 No data available
               </td>
@@ -190,27 +165,17 @@
                 <q-tooltip>{% raw %}{{ formatTransactionDate(tx.created_at) }}{% endraw %}</q-tooltip>
                 {% raw %}{{ tx.timeFrom }}{% endraw %}
               </td>
-              <td class="amount-col text-right" :class="tx.direction === 'incoming' ? 'text-positive' : 'text-negative'">
+              <td class="asset-col">
+                {% raw %}{{ getAssetNameFromId(tx.asset_id) || 'Unknown' }}{% endraw %}
+              </td>
+              <td class="amount-col text-right">
                 {% raw %}{{ tx.asset_amount || tx.extra?.asset_amount || '0' }}{% endraw %}
-              </td>
-              <td class="status-col">
-                <q-badge
-                  :color="getStatusColor(tx.status)"
-                  :class="{'status-changed': tx._statusChanged}"
-                >
-                  {% raw %}{{ tx.status }}{% endraw %}
-                </q-badge>
-              </td>
-              <td class="desc-col">
-                <div class="ellipsis" :title="tx.memo">
-                  {% raw %}{{ tx.memo }}{% endraw %}
-                </div>
               </td>
             </tr>
           </tbody>
           <tfoot>
             <tr>
-              <td colspan="5">
+              <td colspan="4">
                 <div class="row justify-between items-center q-px-sm">
                   <div>
                     Records per page:
@@ -418,4 +383,4 @@
     </q-card-actions>
   </q-card>
 </q-dialog>
-{% endblock %}:
+{% endblock %}

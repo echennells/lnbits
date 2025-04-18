@@ -197,21 +197,21 @@
   width: 140px;
 }
 
-.lnbits-transactions-table .amount-col {
-  width: 100px;
-  text-align: right;
-}
-
-.lnbits-transactions-table .status-col {
-  width: 95px;
-}
-
-.lnbits-transactions-table .desc-col {
-  width: auto;
-}
-
-.lnbits-transactions-table .hash-col {
+.lnbits-transactions-table .asset-col {
   width: 150px;
+  color: white !important;
+  text-align: left;
+}
+
+.lnbits-transactions-table .amount-col {
+  width: 120px;
+  text-align: right;
+  color: white !important;
+  font-weight: 500;
+}
+
+.lnbits-transactions-table .desc-col .ellipsis {
+  color: rgba(255, 255, 255, 0.8);
 }
 
 /* Icon styling */
@@ -235,36 +235,6 @@
   padding-right: 8px;
 }
 
-/* Status badges */
-.q-badge {
-  padding: 0.15em 0.4em;
-  border-radius: 4px;
-  font-size: 0.75em;
-  font-weight: normal;
-  text-transform: lowercase;
-  line-height: normal;
-}
-
-/* Specific status colors to match LNbits */
-.q-badge[color="positive"],
-.q-badge[color="green"] {
-  background-color: #21BA45 !important;
-}
-
-.q-badge[color="warning"],
-.q-badge[color="orange"] {
-  background-color: #F2C037 !important;
-}
-
-.q-badge[color="negative"],
-.q-badge[color="red"] {
-  background-color: #C10015 !important;
-}
-
-.q-badge[color="grey"] {
-  background-color: #9E9E9E !important;
-}
-
 /* LNbits icon colors */
 .text-green, .text-positive {
   color: #21BA45 !important;
@@ -280,6 +250,11 @@
 
 .text-orange, .text-warning {
   color: #F2C037 !important;
+}
+
+/* Make amount value white instead of green/red */
+.lnbits-transactions-table .amount-col {
+  color: white !important;
 }
 
 /* Ellipsis for long text */
@@ -356,7 +331,10 @@
   color: rgba(255, 255, 255, 0.85);
 }
 
-/* Force badge colors to be correct */
-.body--dark .q-badge {
+/* Force amounts to be white in table */
+.body--dark .lnbits-transactions-table .amount-col,
+.lnbits-transactions-table .amount-col,
+.body--dark .lnbits-transactions-table .asset-col,
+.lnbits-transactions-table .asset-col {
   color: white !important;
 }
