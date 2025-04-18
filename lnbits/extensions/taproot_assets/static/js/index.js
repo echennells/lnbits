@@ -1,83 +1,14 @@
-// Helper function to map transaction objects (works for both invoices and payments)
-const mapTransaction = function(transaction, type) {
-  // Create a clean copy
-  const mapped = {...transaction};
-  
-  // Set type and direction
-  mapped.type = type || (transaction.payment_hash ? 'invoice' : 'payment');
-  mapped.direction = mapped.type === 'invoice' ? 'incoming' : 'outgoing';
-  
-  // Format date consistently - exactly like LNbits
-  if (mapped.created_at) {
-    try {
-      const date = new Date(mapped.created_at);
-      // Format exactly like LNbits: YYYY-MM-DD HH:MM:SS
-      mapped.date = Quasar.date.formatDate(date, 'YYYY-MM-DD HH:mm:ss');
-      
-      // Calculate "timeFrom" like LNbits
-      const now = new Date();
-      const diffMs = now - date;
-      
-      if (diffMs < 60000) { // less than a minute
-        mapped.timeFrom = 'a minute ago';
-      } else if (diffMs < 3600000) { // less than an hour
-        const mins = Math.floor(diffMs / 60000);
-        mapped.timeFrom = `${mins} minute${mins > 1 ? 's' : ''} ago`;
-      } else if (diffMs < 86400000) { // less than a day
-        const hours = Math.floor(diffMs / 3600000);
-        mapped.timeFrom = `${hours} hour${hours > 1 ? 's' : ''} ago`;
-      } else if (diffMs < 604800000) { // less than a week
-        const days = Math.floor(diffMs / 86400000);
-        mapped.timeFrom = `${days} day${days > 1 ? 's' : ''} ago`;
-      } else {
-        // Just use date for older items
-        mapped.timeFrom = mapped.date;
-      }
-    } catch (e) {
-      console.error('Error formatting date:', e, mapped.created_at);
-      mapped.date = 'Unknown';
-      mapped.timeFrom = 'Unknown';
-    }
-  }
-  
-  // Ensure extra exists and contains asset info
-  mapped.extra = mapped.extra || {};
-  
-  if (mapped.type === 'invoice') {
-    // For invoices
-    if (!mapped.extra.asset_amount && mapped.asset_amount) {
-      mapped.extra.asset_amount = mapped.asset_amount;
-    }
-    
-    if (!mapped.extra.asset_id && mapped.asset_id) {
-      mapped.extra.asset_id = mapped.asset_id;
-    }
-  } else {
-    // For payments
-    mapped.extra = {
-      asset_amount: mapped.asset_amount,
-      asset_id: mapped.asset_id,
-      fee_sats: mapped.fee_sats
-    };
-  }
-  
-  return mapped;
-};
+/**
+ * Main JavaScript for Taproot Assets extension
+ */
 
-// Use the shared mapping function for both types
-const mapInvoice = function(invoice) {
-  return mapTransaction(invoice, 'invoice');
-};
-
-const mapPayment = function(payment) {
-  return mapTransaction(payment, 'payment');
-};
-
+// Create the Vue application
 window.app = Vue.createApp({
-  el: '#vue',
   mixins: [windowMixin],
+  
   data() {
     return {
+      // Settings
       settings: {
         tapd_host: '',
         tapd_network: 'signet',
@@ -85,15 +16,19 @@ window.app = Vue.createApp({
         tapd_macaroon_path: '',
         tapd_macaroon_hex: '',
         lnd_macaroon_path: '',
-        lnd_macaroon_hex: ''
+        lnd_macaroon_hex: '',
+        default_sat_fee: 1
       },
       showSettings: false,
+      
+      // Assets
       assets: [],
+      
+      // Invoices and payments
       invoices: [],
       payments: [],
       combinedTransactions: [],
       filteredTransactions: [],
-      paginatedTransactions: [],
       searchDate: {from: null, to: null},
       searchData: {
         wallet_id: null,
@@ -107,7 +42,7 @@ window.app = Vue.createApp({
         status: 'all'
       },
 
-      // Form dialog for creating invoices
+      // Form dialog for creating invoices - EXPLICITLY INITIALIZED
       invoiceDialog: {
         show: false,
         selectedAsset: null,
@@ -121,7 +56,7 @@ window.app = Vue.createApp({
       // Created invoice data
       createdInvoice: null,
 
-      // For sending payments
+      // For sending payments - EXPLICITLY INITIALIZED
       paymentDialog: {
         show: false,
         selectedAsset: null,
@@ -132,7 +67,7 @@ window.app = Vue.createApp({
         inProgress: false
       },
 
-      // Success dialog
+      // Success dialog - EXPLICITLY INITIALIZED
       successDialog: {
         show: false
       },
@@ -201,13 +136,6 @@ window.app = Vue.createApp({
       }
       
       return '0-0 of 0';
-    },
-    // Get displayed items based on pagination
-    paginatedItems() {
-      const { page, rowsPerPage } = this.transactionsTable.pagination;
-      const startIndex = (page - 1) * rowsPerPage;
-      const endIndex = startIndex + rowsPerPage;
-      return this.filteredTransactions.slice(startIndex, endIndex);
     }
   },
   methods: {
@@ -229,55 +157,19 @@ window.app = Vue.createApp({
     },
 
     // Format transaction date consistently
-    formatTransactionDate(dateStr) {
-      try {
-        const date = new Date(dateStr);
-        return Quasar.date.formatDate(date, 'YYYY-MM-DD HH:mm:ss');
-      } catch (e) {
-        return dateStr || 'Unknown date';
-      }
-    },
-    
-    // Shortify long text (like payment hash) - exactly like LNbits
-    shortify(text, maxLength = 10) {
-      if (!text) return '';
-      if (text.length <= maxLength) return text;
-      
-      const half = Math.floor(maxLength / 2);
-      return `${text.substring(0, half)}...${text.substring(text.length - half)}`;
-    },
-    
-    // Copy text to clipboard - fixed to use document.execCommand only
+    formatTransactionDate,
+    // Shortify long text (like payment hash)
+    shortify,
+    // Copy text to clipboard
     copyText(text) {
-      if (!text) return;
-      
-      try {
-        // Create a temporary input element
-        const tempInput = document.createElement('input');
-        tempInput.value = text;
-        document.body.appendChild(tempInput);
-        tempInput.select();
-        document.execCommand('copy');
-        document.body.removeChild(tempInput);
-        
-        // Show notification
-        this.$q.notify({
-          message: 'Copied to clipboard',
-          color: 'positive',
-          icon: 'check',
-          timeout: 1000
-        });
-      } catch (e) {
-        console.error('Failed to copy text:', e);
-        this.$q.notify({
-          message: 'Failed to copy to clipboard',
-          color: 'negative',
-          icon: 'error',
-          timeout: 1000
-        });
-      }
+      copyText(text, notification => {
+        this.$q.notify(notification);
+      });
     },
-
+    // Get status color
+    getStatusColor,
+    
+    // Settings methods
     toggleSettings() {
       this.showSettings = !this.showSettings
     },
@@ -286,8 +178,7 @@ window.app = Vue.createApp({
       if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
 
-      LNbits.api
-        .request('GET', '/taproot_assets/api/v1/taproot/settings', wallet.adminkey)
+      getSettings(wallet.adminkey)
         .then(response => {
           this.settings = response.data;
         })
@@ -300,8 +191,7 @@ window.app = Vue.createApp({
       if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
 
-      LNbits.api
-        .request('PUT', '/taproot_assets/api/v1/taproot/settings', wallet.adminkey, this.settings)
+      saveSettings(wallet.adminkey, this.settings)
         .then(response => {
           this.settings = response.data;
           this.showSettings = false;
@@ -319,8 +209,7 @@ window.app = Vue.createApp({
 
       console.log('Fetching assets...');
       
-      LNbits.api
-        .request('GET', '/taproot_assets/api/v1/taproot/listassets', wallet.adminkey)
+      getAssets(wallet.adminkey)
         .then(response => {
           console.log('Assets received:', response.data);
           
@@ -382,8 +271,7 @@ window.app = Vue.createApp({
       const timestamp = new Date().getTime();
       this.refreshCount++;
 
-      LNbits.api
-        .request('GET', `/taproot_assets/api/v1/taproot/invoices?_=${timestamp}`, wallet.adminkey)
+      getInvoices(wallet.adminkey)
         .then(response => {
           // Process invoices with asset names
           const processedInvoices = Array.isArray(response.data)
@@ -431,10 +319,7 @@ window.app = Vue.createApp({
         this.transactionsLoading = true;
       }
 
-      const timestamp = new Date().getTime();
-
-      LNbits.api
-        .request('GET', `/taproot_assets/api/v1/taproot/payments?_=${timestamp}`, wallet.adminkey)
+      getPayments(wallet.adminkey)
         .then(response => {
           // Process payments with asset names
           const processedPayments = Array.isArray(response.data)
@@ -821,7 +706,7 @@ window.app = Vue.createApp({
       });
       
       // Generate CSV
-      this.downloadCSV(rows, 'taproot-asset-transactions.csv');
+      downloadCSV(rows, 'taproot-asset-transactions.csv', this.$q.notify);
     },
     
     exportTransactionsCSVWithDetails() {
@@ -855,71 +740,7 @@ window.app = Vue.createApp({
       });
       
       // Generate CSV with more details
-      this.downloadCSV(rows, 'taproot-asset-transactions-details.csv');
-    },
-    
-    downloadCSV(rows, filename) {
-      if (!rows || rows.length === 0) {
-        this.$q.notify({
-          message: 'No data to export',
-          color: 'warning',
-          timeout: 2000
-        });
-        return;
-      }
-      
-      // Get headers from first row
-      const headers = Object.keys(rows[0]);
-      
-      // Create CSV content
-      let csvContent = headers.join(',') + '\n';
-      
-      // Add rows
-      rows.forEach(row => {
-        const csvRow = headers.map(header => {
-          // Handle values that might contain commas or quotes
-          const value = row[header] !== undefined && row[header] !== null ? row[header].toString() : '';
-          if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-            // Properly escape quotes by doubling them and wrap in quotes
-            return '"' + value.replace(/"/g, '""') + '"';
-          }
-          return value;
-        });
-        csvContent += csvRow.join(',') + '\n';
-      });
-      
-      // Create download link
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.setAttribute('href', url);
-      link.setAttribute('download', filename);
-      link.style.visibility = 'hidden';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
-      this.$q.notify({
-        message: 'Transactions exported successfully',
-        color: 'positive',
-        icon: 'check_circle',
-        timeout: 2000
-      });
-    },
-    
-    getStatusColor(status) {
-      switch (status) {
-        case 'paid':
-        case 'completed':
-          return 'positive';
-        case 'pending':
-          return 'warning';
-        case 'expired':
-          return 'negative';
-        case 'cancelled':
-        default:
-          return 'grey';
-      }
+      downloadCSV(rows, 'taproot-asset-transactions-details.csv', this.$q.notify);
     },
     
     // Invoice dialog methods
@@ -977,8 +798,7 @@ window.app = Vue.createApp({
         payload.peer_pubkey = this.invoiceDialog.selectedAsset.channel_info.peer_pubkey;
       }
 
-      LNbits.api
-        .request('POST', '/taproot_assets/api/v1/taproot/invoice', wallet.adminkey, payload)
+      createInvoice(wallet.adminkey, payload)
         .then(response => {
           this.createdInvoice = response.data;
 
@@ -1098,12 +918,7 @@ window.app = Vue.createApp({
         }
 
         // Make the payment request
-        const response = await LNbits.api.request(
-          'POST',
-          '/taproot_assets/api/v1/taproot/pay',
-          wallet.adminkey,
-          payload
-        );
+        const response = await payInvoice(wallet.adminkey, payload);
 
         // Show success and refresh data
         this.paymentDialog.show = false;
@@ -1196,6 +1011,8 @@ window.app = Vue.createApp({
   },
   
   created() {
+    console.log("Vue app created");
+    
     if (this.g.user.wallets.length) {
       this.getSettings();
       this.getAssets();
@@ -1208,12 +1025,14 @@ window.app = Vue.createApp({
   },
   
   mounted() {
+    console.log("Vue app mounted");
     setTimeout(() => {
       this.refreshTransactions();
     }, 500);
   },
   
   activated() {
+    console.log("Vue app activated");
     if (this.g.user.wallets.length) {
       this.resetInvoiceForm();
       this.resetPaymentForm();

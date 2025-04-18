@@ -3,6 +3,10 @@
 
 {% block scripts %}
 {{ window_vars(user) }}
+<!-- Load utility files first -->
+<script src="{{ static_url_for('taproot_assets/static', path='js/utils.js') }}"></script>
+<script src="{{ static_url_for('taproot_assets/static', path='js/api.js') }}"></script>
+<!-- Load main app file last -->
 <script src="{{ static_url_for('taproot_assets/static', path='js/index.js') }}"></script>
 <link rel="stylesheet" href="{{ static_url_for('taproot_assets/static', path='css/taproot_assets.css') }}" />
 {% endblock %}
