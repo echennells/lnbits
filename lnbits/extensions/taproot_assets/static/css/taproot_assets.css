@@ -38,6 +38,11 @@
   color: rgba(255, 255, 255, 0.8);
 }
 
+/* Balance styling */
+.text-positive {
+  color: #21BA45;
+}
+
 /* Invoice form styling */
 .invoice-form-container {
   position: relative;

@@ -62,6 +62,7 @@ window.app = Vue.createApp({
         selectedAsset: null,
         form: {
           paymentRequest: '',
+          amount: 0,
           feeLimit: 1000
         },
         inProgress: false
@@ -103,10 +104,22 @@ window.app = Vue.createApp({
     }
   },
   computed: {
-    // Filter to only show assets with channels
+    // Filter to only show assets with channels and add user balance information
     filteredAssets() {
       if (!this.assets || this.assets.length === 0) return [];
-      return this.assets.filter(asset => asset.channel_info !== undefined);
+      return this.assets
+        .filter(asset => asset.channel_info !== undefined)
+        .map(asset => {
+          // Create a copy to avoid modifying the original
+          const assetCopy = {...asset};
+          
+          // Make sure user_balance is always available (default to 0)
+          if (typeof assetCopy.user_balance === 'undefined') {
+            assetCopy.user_balance = 0;
+          }
+          
+          return assetCopy;
+        });
     },
     maxInvoiceAmount() {
       if (!this.invoiceDialog.selectedAsset) return 0;
@@ -154,6 +167,18 @@ window.app = Vue.createApp({
     // Check if a channel is active (used for styling)
     isChannelActive(asset) {
       return asset.channel_info && asset.channel_info.active !== false;
+    },
+    
+    // Check if user can send this asset (has balance)
+    canSendAsset(asset) {
+      // First check if asset is active
+      if (asset.channel_info && asset.channel_info.active === false) {
+        return false;
+      }
+      
+      // Then check if user has balance
+      const userBalance = asset.user_balance || 0;
+      return userBalance > 0;
     },
 
     // Format transaction date consistently
@@ -222,7 +247,8 @@ window.app = Vue.createApp({
               .filter(asset => asset.channel_info)
               .map(asset => ({
                 name: asset.name,
-                balance: asset.channel_info.local_balance
+                channel_balance: asset.channel_info.local_balance,
+                user_balance: asset.user_balance || 0
               }));
             console.log('Current asset balances:', balances);
           }
@@ -858,13 +884,24 @@ window.app = Vue.createApp({
     
     // Payment dialog methods
     openPaymentDialog(asset) {
-      // Refresh assets first to ensure we have the latest channel status
+      // Refresh assets first to ensure we have the latest channel status and balance
       this.getAssets();
       
       // Don't allow payments from inactive channels
       if (asset.channel_info && asset.channel_info.active === false) {
         this.$q.notify({
           message: 'Cannot send payment from inactive channel',
+          color: 'negative',
+          icon: 'warning',
+          timeout: 2000
+        });
+        return;
+      }
+      
+      // Check if user has balance
+      if (!asset.user_balance || asset.user_balance <= 0) {
+        this.$q.notify({
+          message: 'You have zero balance for this asset',
           color: 'negative',
           icon: 'warning',
           timeout: 2000
@@ -880,6 +917,7 @@ window.app = Vue.createApp({
     resetPaymentForm() {
       this.paymentDialog.form = {
         paymentRequest: '',
+        amount: 0,
         feeLimit: 1000
       };
       this.paymentDialog.inProgress = false;
@@ -890,6 +928,36 @@ window.app = Vue.createApp({
       this.resetPaymentForm();
     },
     
+    // Extract amount from BOLT11 invoice
+    extractAmountFromInvoice(paymentRequest) {
+      if (!paymentRequest) return 0;
+      
+      try {
+        // Try to decode using bolt11 library
+        const decoded = bolt11.decode(paymentRequest);
+        
+        if (decoded && decoded.satoshis) {
+          return decoded.satoshis / 1000; // Convert to asset units
+        } else if (decoded && decoded.millisatoshis) {
+          return decoded.millisatoshis / 1000000; // Convert msat to asset units
+        }
+      } catch (e) {
+        console.error('Failed to decode invoice:', e);
+      }
+      
+      return 0;
+    },
+    
+    // Add a watcher for payment request to update amount
+    watchPaymentRequest(val) {
+      if (val) {
+        const amount = this.extractAmountFromInvoice(val);
+        this.paymentDialog.form.amount = amount;
+      } else {
+        this.paymentDialog.form.amount = 0;
+      }
+    },
+    
     async submitPaymentForm() {
       if (this.paymentDialog.inProgress || !this.g.user.wallets.length) return;
       if (!this.paymentDialog.form.paymentRequest) {
@@ -898,6 +966,18 @@ window.app = Vue.createApp({
           color: 'negative',
           icon: 'warning',
           timeout: 2000
+        });
+        return;
+      }
+      
+      // Check if payment amount exceeds user's balance
+      const userBalance = this.paymentDialog.selectedAsset?.user_balance || 0;
+      if (this.paymentDialog.form.amount > userBalance) {
+        this.$q.notify({
+          message: `Payment amount (${this.paymentDialog.form.amount}) exceeds your available balance (${userBalance})`,
+          color: 'negative',
+          icon: 'warning',
+          timeout: 3000
         });
         return;
       }
@@ -1029,6 +1109,9 @@ window.app = Vue.createApp({
     setTimeout(() => {
       this.refreshTransactions();
     }, 500);
+    
+    // Add watcher for payment request to automatically update amount
+    this.$watch('paymentDialog.form.paymentRequest', this.watchPaymentRequest);
   },
   
   activated() {

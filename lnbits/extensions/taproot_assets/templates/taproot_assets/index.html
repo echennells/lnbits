@@ -55,23 +55,21 @@
                   RECEIVE
                 </q-btn>
                 <q-btn flat color="primary" @click="openPaymentDialog(asset)"
-                       :disabled="asset.channel_info && asset.channel_info.active === false">
+                       :disabled="(asset.channel_info && asset.channel_info.active === false) || !canSendAsset(asset)">
                   <q-icon left name="arrow_downward"></q-icon>
                   SEND
                 </q-btn>
               </div>
             </div>
             <div class="asset-detail">
-              <span v-if="asset.channel_info">
-                Balance: {% raw %}{{ asset.channel_info.local_balance }}{% endraw %}<br>
-                Channel Capacity: {% raw %}{{ asset.channel_info.capacity }}{% endraw %}
-                <span v-if="asset.channel_info.capacity && asset.channel_info.local_balance" class="text-positive">
-                  <br>Max Receivable: {% raw %}{{ parseFloat(asset.channel_info.capacity) - parseFloat(asset.channel_info.local_balance) }}{% endraw %}
-                </span>
-              </span>
-              <span v-else>
-                Amount: {% raw %}{{ asset.amount }}{% endraw %}
-              </span>
+              <div class="row q-col-gutter-md">
+                <div class="col-12">
+                  <div>Balance: {% raw %}{{ asset.user_balance || 0 }}{% endraw %}</div>
+                  <div v-if="asset.channel_info && asset.channel_info.capacity && asset.channel_info.local_balance" class="text-positive">
+                    Max Receivable: {% raw %}{{ parseFloat(asset.channel_info.capacity) - parseFloat(asset.channel_info.local_balance) }}{% endraw %}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -230,15 +228,14 @@
               <div>Selected asset:</div>
               <div class="asset-name">{% raw %}{{ invoiceDialog.selectedAsset.name || 'Unknown' }}{% endraw %}</div>
               <div class="asset-detail">
-                <!-- Show balance information if it's a channel asset -->
-                <span v-if="invoiceDialog.selectedAsset.channel_info">
-                  Balance: {% raw %}{{ invoiceDialog.selectedAsset.channel_info.local_balance }}{% endraw %}<br>
-                  Channel Capacity: {% raw %}{{ invoiceDialog.selectedAsset.channel_info.capacity }}{% endraw %}<br>
-                  <span class="text-positive">Max Receivable: {% raw %}{{ maxInvoiceAmount }}{% endraw %}</span>
-                </span>
-                <span v-else>
-                  Amount: {% raw %}{{ invoiceDialog.selectedAsset.amount }}{% endraw %}
-                </span>
+                <div class="row q-col-gutter-md">
+                  <div class="col-12">
+                    <div>Balance: {% raw %}{{ invoiceDialog.selectedAsset.user_balance || 0 }}{% endraw %}</div>
+                    <div v-if="invoiceDialog.selectedAsset.channel_info && invoiceDialog.selectedAsset.channel_info.capacity && invoiceDialog.selectedAsset.channel_info.local_balance" class="text-positive">
+                      Max Receivable: {% raw %}{{ maxInvoiceAmount }}{% endraw %}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -329,8 +326,11 @@
     <q-card-section>
       <div v-if="paymentDialog.selectedAsset" class="q-mb-md">
         <div>Selected asset: <strong>{% raw %}{{ paymentDialog.selectedAsset.name || 'Unknown' }}{% endraw %}</strong></div>
-        <div v-if="paymentDialog.selectedAsset.channel_info">
-          <div>Balance: {% raw %}{{ paymentDialog.selectedAsset.channel_info.local_balance }}{% endraw %}</div>
+        
+        <div class="row q-col-gutter-md q-mt-sm">
+          <div class="col-12">
+            <div>Balance: {% raw %}{{ paymentDialog.selectedAsset.user_balance || 0 }}{% endraw %}</div>
+          </div>
         </div>
       </div>
 
@@ -342,6 +342,16 @@
           :rules="[val => !!val || 'Invoice is required']"
         ></q-input>
 
+        <!-- Add amount field to check against balance -->
+        <q-input
+          filled
+          v-model.number="paymentDialog.form.amount"
+          type="number"
+          label="Amount"
+          readonly
+          :rules="[val => !val || val <= (paymentDialog.selectedAsset?.user_balance || 0) || 'Amount exceeds your available balance']"
+        ></q-input>
+
         <q-input
           filled
           v-model.number="paymentDialog.form.feeLimit"
@@ -349,6 +359,11 @@
           label="Fee limit (sats)"
           :rules="[val => val > 0 || 'Fee limit must be greater than 0']"
         ></q-input>
+
+        <div v-if="paymentDialog.form.amount > (paymentDialog.selectedAsset?.user_balance || 0)" 
+             class="text-negative q-mb-md">
+          Warning: Payment amount exceeds your available balance.
+        </div>
 
         <div class="row justify-end q-mt-md">
           <q-btn
@@ -361,6 +376,7 @@
           </q-btn>
           <q-btn
             :loading="paymentDialog.inProgress"
+            :disable="paymentDialog.form.amount > (paymentDialog.selectedAsset?.user_balance || 0)"
             color="primary"
             type="submit"
           >

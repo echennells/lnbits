@@ -200,3 +200,36 @@ function getStatusColor(status) {
       return 'grey';
   }
 }
+
+// Format asset balance for display
+function formatAssetBalance(balance, decimals = 0) {
+  if (balance === undefined || balance === null) return '0';
+  
+  // Convert to number if it's a string
+  const amount = typeof balance === 'string' ? parseFloat(balance) : balance;
+  
+  // Handle NaN or non-numeric values
+  if (isNaN(amount)) return '0';
+  
+  // Format with the specified number of decimal places
+  return amount.toFixed(decimals);
+}
+
+// Parse asset value from any format
+function parseAssetValue(value) {
+  if (!value) return 0;
+  
+  // Handle string values
+  if (typeof value === 'string') {
+    // Remove any non-numeric characters except decimal point
+    const cleanValue = value.replace(/[^0-9.]/g, '');
+    return parseFloat(cleanValue) || 0;
+  }
+  
+  // Handle numeric values
+  if (typeof value === 'number') {
+    return isNaN(value) ? 0 : value;
+  }
+  
+  return 0;
+}
