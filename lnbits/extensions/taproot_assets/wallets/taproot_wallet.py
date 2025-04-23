@@ -298,9 +298,10 @@ class TaprootWalletExtension:
     ) -> PaymentResponse:
         """
         Update Taproot Assets after payment has been made from LNbits wallet.
-
+        
         This function is called after a successful payment through the LNbits wallet system
-        to update the Taproot Assets daemon about the payment.
+        to update the Taproot Assets daemon about the payment. It is used for self-payments
+        to update the asset state without requiring an actual Lightning Network payment.
 
         Args:
             invoice: The payment request (BOLT11 invoice)
@@ -313,6 +314,7 @@ class TaprootWalletExtension:
         """
         try:
             await self._init_connection()
+            logger.info(f"Processing self-payment for {payment_hash}, asset_id={asset_id}")
 
             # Call the node's update_after_payment method
             update_result = await self.node.update_after_payment(
@@ -321,13 +323,26 @@ class TaprootWalletExtension:
                 fee_limit_sats=fee_limit_sats,
                 asset_id=asset_id
             )
+            
+            logger.info(f"Self-payment result: {update_result}")
 
-            return PaymentResponse(
+            # Create response
+            response = PaymentResponse(
                 ok=update_result.get("success", False),
                 checking_id=payment_hash,
-                fee_msat=0,  # No additional fee as it was already paid via LNbits
-                preimage=update_result.get("preimage", "")
+                fee_msat=0,  # No additional fee as it's a self-payment
+                preimage=update_result.get("preimage", ""),
+                extra={
+                    "asset_id": asset_id,
+                    "self_payment": True,
+                    "message": "Self-payment processed successfully"
+                }
             )
+            
+            # Log the response for debugging
+            logger.info(f"Self-payment response: ok={response.ok}, checking_id={response.checking_id}")
+            
+            return response
         except Exception as e:
             logger.error(f"Failed to update Taproot Assets after payment: {str(e)}")
             return PaymentResponse(

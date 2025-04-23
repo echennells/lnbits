@@ -16,7 +16,7 @@ from .taproot_adapter import (
 
 # Import WebSocket manager
 from ..websocket import ws_manager
-from ..crud import create_payment_record, record_asset_transaction, get_asset_balance
+from ..crud import create_payment_record, record_asset_transaction, get_asset_balance, get_invoice_by_payment_hash
 
 class TaprootPaymentManager:
     """
@@ -98,6 +98,13 @@ class TaprootPaymentManager:
                 
             if not asset_id:
                 raise Exception("No asset ID provided or found in invoice")
+            
+            # Check if this is a self-payment (this check should be done at the API layer, 
+            # but we include it here as an additional safety check)
+            invoice = await get_invoice_by_payment_hash(payment_hash)
+            if invoice and getattr(self.node, 'wallet', None) and invoice.user_id == self.node.wallet.user:
+                logger.warning(f"Detected self-payment attempt for hash {payment_hash}. This should be handled by update_after_payment.")
+                raise Exception("Self-payments are not allowed through the regular payment flow. Please use the self-payment endpoint.")
             
             # Convert asset ID to bytes
             asset_id_bytes = bytes.fromhex(asset_id)
@@ -181,6 +188,10 @@ class TaprootPaymentManager:
                 if any(msg in error_str for msg in ["payment initiated", "in progress", "in flight"]):
                     logger.info("Payment appears to be in progress, treating as potentially successful")
                     status = "success"
+                elif "self-payments not allowed" in error_str:
+                    # Catch the self-payment error specifically
+                    logger.warning(f"Self-payment detected for {payment_hash} - this should be handled by update_after_payment")
+                    raise Exception("Self-payments are not allowed. Use the self-payment endpoint instead.")
                 else:
                     logger.error(f"gRPC error in payment stream: {e.code()}: {e.details()}")
                     raise Exception(f"Payment error: {e.details()}")
@@ -233,7 +244,7 @@ class TaprootPaymentManager:
                     logger.info(f"Updated asset balance for {asset_id}: new balance = {current_balance}")
                     
                     # Send payment update via WebSocket
-                    await ws_manager.send_payment_update(
+                    await ws_manager.notify_payment_update(
                         user_id,
                         {
                             "id": payment_record.id,
@@ -259,7 +270,7 @@ class TaprootPaymentManager:
                                 asset["user_balance"] = asset_balance.balance if asset_balance else 0
                         
                         if filtered_assets:
-                            await ws_manager.send_assets_update(user_id, filtered_assets)
+                            await ws_manager.notify_assets_update(user_id, filtered_assets)
                     except Exception as asset_err:
                         logger.error(f"Failed to fetch assets for WebSocket update: {str(asset_err)}")
                         
@@ -286,6 +297,8 @@ class TaprootPaymentManager:
                 detail = "Multiple channels found for this asset. Please select a specific channel."
             elif "no asset channel balance found" in error_details:
                 detail = "Insufficient channel balance for this asset."
+            elif "self-payments not allowed" in error_details:
+                detail = "Self-payments are not allowed. This invoice belongs to you and needs to be processed through the self-payment flow."
             else:
                 detail = f"gRPC error: {e.details()}"
                 
@@ -305,9 +318,8 @@ class TaprootPaymentManager:
         """
         Update Taproot Assets after a payment has been made through the LNbits wallet.
 
-        This method notifies the Taproot Asset daemon that a payment has been completed
-        so it can update its internal state, but doesn't actually send any Bitcoin payment
-        since that was already handled by the LNbits wallet system.
+        This method is specifically used for self-payments to update the Taproot Asset daemon
+        about internal transfers without requiring a Lightning Network payment.
 
         Args:
             payment_request: The original BOLT11 invoice
@@ -319,33 +331,36 @@ class TaprootPaymentManager:
             Dict containing the update confirmation
         """
         try:
-            logger.info(f"=== SETTLEMENT PROCESS STARTING ===")
+            logger.info(f"=== SELF-PAYMENT PROCESS STARTING ===")
             logger.info(f"Payment hash: {payment_hash}")
             logger.info(f"Asset ID: {asset_id or 'Not specified'}")
 
-            # Extract asset ID from invoice if not provided
-            if not asset_id:
-                try:
-                    decoded = bolt11.decode(payment_request)
-                    
-                    # Try to extract from description
-                    if hasattr(decoded, 'description') and decoded.description:
-                        desc = decoded.description
-                        if 'asset_id=' in desc:
-                            asset_id_match = re.search(r'asset_id=([a-fA-F0-9]{64})', desc)
-                            if asset_id_match:
-                                asset_id = asset_id_match.group(1)
-                                logger.info(f"Extracted asset_id from description: {asset_id}")
+            # Verify this is actually a self-payment
+            invoice = await get_invoice_by_payment_hash(payment_hash)
+            if not invoice:
+                logger.error(f"No invoice found for payment hash: {payment_hash}")
+                raise Exception(f"Invoice not found for payment hash: {payment_hash}")
                 
-                except Exception as e:
-                    logger.warning(f"Failed to extract asset ID from invoice: {str(e)}")
+            # Get the wallet information from the node
+            if not hasattr(self.node, 'wallet') or not self.node.wallet:
+                logger.error("Node has no wallet information")
+                raise Exception("Wallet information missing from node")
+                
+            if invoice.user_id != self.node.wallet.user:
+                logger.error(f"Not a self-payment. Invoice belongs to {invoice.user_id}, current user is {self.node.wallet.user}")
+                raise Exception("Not a self-payment. Invoice was not created by this user.")
+
+            # Ensure we have asset_id (either provided or from the invoice)
+            if not asset_id:
+                asset_id = invoice.asset_id
+                logger.info(f"Using asset_id from invoice: {asset_id}")
 
             # Retrieve the preimage for this payment hash
             preimage_hex = self.node._get_preimage(payment_hash)
 
             if not preimage_hex:
                 logger.error(f"No preimage found for payment hash: {payment_hash}")
-                raise Exception(f"Cannot settle HODL invoice: no preimage found for {payment_hash}")
+                raise Exception(f"Cannot process self-payment: no preimage found for {payment_hash}")
 
             logger.info(f"Found preimage: {preimage_hex}")
 
@@ -355,65 +370,88 @@ class TaprootPaymentManager:
 
             if not settlement_success:
                 logger.error(f"Failed to settle invoice for {payment_hash}")
-                raise Exception("Settlement failed")
+                raise Exception("Self-payment settlement failed")
 
             logger.info("=== SETTLEMENT COMPLETED ===")
             
-            # If we have a wallet, update assets via WebSocket
-            if hasattr(self.node, 'wallet') and self.node.wallet:
-                user_id = self.node.wallet.user
-                wallet_id = self.node.wallet.id
+            # Create payment record for self-payment
+            user_id = self.node.wallet.user
+            wallet_id = self.node.wallet.id
+            
+            # Create descriptive memo for self-payment
+            memo = f"Self-payment: {invoice.memo or 'Taproot Asset Transfer'}"
+            
+            try:
+                # Create payment record
+                payment_record = await create_payment_record(
+                    payment_hash=payment_hash,
+                    payment_request=payment_request,
+                    asset_id=asset_id,
+                    asset_amount=invoice.asset_amount,
+                    fee_sats=0,  # No fee for self-payments
+                    user_id=user_id,
+                    wallet_id=wallet_id,
+                    memo=memo,
+                    preimage=preimage_hex
+                )
                 
-                # If asset_id is available, update the balance
-                if asset_id:
-                    # Get the asset amount from the decoded invoice
-                    try:
-                        decoded = bolt11.decode(payment_request)
-                        asset_amount = decoded.amount_msat // 1000 if hasattr(decoded, "amount_msat") else 0
-                        
-                        if asset_amount > 0:
-                            # Record the transaction as a debit
-                            try:
-                                await record_asset_transaction(
-                                    wallet_id=wallet_id,
-                                    asset_id=asset_id,
-                                    amount=asset_amount,
-                                    tx_type="debit",  # This is an outgoing payment
-                                    payment_hash=payment_hash,
-                                    memo=f"Taproot Asset Transfer"
-                                )
-                                logger.info(f"Recorded asset transaction: asset_id={asset_id}, amount={asset_amount}, type=debit")
-                            except Exception as tx_err:
-                                logger.error(f"Failed to record asset transaction: {str(tx_err)}")
-                    except Exception as decode_err:
-                        logger.error(f"Failed to decode invoice for amount: {str(decode_err)}")
+                # Record the transaction as a debit
+                await record_asset_transaction(
+                    wallet_id=wallet_id,
+                    asset_id=asset_id,
+                    amount=invoice.asset_amount,
+                    tx_type="debit",  # This is an outgoing payment
+                    payment_hash=payment_hash,
+                    memo=memo
+                )
                 
-                try:
-                    assets = await self.node.list_assets()
-                    filtered_assets = [asset for asset in assets if asset.get("channel_info")]
-                    
-                    # Add balance information
-                    for asset in filtered_assets:
-                        asset_id_check = asset.get("asset_id")
-                        if asset_id_check:
-                            asset_balance = await get_asset_balance(wallet_id, asset_id_check)
-                            asset["user_balance"] = asset_balance.balance if asset_balance else 0
-                    
-                    if filtered_assets:
-                        await ws_manager.send_assets_update(user_id, filtered_assets)
-                except Exception as asset_err:
-                    logger.error(f"Failed to fetch assets for WebSocket update: {str(asset_err)}")
+                # Send payment update via WebSocket
+                if payment_record:
+                    payment_data = {
+                        "id": payment_record.id,
+                        "payment_hash": payment_hash,
+                        "asset_id": asset_id,
+                        "asset_amount": invoice.asset_amount,
+                        "fee_sats": 0,
+                        "memo": memo,
+                        "status": "completed",
+                        "created_at": payment_record.created_at.isoformat() if hasattr(payment_record.created_at, "isoformat") else str(payment_record.created_at),
+                        "self_payment": True
+                    }
+                    await ws_manager.notify_payment_update(user_id, payment_data)
+            except Exception as db_error:
+                logger.error(f"Failed to create payment record for self-payment: {str(db_error)}")
+            
+            # Update assets balances via WebSocket
+            try:
+                assets = await self.node.list_assets()
+                filtered_assets = [asset for asset in assets if asset.get("channel_info")]
+                
+                # Add balance information
+                for asset in filtered_assets:
+                    asset_id_check = asset.get("asset_id")
+                    if asset_id_check:
+                        asset_balance = await get_asset_balance(wallet_id, asset_id_check)
+                        asset["user_balance"] = asset_balance.balance if asset_balance else 0
+                
+                if filtered_assets:
+                    await ws_manager.notify_assets_update(user_id, filtered_assets)
+            except Exception as asset_err:
+                logger.error(f"Failed to fetch assets for WebSocket update: {str(asset_err)}")
             
             return {
                 "success": True,
                 "payment_hash": payment_hash,
-                "message": "HODL invoice settled successfully",
-                "preimage": preimage_hex
+                "message": "Self-payment processed successfully",
+                "preimage": preimage_hex,
+                "asset_id": asset_id,
+                "asset_amount": invoice.asset_amount,
+                "self_payment": True
             }
 
         except grpc.aio.AioRpcError as e:
-            logger.error(f"gRPC error in update_after_payment: {e.code()}: {e.details()}")
-            raise Exception(f"gRPC error: {e.details()}")
+            logger.error(f"gRPC error in self-payment: {e.code()}: {e.details()}")
+            raise Exception(f"gRPC error during self-payment: {e.details()}")
         except Exception as e:
-            logger.error(f"Failed to update Taproot Assets after payment: {str(e)}")
-            raise Exception(f"Failed to update Taproot Assets: {str(e)}")
+            logger.error(f"Failed to process self-payment: {str(e)}")
+            raise Exception(f"Failed to process self-payment: {str(e)}")

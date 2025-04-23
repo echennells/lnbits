@@ -421,6 +421,22 @@ async def get_user_invoices(user_id: str) -> List[TaprootInvoice]:
         raise
 
 
+# New function for self-payment detection
+async def is_self_payment(payment_hash: str, user_id: str) -> bool:
+    """
+    Determine if a payment hash belongs to an invoice created by the same user.
+    
+    Args:
+        payment_hash: The payment hash to check
+        user_id: The ID of the current user
+        
+    Returns:
+        bool: True if this is a self-payment, False otherwise
+    """
+    invoice = await get_invoice_by_payment_hash(payment_hash)
+    return invoice is not None and invoice.user_id == user_id
+
+
 #
 # Fee Transactions
 #

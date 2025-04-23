@@ -71,7 +71,9 @@ window.app = Vue.createApp({
 
       // Success dialog - EXPLICITLY INITIALIZED
       successDialog: {
-        show: false
+        show: false,
+        message: 'Payment has been sent successfully.',
+        title: 'Payment Successful!'
       },
 
       // Form submission tracking
@@ -513,6 +515,29 @@ window.app = Vue.createApp({
       return hasChanges;
     },
     
+    // WebSocket handling methods
+    closeWebSockets() {
+      // Close all WebSocket connections
+      Object.keys(this.websockets).forEach(key => {
+        if (this.websockets[key]) {
+          try {
+            this.websockets[key].close();
+          } catch (e) {
+            console.error(`Error closing ${key} WebSocket:`, e);
+          }
+          this.websockets[key] = null;
+        }
+      });
+      
+      // Clear reconnect timeout if exists
+      if (this.websocketReconnectTimeout) {
+        clearTimeout(this.websocketReconnectTimeout);
+        this.websocketReconnectTimeout = null;
+      }
+      
+      this.websocketConnected = false;
+    },
+    
     // Setup WebSocket connections
     setupWebSockets() {
       if (!this.g.user.wallets.length) return;
@@ -694,28 +719,6 @@ window.app = Vue.createApp({
         // Fallback to polling while disconnected
         this.startAutoRefresh();
       }
-    },
-    
-    closeWebSockets() {
-      // Close all WebSocket connections
-      Object.keys(this.websockets).forEach(key => {
-        if (this.websockets[key]) {
-          try {
-            this.websockets[key].close();
-          } catch (e) {
-            console.error(`Error closing ${key} WebSocket:`, e);
-          }
-          this.websockets[key] = null;
-        }
-      });
-      
-      // Clear reconnect timeout if exists
-      if (this.websocketReconnectTimeout) {
-        clearTimeout(this.websocketReconnectTimeout);
-        this.websocketReconnectTimeout = null;
-      }
-      
-      this.websocketConnected = false;
     },
     
     // CSV export functions
@@ -955,6 +958,15 @@ window.app = Vue.createApp({
           this.paymentDialog.form.amount = response.data.amount || 0;
           this.paymentDialog.invoiceDecodeError = false;
           
+          // Check if this invoice might be a self-payment (checking if we have it in our invoices)
+          const paymentHash = response.data.payment_hash;
+          if (paymentHash) {
+            const ownInvoice = this.invoices.find(inv => inv.payment_hash === paymentHash);
+            if (ownInvoice) {
+              console.log('Self-payment detected for invoice:', ownInvoice);
+            }
+          }
+          
           // If amount is 0, warn the user
           if (response.data.amount === 0) {
             this.$q.notify({
@@ -1021,11 +1033,22 @@ window.app = Vue.createApp({
           payload.peer_pubkey = this.paymentDialog.selectedAsset.channel_info.peer_pubkey;
         }
 
-        // Make the payment request
+        // Make the payment request - the backend will determine if it's a self-payment
         const response = await payInvoice(wallet.adminkey, payload);
-
-        // Show success and refresh data
+        
+        // Close payment dialog
         this.paymentDialog.show = false;
+        
+        // Customize success message based on response
+        if (response.data.self_payment) {
+          this.successDialog.title = 'Self-Payment Processed';
+          this.successDialog.message = 'Self-payment has been processed successfully.';
+        } else {
+          this.successDialog.title = 'Payment Successful!';
+          this.successDialog.message = 'Payment has been sent successfully.';
+        }
+        
+        // Show success dialog
         this.successDialog.show = true;
         
         // WebSockets will handle UI updates, but refresh just in case
@@ -1046,8 +1069,21 @@ window.app = Vue.createApp({
         if (error.response && error.response.data && error.response.data.detail) {
           const errorDetail = error.response.data.detail.toLowerCase();
           
+          // Check for self-payment error
+          if (errorDetail.includes('self-payment') || errorDetail.includes('own invoice')) {
+            errorMessage = 'This is your own invoice. System will process it as a self-payment.';
+            
+            // Try to process as self-payment automatically
+            try {
+              this.processSelfPayment(this.paymentDialog.form.paymentRequest, this.paymentDialog.form.feeLimit);
+              return; // Exit early as we're handling it
+            } catch (selfPayError) {
+              console.error('Error in automatic self-payment handling:', selfPayError);
+              errorMessage = 'Failed to process self-payment. Please try again.';
+            }
+          }
           // Check for offline channel or channel-related errors
-          if (errorDetail.includes('no asset channel') || 
+          else if (errorDetail.includes('no asset channel') || 
               errorDetail.includes('insufficient channel balance') ||
               errorDetail.includes('channel not found') ||
               errorDetail.includes('peer') ||
@@ -1074,6 +1110,63 @@ window.app = Vue.createApp({
           icon: 'warning',
           timeout: 2000
         });
+      } finally {
+        this.paymentDialog.inProgress = false;
+      }
+    },
+    
+    // Process a self-payment - this is a backup method in case the automatic detection fails
+    async processSelfPayment(paymentRequest, feeLimit) {
+      try {
+        if (!this.g.user.wallets.length) return;
+        
+        this.paymentDialog.inProgress = true;
+        const wallet = this.g.user.wallets[0];
+        
+        // Create payload
+        const payload = {
+          payment_request: paymentRequest,
+          fee_limit_sats: feeLimit || 10
+        };
+        
+        // Call the explicit self-payment endpoint
+        const response = await processSelfPayment(wallet.adminkey, payload);
+        
+        // Close payment dialog
+        this.paymentDialog.show = false;
+        
+        // Show self-payment success dialog
+        this.successDialog.title = 'Self-Payment Processed';
+        this.successDialog.message = 'Self-payment has been processed successfully.';
+        this.successDialog.show = true;
+        
+        // WebSockets will handle UI updates, but refresh just in case
+        await this.refreshTransactions();
+        
+        // Force asset refresh after sending payment
+        setTimeout(() => {
+          console.log('Self-payment completed - refreshing assets directly');
+          this.getAssets();
+        }, 500);
+        
+        return true;
+      } catch (error) {
+        console.error('Self-payment failed:', error);
+        
+        let errorMessage = 'Self-payment failed';
+        if (error.response && error.response.data && error.response.data.detail) {
+          errorMessage = error.response.data.detail;
+        }
+        
+        // Show error notification
+        this.$q.notify({
+          message: errorMessage,
+          color: 'negative',
+          icon: 'warning',
+          timeout: 2000
+        });
+        
+        return false;
       } finally {
         this.paymentDialog.inProgress = false;
       }
