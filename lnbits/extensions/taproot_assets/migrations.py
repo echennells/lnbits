@@ -69,21 +69,21 @@ async def m002_add_sat_fee_column(db):
     Migration to add default_sat_fee column to settings table if it doesn't exist.
     """
     try:
-        # Check if the column exists
+        # Check if the column exists - without schema prefix for SQLite
         columns = await db.fetchall(
-            "SELECT name FROM pragma_table_info('taproot_assets.settings')"
+            "SELECT name FROM pragma_table_info('settings')"
         )
         column_names = [col["name"] for col in columns]
 
-        # Add column if it doesn't exist
+        # Add column if it doesn't exist - without schema prefix for SQLite
         if "default_sat_fee" not in column_names:
             await db.execute(
                 """
-                ALTER TABLE taproot_assets.settings
+                ALTER TABLE settings
                 ADD COLUMN default_sat_fee INTEGER NOT NULL DEFAULT 1;
                 """
             )
-            logger.info("Added default_sat_fee column to taproot_assets.settings table")
+            logger.info("Added default_sat_fee column to settings table")
         else:
             logger.debug("default_sat_fee column already exists in settings table")
     except Exception as e:
@@ -138,23 +138,80 @@ async def m004_create_payments_table(db):
             """
         )
         
-        # Add index on payment_hash for faster lookups
+        # Add index on payment_hash for faster lookups - without schema prefix
         await db.execute(
             """
             CREATE INDEX IF NOT EXISTS payments_payment_hash_idx 
-            ON taproot_assets.payments (payment_hash);
+            ON payments (payment_hash);
             """
         )
         
-        # Add index on user_id for faster user-specific queries
+        # Add index on user_id for faster user-specific queries - without schema prefix
         await db.execute(
             """
             CREATE INDEX IF NOT EXISTS payments_user_id_idx 
-            ON taproot_assets.payments (user_id);
+            ON payments (user_id);
             """
         )
         
-        logger.info("Created taproot_assets.payments table with indices")
+        logger.info("Created payments table with indices")
     except Exception as e:
         # Log just the error message without a full stack trace for migrations
         logger.warning(f"Error in migration m004_create_payments_table: {str(e)}")
+
+
+async def m005_create_asset_balances_table(db):
+    """
+    Migration to create a table for tracking user asset balances.
+    """
+    try:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS taproot_assets.asset_balances (
+                id TEXT PRIMARY KEY,
+                wallet_id TEXT NOT NULL,
+                asset_id TEXT NOT NULL,
+                balance INTEGER NOT NULL DEFAULT 0,
+                last_payment_hash TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(wallet_id, asset_id)
+            );
+            """
+        )
+
+        # Create indexes without schema prefix for SQLite
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS asset_balances_wallet_id_idx
+            ON asset_balances (wallet_id);
+            """
+        )
+
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS asset_balances_asset_id_idx
+            ON asset_balances (asset_id);
+            """
+        )
+
+        # Create transaction history table
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS taproot_assets.asset_transactions (
+                id TEXT PRIMARY KEY,
+                wallet_id TEXT NOT NULL,
+                asset_id TEXT NOT NULL,
+                payment_hash TEXT,
+                amount INTEGER NOT NULL,
+                fee INTEGER DEFAULT 0,
+                memo TEXT,
+                type TEXT NOT NULL,  -- 'credit', 'debit'
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
+        logger.info("Created asset_balances and asset_transactions tables")
+    except Exception as e:
+        logger.warning(f"Error in migration m005_create_asset_balances_table: {str(e)}")

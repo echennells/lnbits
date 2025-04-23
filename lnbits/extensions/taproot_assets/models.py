@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TaprootSettings(BaseModel):
@@ -91,4 +91,28 @@ class FeeTransaction(BaseModel):
     asset_payment_hash: str
     fee_amount_msat: int
     status: str  # "deducted", "refunded", or "failed"
+    created_at: datetime
+
+
+class AssetBalance(BaseModel):
+    """Model for a user's asset balance."""
+    id: str
+    wallet_id: str
+    asset_id: str
+    balance: int
+    last_payment_hash: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AssetTransaction(BaseModel):
+    """Model for an asset transaction."""
+    id: str
+    wallet_id: str
+    asset_id: str
+    payment_hash: Optional[str] = None
+    amount: int
+    fee: int = 0
+    memo: Optional[str] = None
+    type: str  # 'credit', 'debit'
     created_at: datetime

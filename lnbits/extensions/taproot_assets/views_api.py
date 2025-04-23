@@ -26,7 +26,12 @@ from .crud import (
     create_fee_transaction,
     get_fee_transactions,
     create_payment_record,
-    get_user_payments
+    get_user_payments,
+    get_asset_balance,
+    get_wallet_asset_balances,
+    update_asset_balance,
+    record_asset_transaction,
+    get_asset_transactions
 )
 from .models import TaprootSettings, TaprootAsset, TaprootInvoice, TaprootInvoiceRequest, TaprootPaymentRequest
 from .wallets.taproot_wallet import TaprootWalletExtension
@@ -122,20 +127,39 @@ async def api_get_tapd_settings(user: User = Depends(check_user_exists)):
 
 @taproot_assets_api_router.get("/listassets", status_code=HTTPStatus.OK)
 async def api_list_assets(
-    request: Request,
-    user: User = Depends(check_user_exists),
+    wallet: WalletTypeInfo = Depends(require_admin_key),
 ):
-    """List all Taproot Assets for the current user."""
+    """List all Taproot Assets for the current user with balance information."""
     try:
         # Create a wallet instance to communicate with tapd
-        wallet = TaprootWalletExtension()
+        taproot_wallet = TaprootWalletExtension()
 
         # Get assets from tapd
-        assets_data = await wallet.list_assets()
+        assets_data = await taproot_wallet.list_assets()
         
+        # Get user information
+        user = await get_user(wallet.wallet.user)
+        if not user or not user.wallets:
+            return []
+        
+        # Get user's wallet asset balances
+        wallet_balances = {}
+        for user_wallet in user.wallets:
+            balances = await get_wallet_asset_balances(user_wallet.id)
+            for balance in balances:
+                wallet_balances[balance.asset_id] = balance.dict()
+        
+        # Enhance the assets data with user balance information
+        for asset in assets_data:
+            asset_id = asset.get("asset_id")
+            if asset_id in wallet_balances:
+                asset["user_balance"] = wallet_balances[asset_id]["balance"]
+            else:
+                asset["user_balance"] = 0
+                
         # Send WebSocket notification with assets data
         if assets_data:
-            await ws_manager.notify_assets_update(user.id, assets_data)
+            await ws_manager.notify_assets_update(wallet.wallet.user, assets_data)
             
         return assets_data
     except Exception as e:
@@ -146,9 +170,17 @@ async def api_list_assets(
 @taproot_assets_api_router.get("/assets/{asset_id}", status_code=HTTPStatus.OK)
 async def api_get_asset(
     asset_id: str,
-    user: User = Depends(check_user_exists),
+    wallet: WalletTypeInfo = Depends(require_admin_key),
 ):
-    """Get a specific Taproot Asset by ID."""
+    """Get a specific Taproot Asset by ID with user balance."""
+    # Get user for permission check
+    user = await get_user(wallet.wallet.user)
+    if not user:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail="User not found",
+        )
+        
     asset = await get_asset(asset_id)
 
     if not asset:
@@ -162,8 +194,15 @@ async def api_get_asset(
             status_code=HTTPStatus.FORBIDDEN,
             detail="Not your asset",
         )
-
-    return asset
+    
+    # Get user's balance for this asset
+    balance = await get_asset_balance(wallet.wallet.id, asset.asset_id)
+    
+    # Add user balance to the response
+    asset_dict = asset.dict()
+    asset_dict["user_balance"] = balance.balance if balance else 0
+    
+    return asset_dict
 
 
 @taproot_assets_api_router.post("/invoice", status_code=HTTPStatus.CREATED)
@@ -316,6 +355,17 @@ async def api_pay_invoice(
                 preimage=preimage
             )
             
+            # Record asset transaction and update balance
+            await record_asset_transaction(
+                wallet_id=wallet.wallet.id,
+                asset_id=asset_id,
+                amount=asset_amount,
+                tx_type="debit",  # Outgoing payment
+                payment_hash=payment_hash,
+                fee=routing_fees_sats,
+                memo=memo
+            )
+            
             # Send WebSocket notification of payment
             if payment_record:
                 payment_data = {
@@ -335,6 +385,13 @@ async def api_pay_invoice(
                     taproot_wallet = TaprootWalletExtension()  # Create a fresh instance
                     assets = await taproot_wallet.list_assets()
                     filtered_assets = [asset for asset in assets if asset.get("channel_info")]
+                    
+                    # Add user balance information
+                    for asset in filtered_assets:
+                        asset_id = asset.get("asset_id")
+                        balance = await get_asset_balance(wallet.wallet.id, asset_id)
+                        asset["user_balance"] = balance.balance if balance else 0
+                        
                     if filtered_assets:
                         await ws_manager.notify_assets_update(wallet.wallet.user, filtered_assets)
                 except Exception as asset_err:
@@ -389,11 +446,11 @@ async def api_pay_invoice(
 
 @taproot_assets_api_router.get("/payments", status_code=HTTPStatus.OK)
 async def api_list_payments(
-    user: User = Depends(check_user_exists),
+    wallet: WalletTypeInfo = Depends(require_admin_key),
 ):
     """List all Taproot Asset payments for the current user."""
     try:
-        payments = await get_user_payments(user.id)
+        payments = await get_user_payments(wallet.wallet.user)
         return payments
     except Exception as e:
         logger.error(f"Error retrieving payments: {str(e)}")
@@ -405,9 +462,17 @@ async def api_list_payments(
 
 @taproot_assets_api_router.get("/fee-transactions", status_code=HTTPStatus.OK)
 async def api_list_fee_transactions(
-    user: User = Depends(check_user_exists),
+    wallet: WalletTypeInfo = Depends(require_admin_key),
 ):
     """List all fee transactions for the current user."""
+    # Get user information
+    user = await get_user(wallet.wallet.user)
+    if not user:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail="User not found",
+        )
+        
     # If admin, can view all transactions, otherwise just their own
     if user.admin:
         transactions = await get_fee_transactions()
@@ -419,11 +484,11 @@ async def api_list_fee_transactions(
 
 @taproot_assets_api_router.get("/invoices", status_code=HTTPStatus.OK)
 async def api_list_invoices(
-    user: User = Depends(check_user_exists),
+    wallet: WalletTypeInfo = Depends(require_admin_key),
 ):
     """List all Taproot Asset invoices for the current user."""
     try:
-        invoices = await get_user_invoices(user.id)
+        invoices = await get_user_invoices(wallet.wallet.user)
         return invoices
     except Exception as e:
         logger.error(f"Error retrieving invoices: {str(e)}")
@@ -436,7 +501,7 @@ async def api_list_invoices(
 @taproot_assets_api_router.get("/invoices/{invoice_id}", status_code=HTTPStatus.OK)
 async def api_get_invoice(
     invoice_id: str,
-    user: User = Depends(check_user_exists),
+    wallet: WalletTypeInfo = Depends(require_admin_key),
 ):
     """Get a specific Taproot Asset invoice by ID."""
     invoice = await get_invoice(invoice_id)
@@ -447,7 +512,7 @@ async def api_get_invoice(
             detail="Invoice not found",
         )
 
-    if invoice.user_id != user.id:
+    if invoice.user_id != wallet.wallet.user:
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,
             detail="Not your invoice",
@@ -460,7 +525,7 @@ async def api_get_invoice(
 async def api_update_invoice_status(
     invoice_id: str,
     status: str = Query(..., description="New status for the invoice"),
-    user: User = Depends(check_user_exists),
+    wallet: WalletTypeInfo = Depends(require_admin_key),
 ):
     """Update the status of a Taproot Asset invoice."""
     invoice = await get_invoice(invoice_id)
@@ -471,7 +536,7 @@ async def api_update_invoice_status(
             detail="Invoice not found",
         )
 
-    if invoice.user_id != user.id:
+    if invoice.user_id != wallet.wallet.user:
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,
             detail="Not your invoice",
@@ -485,6 +550,21 @@ async def api_update_invoice_status(
 
     updated_invoice = await update_invoice_status(invoice_id, status)
     
+    # If marking as paid, update the asset balance
+    if status == "paid" and updated_invoice:
+        try:
+            # Record the transaction and update balance
+            await record_asset_transaction(
+                wallet_id=invoice.wallet_id,
+                asset_id=invoice.asset_id,
+                amount=invoice.asset_amount,
+                tx_type="credit",  # Incoming payment
+                payment_hash=invoice.payment_hash,
+                memo=invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to update asset balance: {str(e)}")
+    
     # Send WebSocket notification about status update
     if updated_invoice:
         invoice_data = {
@@ -494,6 +574,59 @@ async def api_update_invoice_status(
             "asset_id": updated_invoice.asset_id,
             "asset_amount": updated_invoice.asset_amount
         }
-        await ws_manager.notify_invoice_update(user.id, invoice_data)
+        await ws_manager.notify_invoice_update(wallet.wallet.user, invoice_data)
     
     return updated_invoice
+
+
+@taproot_assets_api_router.get("/asset-balances", status_code=HTTPStatus.OK)
+async def api_get_asset_balances(
+    wallet: WalletTypeInfo = Depends(require_admin_key),
+):
+    """Get all asset balances for the current wallet."""
+    try:
+        balances = await get_wallet_asset_balances(wallet.wallet.id)
+        return balances
+    except Exception as e:
+        logger.error(f"Error retrieving asset balances: {str(e)}")
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve asset balances: {str(e)}",
+        )
+
+
+@taproot_assets_api_router.get("/asset-balance/{asset_id}", status_code=HTTPStatus.OK)
+async def api_get_asset_balance(
+    asset_id: str,
+    wallet: WalletTypeInfo = Depends(require_admin_key),
+):
+    """Get the balance for a specific asset in the current wallet."""
+    try:
+        balance = await get_asset_balance(wallet.wallet.id, asset_id)
+        if not balance:
+            return {"wallet_id": wallet.wallet.id, "asset_id": asset_id, "balance": 0}
+        return balance
+    except Exception as e:
+        logger.error(f"Error retrieving asset balance: {str(e)}")
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve asset balance: {str(e)}",
+        )
+
+
+@taproot_assets_api_router.get("/asset-transactions", status_code=HTTPStatus.OK)
+async def api_get_asset_transactions(
+    wallet: WalletTypeInfo = Depends(require_admin_key),
+    asset_id: Optional[str] = None,
+    limit: int = 100,
+):
+    """Get asset transactions for the current wallet."""
+    try:
+        transactions = await get_asset_transactions(wallet.wallet.id, asset_id, limit)
+        return transactions
+    except Exception as e:
+        logger.error(f"Error retrieving asset transactions: {str(e)}")
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve asset transactions: {str(e)}",
+        )

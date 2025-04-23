@@ -7,11 +7,18 @@ from loguru import logger
 from lnbits.db import Connection, Database
 from lnbits.helpers import urlsafe_short_hash
 
-from .models import TaprootSettings, TaprootAsset, TaprootInvoice, FeeTransaction, TaprootPayment
+from .models import (
+    TaprootSettings, TaprootAsset, TaprootInvoice,
+    FeeTransaction, TaprootPayment, AssetBalance, AssetTransaction
+)
 
 # Create a database instance for the extension
 db = Database("ext_taproot_assets")
 
+
+#
+# Settings
+#
 
 async def get_or_create_settings() -> TaprootSettings:
     """Get or create Taproot Assets extension settings."""
@@ -81,6 +88,10 @@ async def update_settings(settings: TaprootSettings) -> TaprootSettings:
         )
         return settings
 
+
+#
+# Assets
+#
 
 async def create_asset(asset_data: Dict[str, Any], user_id: str) -> TaprootAsset:
     """Create a new Taproot Asset record."""
@@ -205,6 +216,10 @@ async def get_asset(asset_id: str) -> Optional[TaprootAsset]:
             updated_at=row["updated_at"],
         )
 
+
+#
+# Invoices
+#
 
 async def create_invoice(
     asset_id: str,
@@ -406,6 +421,10 @@ async def get_user_invoices(user_id: str) -> List[TaprootInvoice]:
         raise
 
 
+#
+# Fee Transactions
+#
+
 async def create_fee_transaction(
     user_id: str,
     wallet_id: str,
@@ -477,6 +496,10 @@ async def get_fee_transactions(user_id: Optional[str] = None) -> List[FeeTransac
 
         return transactions
 
+
+#
+# Payments
+#
 
 async def create_payment_record(
     payment_hash: str, 
@@ -564,3 +587,270 @@ async def get_user_payments(user_id: str) -> List[TaprootPayment]:
             payments.append(payment)
             
         return payments
+
+
+#
+# Asset Balances
+#
+
+async def get_asset_balance(wallet_id: str, asset_id: str, conn: Optional[Connection] = None) -> Optional[AssetBalance]:
+    """Get asset balance for a specific wallet and asset."""
+    if conn:
+        # Reuse existing connection
+        row = await conn.fetchone(
+            """
+            SELECT * FROM asset_balances
+            WHERE wallet_id = :wallet_id AND asset_id = :asset_id
+            """,
+            {
+                "wallet_id": wallet_id,
+                "asset_id": asset_id
+            },
+        )
+    else:
+        # Create new connection
+        async with db.connect() as conn:
+            row = await conn.fetchone(
+                """
+                SELECT * FROM asset_balances
+                WHERE wallet_id = :wallet_id AND asset_id = :asset_id
+                """,
+                {
+                    "wallet_id": wallet_id,
+                    "asset_id": asset_id
+                },
+            )
+
+    if not row:
+        return None
+
+    return AssetBalance(
+        id=row["id"],
+        wallet_id=row["wallet_id"],
+        asset_id=row["asset_id"],
+        balance=row["balance"],
+        last_payment_hash=row["last_payment_hash"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"]
+    )
+
+
+async def get_wallet_asset_balances(wallet_id: str) -> List[AssetBalance]:
+    """Get all asset balances for a wallet."""
+    async with db.connect() as conn:
+        rows = await conn.fetchall(
+            """
+            SELECT * FROM asset_balances
+            WHERE wallet_id = :wallet_id
+            ORDER BY updated_at DESC
+            """,
+            {"wallet_id": wallet_id},
+        )
+
+        balances = []
+        for row in rows:
+            balance = AssetBalance(
+                id=row["id"],
+                wallet_id=row["wallet_id"],
+                asset_id=row["asset_id"],
+                balance=row["balance"],
+                last_payment_hash=row["last_payment_hash"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"]
+            )
+            balances.append(balance)
+
+        return balances
+
+
+async def update_asset_balance(
+    wallet_id: str,
+    asset_id: str,
+    amount_change: int,
+    payment_hash: Optional[str] = None,
+    conn: Optional[Connection] = None
+) -> Optional[AssetBalance]:
+    """Update asset balance, creating it if it doesn't exist."""
+    now = datetime.now()
+    
+    if conn:
+        # Reuse existing connection
+        # Check if balance exists
+        balance = await get_asset_balance(wallet_id, asset_id, conn)
+
+        if balance:
+            # Update existing balance
+            await conn.execute(
+                """
+                UPDATE asset_balances
+                SET balance = balance + :amount_change,
+                    last_payment_hash = COALESCE(:payment_hash, last_payment_hash),
+                    updated_at = :updated_at
+                WHERE wallet_id = :wallet_id AND asset_id = :asset_id
+                """,
+                {
+                    "amount_change": amount_change,
+                    "payment_hash": payment_hash,
+                    "updated_at": now,
+                    "wallet_id": wallet_id,
+                    "asset_id": asset_id
+                },
+            )
+        else:
+            # Create new balance
+            balance_id = urlsafe_short_hash()
+            await conn.execute(
+                """
+                INSERT INTO asset_balances (
+                    id, wallet_id, asset_id, balance, last_payment_hash, created_at, updated_at
+                )
+                VALUES (
+                    :id, :wallet_id, :asset_id, :balance, :last_payment_hash, :created_at, :updated_at
+                )
+                """,
+                {
+                    "id": balance_id,
+                    "wallet_id": wallet_id,
+                    "asset_id": asset_id,
+                    "balance": amount_change,
+                    "last_payment_hash": payment_hash,
+                    "created_at": now,
+                    "updated_at": now
+                },
+            )
+        
+        # Return the updated balance
+        return await get_asset_balance(wallet_id, asset_id, conn)
+    else:
+        # Create new connection
+        async with db.connect() as conn:
+            # Begin transaction explicitly
+            await conn.execute("BEGIN TRANSACTION")
+            try:
+                result = await update_asset_balance(wallet_id, asset_id, amount_change, payment_hash, conn)
+                await conn.execute("COMMIT")
+                return result
+            except Exception as e:
+                await conn.execute("ROLLBACK")
+                logger.error(f"Failed to update asset balance: {str(e)}")
+                raise
+
+
+async def record_asset_transaction(
+    wallet_id: str,
+    asset_id: str,
+    amount: int,
+    tx_type: str,  # 'credit' or 'debit'
+    payment_hash: Optional[str] = None,
+    fee: int = 0,
+    memo: Optional[str] = None,
+    conn: Optional[Connection] = None
+) -> AssetTransaction:
+    """Record an asset transaction and update the balance."""
+    if conn:
+        # Reuse existing connection
+        tx_id = urlsafe_short_hash()
+        now = datetime.now()
+
+        # Insert transaction record
+        await conn.execute(
+            """
+            INSERT INTO asset_transactions (
+                id, wallet_id, asset_id, payment_hash, amount, fee, memo, type, created_at
+            )
+            VALUES (
+                :id, :wallet_id, :asset_id, :payment_hash, :amount, :fee, :memo, :type, :created_at
+            )
+            """,
+            {
+                "id": tx_id,
+                "wallet_id": wallet_id,
+                "asset_id": asset_id,
+                "payment_hash": payment_hash,
+                "amount": amount,
+                "fee": fee,
+                "memo": memo,
+                "type": tx_type,
+                "created_at": now
+            },
+        )
+
+        # Update balance
+        # For debit, amount should be negative for balance update
+        balance_change = amount if tx_type == 'credit' else -amount
+        await update_asset_balance(wallet_id, asset_id, balance_change, payment_hash, conn)
+
+        return AssetTransaction(
+            id=tx_id,
+            wallet_id=wallet_id,
+            asset_id=asset_id,
+            payment_hash=payment_hash,
+            amount=amount,
+            fee=fee,
+            memo=memo,
+            type=tx_type,
+            created_at=now
+        )
+    else:
+        # Create new connection
+        async with db.connect() as conn:
+            # Begin transaction explicitly to ensure atomicity
+            await conn.execute("BEGIN TRANSACTION")
+            try:
+                result = await record_asset_transaction(
+                    wallet_id, asset_id, amount, tx_type, payment_hash, fee, memo, conn
+                )
+                await conn.execute("COMMIT")
+                return result
+            except Exception as e:
+                # Rollback on error
+                await conn.execute("ROLLBACK")
+                logger.error(f"Transaction failed, rolling back: {str(e)}")
+                raise
+
+
+async def get_asset_transactions(
+    wallet_id: Optional[str] = None,
+    asset_id: Optional[str] = None,
+    limit: int = 100
+) -> List[AssetTransaction]:
+    """Get asset transactions, optionally filtered by wallet and/or asset."""
+    async with db.connect() as conn:
+        # Build query
+        query = "SELECT * FROM asset_transactions"
+        params = {}
+        where_clauses = []
+
+        if wallet_id:
+            where_clauses.append("wallet_id = :wallet_id")
+            params["wallet_id"] = wallet_id
+
+        if asset_id:
+            where_clauses.append("asset_id = :asset_id")
+            params["asset_id"] = asset_id
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        query += " ORDER BY created_at DESC LIMIT :limit"
+        params["limit"] = limit
+
+        # Execute query
+        rows = await conn.fetchall(query, params)
+
+        transactions = []
+        for row in rows:
+            tx = AssetTransaction(
+                id=row["id"],
+                wallet_id=row["wallet_id"],
+                asset_id=row["asset_id"],
+                payment_hash=row["payment_hash"],
+                amount=row["amount"],
+                fee=row["fee"],
+                memo=row["memo"],
+                type=row["type"],
+                created_at=row["created_at"]
+            )
+            transactions.append(tx)
+
+        return transactions

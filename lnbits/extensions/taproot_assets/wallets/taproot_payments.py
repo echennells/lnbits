@@ -16,7 +16,7 @@ from .taproot_adapter import (
 
 # Import WebSocket manager
 from ..websocket import ws_manager
-from ..crud import create_payment_record
+from ..crud import create_payment_record, record_asset_transaction, get_asset_balance
 
 class TaprootPaymentManager:
     """
@@ -203,6 +203,7 @@ class TaprootPaymentManager:
                 wallet_id = self.node.wallet.id
                 memo = "Taproot Asset Transfer"
                 try:
+                    # Create payment record
                     payment_record = await create_payment_record(
                         payment_hash=payment_hash,
                         payment_request=payment_request,
@@ -214,6 +215,22 @@ class TaprootPaymentManager:
                         memo=memo,
                         preimage=preimage
                     )
+                    
+                    # Update asset balance and record transaction
+                    await record_asset_transaction(
+                        wallet_id=wallet_id,
+                        asset_id=asset_id,
+                        amount=asset_amount,
+                        tx_type="debit",  # This is an outgoing payment
+                        payment_hash=payment_hash,
+                        fee=fee_msat // 1000,
+                        memo=memo
+                    )
+                    
+                    # Get updated balance
+                    balance = await get_asset_balance(wallet_id, asset_id)
+                    current_balance = balance.balance if balance else 0
+                    logger.info(f"Updated asset balance for {asset_id}: new balance = {current_balance}")
                     
                     # Send payment update via WebSocket
                     await ws_manager.send_payment_update(
@@ -233,6 +250,14 @@ class TaprootPaymentManager:
                     try:
                         assets = await self.node.list_assets()
                         filtered_assets = [asset for asset in assets if asset.get("channel_info")]
+                        
+                        # Add balance information
+                        for asset in filtered_assets:
+                            asset_id_check = asset.get("asset_id")
+                            if asset_id_check:
+                                asset_balance = await get_asset_balance(wallet_id, asset_id_check)
+                                asset["user_balance"] = asset_balance.balance if asset_balance else 0
+                        
                         if filtered_assets:
                             await ws_manager.send_assets_update(user_id, filtered_assets)
                     except Exception as asset_err:
@@ -337,9 +362,43 @@ class TaprootPaymentManager:
             # If we have a wallet, update assets via WebSocket
             if hasattr(self.node, 'wallet') and self.node.wallet:
                 user_id = self.node.wallet.user
+                wallet_id = self.node.wallet.id
+                
+                # If asset_id is available, update the balance
+                if asset_id:
+                    # Get the asset amount from the decoded invoice
+                    try:
+                        decoded = bolt11.decode(payment_request)
+                        asset_amount = decoded.amount_msat // 1000 if hasattr(decoded, "amount_msat") else 0
+                        
+                        if asset_amount > 0:
+                            # Record the transaction as a debit
+                            try:
+                                await record_asset_transaction(
+                                    wallet_id=wallet_id,
+                                    asset_id=asset_id,
+                                    amount=asset_amount,
+                                    tx_type="debit",  # This is an outgoing payment
+                                    payment_hash=payment_hash,
+                                    memo=f"Taproot Asset Transfer"
+                                )
+                                logger.info(f"Recorded asset transaction: asset_id={asset_id}, amount={asset_amount}, type=debit")
+                            except Exception as tx_err:
+                                logger.error(f"Failed to record asset transaction: {str(tx_err)}")
+                    except Exception as decode_err:
+                        logger.error(f"Failed to decode invoice for amount: {str(decode_err)}")
+                
                 try:
                     assets = await self.node.list_assets()
                     filtered_assets = [asset for asset in assets if asset.get("channel_info")]
+                    
+                    # Add balance information
+                    for asset in filtered_assets:
+                        asset_id_check = asset.get("asset_id")
+                        if asset_id_check:
+                            asset_balance = await get_asset_balance(wallet_id, asset_id_check)
+                            asset["user_balance"] = asset_balance.balance if asset_balance else 0
+                    
                     if filtered_assets:
                         await ws_manager.send_assets_update(user_id, filtered_assets)
                 except Exception as asset_err:

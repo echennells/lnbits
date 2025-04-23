@@ -12,7 +12,12 @@ from .taproot_adapter import (
 )
 
 # Import database functions
-from ..crud import get_invoice_by_payment_hash, update_invoice_status, get_user_invoices
+from ..crud import (
+    get_invoice_by_payment_hash,
+    update_invoice_status,
+    get_user_invoices,
+    record_asset_transaction
+)
 
 # Import WebSocket manager
 from ..websocket import ws_manager
@@ -66,6 +71,20 @@ async def direct_settle_invoice(node, payment_hash: str) -> bool:
             if updated_invoice and updated_invoice.status == "paid":
                 logger.info(f"Database updated: Invoice {invoice.id} status set to paid")
                 
+                # Record asset transaction and update balance
+                try:
+                    await record_asset_transaction(
+                        wallet_id=invoice.wallet_id,
+                        asset_id=invoice.asset_id,
+                        amount=invoice.asset_amount,
+                        tx_type="credit",  # Incoming payment
+                        payment_hash=payment_hash,
+                        memo=invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
+                    )
+                    logger.info(f"Asset balance updated for asset_id={invoice.asset_id}, amount={invoice.asset_amount}")
+                except Exception as balance_err:
+                    logger.error(f"Failed to update asset balance: {str(balance_err)}")
+                
                 # ADDED LOGGING: Get current asset balances for debugging
                 logger.info(f"BALANCE UPDATE: Invoice {invoice.id} paid, trying to find asset: {invoice.asset_id}")
                 assets = await node.list_assets()
@@ -118,6 +137,20 @@ async def direct_settle_invoice(node, payment_hash: str) -> bool:
             if invoice and invoice.status != "paid":
                 updated_invoice = await update_invoice_status(invoice.id, "paid")
                 logger.info(f"Updated previously settled invoice {invoice.id} status in database")
+                
+                # Record asset transaction and update balance for already settled invoice
+                try:
+                    await record_asset_transaction(
+                        wallet_id=invoice.wallet_id,
+                        asset_id=invoice.asset_id,
+                        amount=invoice.asset_amount,
+                        tx_type="credit",  # Incoming payment
+                        payment_hash=payment_hash,
+                        memo=invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
+                    )
+                    logger.info(f"Asset balance updated for previously settled invoice, asset_id={invoice.asset_id}, amount={invoice.asset_amount}")
+                except Exception as balance_err:
+                    logger.error(f"Failed to update asset balance for settled invoice: {str(balance_err)}")
                 
                 # ADDED LOGGING: Get current asset balances for already settled invoices
                 logger.info(f"BALANCE UPDATE (already settled): Invoice {invoice.id} paid, trying to find asset: {invoice.asset_id}")
