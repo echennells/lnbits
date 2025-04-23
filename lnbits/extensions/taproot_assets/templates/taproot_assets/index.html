@@ -340,14 +340,16 @@
           v-model="paymentDialog.form.paymentRequest"
           label="Paste invoice"
           :rules="[val => !!val || 'Invoice is required']"
+          :error="paymentDialog.invoiceDecodeError"
+          error-message="Invalid invoice format"
         ></q-input>
 
-        <!-- Add amount field to check against balance -->
+        <!-- Read-only amount field from parsed invoice -->
         <q-input
           filled
           v-model.number="paymentDialog.form.amount"
           type="number"
-          label="Amount"
+          label="Amount (from invoice)"
           readonly
           :rules="[val => !val || val <= (paymentDialog.selectedAsset?.user_balance || 0) || 'Amount exceeds your available balance']"
         ></q-input>
@@ -376,7 +378,7 @@
           </q-btn>
           <q-btn
             :loading="paymentDialog.inProgress"
-            :disable="paymentDialog.form.amount > (paymentDialog.selectedAsset?.user_balance || 0)"
+            :disable="paymentDialog.form.amount > (paymentDialog.selectedAsset?.user_balance || 0) || paymentDialog.invoiceDecodeError"
             color="primary"
             type="submit"
           >

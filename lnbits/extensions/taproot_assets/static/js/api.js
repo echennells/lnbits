@@ -49,3 +49,9 @@ function payInvoice(adminkey, payload) {
   return LNbits.api
     .request('POST', '/taproot_assets/api/v1/taproot/pay', adminkey, payload);
 }
+
+// Parse an invoice using the server-side endpoint
+function parseInvoice(adminkey, paymentRequest) {
+  return LNbits.api
+    .request('GET', `/taproot_assets/api/v1/taproot/parse-invoice?payment_request=${encodeURIComponent(paymentRequest)}`, adminkey);
+}

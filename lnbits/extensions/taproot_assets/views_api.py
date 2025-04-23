@@ -125,6 +125,60 @@ async def api_get_tapd_settings(user: User = Depends(check_user_exists)):
     return settings_dict
 
 
+@taproot_assets_api_router.get("/parse-invoice", status_code=HTTPStatus.OK)
+async def api_parse_invoice(
+    payment_request: str = Query(..., description="BOLT11 payment request to parse"),
+    wallet: WalletTypeInfo = Depends(require_admin_key),
+):
+    """
+    Parse a BOLT11 payment request to extract invoice details for Taproot Assets.
+    """
+    try:
+        # Use the bolt11 library to decode the invoice
+        decoded = bolt11.decode(payment_request)
+        
+        # Extract the description to look for asset information
+        description = decoded.description if hasattr(decoded, "description") else ""
+        
+        # Initialize with default values
+        asset_id = None
+        asset_amount = 1  # Default to 1 for Taproot Asset invoices
+        
+        # Try to extract asset_id from description
+        if description and 'asset_id=' in description:
+            asset_id_match = re.search(r'asset_id=([a-fA-F0-9]{64})', description)
+            if asset_id_match:
+                asset_id = asset_id_match.group(1)
+        
+        # For Taproot Asset invoices, we need to ignore the Bitcoin amount
+        # and use the asset amount from the description or default to 1
+        if description:
+            # Try to extract asset amount if present
+            amount_match = re.search(r'amount=(\d+(\.\d+)?)', description) 
+            if amount_match:
+                asset_amount = float(amount_match.group(1))
+        
+        # Extract the relevant information
+        result = {
+            "payment_hash": decoded.payment_hash,
+            "amount": asset_amount,  # Use the asset amount, not the Bitcoin amount
+            "description": description,
+            "expiry": decoded.expiry if hasattr(decoded, "expiry") else 3600,
+            "timestamp": decoded.date,
+            "valid": True,
+            "asset_id": asset_id
+        }
+        
+        logger.info(f"Parsed invoice: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to parse invoice: {str(e)}")
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=f"Invalid invoice format: {str(e)}",
+        )
+
+
 @taproot_assets_api_router.get("/listassets", status_code=HTTPStatus.OK)
 async def api_list_assets(
     wallet: WalletTypeInfo = Depends(require_admin_key),
@@ -312,6 +366,15 @@ async def api_pay_invoice(
 ):
     """Pay a Taproot Asset invoice."""
     try:
+        # Get the parsed invoice first to determine the correct asset amount
+        try:
+            parsed_invoice = await api_parse_invoice(data.payment_request, wallet)
+            asset_amount = parsed_invoice.get("amount", 1)  # Default to 1 if not found
+            logger.info(f"Parsed invoice amount: {asset_amount}")
+        except Exception as parse_error:
+            logger.error(f"Error parsing invoice (using default amount): {str(parse_error)}")
+            asset_amount = 1  # Default to 1 if parsing fails
+        
         # Initialize wallet
         taproot_wallet = TaprootWalletExtension()
         
@@ -336,7 +399,9 @@ async def api_pay_invoice(
         
         # Get asset details from extra
         asset_id = payment.extra.get("asset_id", "")
-        asset_amount = payment.extra.get("asset_amount", 0)
+        
+        # Use the parsed amount instead of what's in the payment response
+        # This is important for Taproot Asset invoices
         
         # Create descriptive memo
         memo = f"Taproot Asset Transfer"

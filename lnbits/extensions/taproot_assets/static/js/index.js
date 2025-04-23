@@ -65,7 +65,8 @@ window.app = Vue.createApp({
           amount: 0,
           feeLimit: 1000
         },
-        inProgress: false
+        inProgress: false,
+        invoiceDecodeError: false
       },
 
       // Success dialog - EXPLICITLY INITIALIZED
@@ -921,6 +922,7 @@ window.app = Vue.createApp({
         feeLimit: 1000
       };
       this.paymentDialog.inProgress = false;
+      this.paymentDialog.invoiceDecodeError = false;
     },
     
     closePaymentDialog() {
@@ -928,34 +930,57 @@ window.app = Vue.createApp({
       this.resetPaymentForm();
     },
     
-    // Extract amount from BOLT11 invoice
-    extractAmountFromInvoice(paymentRequest) {
-      if (!paymentRequest) return 0;
-      
-      try {
-        // Try to decode using bolt11 library
-        const decoded = bolt11.decode(paymentRequest);
-        
-        if (decoded && decoded.satoshis) {
-          return decoded.satoshis / 1000; // Convert to asset units
-        } else if (decoded && decoded.millisatoshis) {
-          return decoded.millisatoshis / 1000000; // Convert msat to asset units
-        }
-      } catch (e) {
-        console.error('Failed to decode invoice:', e);
-      }
-      
-      return 0;
-    },
-    
-    // Add a watcher for payment request to update amount
-    watchPaymentRequest(val) {
-      if (val) {
-        const amount = this.extractAmountFromInvoice(val);
-        this.paymentDialog.form.amount = amount;
-      } else {
+    // Use server-side parsing for invoices
+    parseInvoice(paymentRequest) {
+      if (!paymentRequest || paymentRequest.trim() === '') {
+        this.paymentDialog.invoiceDecodeError = false;
         this.paymentDialog.form.amount = 0;
+        return;
       }
+      
+      if (!this.g.user.wallets.length) return;
+      const wallet = this.g.user.wallets[0];
+      
+      // Show loading indicator
+      this.$q.loading.show({
+        message: 'Parsing invoice...'
+      });
+      
+      // Use the API to parse the invoice
+      parseInvoice(wallet.adminkey, paymentRequest)
+        .then(response => {
+          console.log('Invoice parsed:', response.data);
+          
+          // Update form with parsed data
+          this.paymentDialog.form.amount = response.data.amount || 0;
+          this.paymentDialog.invoiceDecodeError = false;
+          
+          // If amount is 0, warn the user
+          if (response.data.amount === 0) {
+            this.$q.notify({
+              message: 'Warning: Invoice has no specified amount.',
+              color: 'warning',
+              icon: 'warning',
+              timeout: 2000
+            });
+          }
+        })
+        .catch(error => {
+          console.error('Failed to parse invoice:', error);
+          this.paymentDialog.invoiceDecodeError = true;
+          this.paymentDialog.form.amount = 0;
+          
+          // Show error notification
+          this.$q.notify({
+            message: 'Invalid invoice format',
+            color: 'negative',
+            icon: 'warning',
+            timeout: 2000
+          });
+        })
+        .finally(() => {
+          this.$q.loading.hide();
+        });
     },
     
     async submitPaymentForm() {
@@ -970,14 +995,13 @@ window.app = Vue.createApp({
         return;
       }
       
-      // Check if payment amount exceeds user's balance
-      const userBalance = this.paymentDialog.selectedAsset?.user_balance || 0;
-      if (this.paymentDialog.form.amount > userBalance) {
+      // Don't proceed if invoice is invalid
+      if (this.paymentDialog.invoiceDecodeError) {
         this.$q.notify({
-          message: `Payment amount (${this.paymentDialog.form.amount}) exceeds your available balance (${userBalance})`,
+          message: 'Cannot pay an invalid invoice',
           color: 'negative',
           icon: 'warning',
-          timeout: 3000
+          timeout: 2000
         });
         return;
       }
@@ -1110,8 +1134,15 @@ window.app = Vue.createApp({
       this.refreshTransactions();
     }, 500);
     
-    // Add watcher for payment request to automatically update amount
-    this.$watch('paymentDialog.form.paymentRequest', this.watchPaymentRequest);
+    // Add watcher for payment request to parse invoice on change
+    this.$watch('paymentDialog.form.paymentRequest', (newValue) => {
+      if (newValue) {
+        this.parseInvoice(newValue);
+      } else {
+        this.paymentDialog.form.amount = 0;
+        this.paymentDialog.invoiceDecodeError = false;
+      }
+    });
   },
   
   activated() {
