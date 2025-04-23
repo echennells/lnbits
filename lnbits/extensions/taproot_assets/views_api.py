@@ -32,7 +32,8 @@ from .crud import (
     update_asset_balance,
     record_asset_transaction,
     get_asset_transactions,
-    is_self_payment
+    is_self_payment,
+    is_internal_payment
 )
 from .models import TaprootSettings, TaprootAsset, TaprootInvoice, TaprootInvoiceRequest, TaprootPaymentRequest
 from .wallets.taproot_wallet import TaprootWalletExtension
@@ -189,6 +190,10 @@ async def api_list_assets(
         # Create a wallet instance to communicate with tapd
         taproot_wallet = TaprootWalletExtension()
 
+        # Set the user and wallet ID
+        taproot_wallet.user = wallet.wallet.user
+        taproot_wallet.id = wallet.wallet.id
+
         # Get assets from tapd
         assets_data = await taproot_wallet.list_assets()
         
@@ -270,6 +275,10 @@ async def api_create_invoice(
     try:
         # Create a wallet instance
         taproot_wallet = TaprootWalletExtension()
+        
+        # Set the user and wallet ID
+        taproot_wallet.user = wallet.wallet.user
+        taproot_wallet.id = wallet.wallet.id
         
         # Create the invoice
         invoice_response = await taproot_wallet.create_invoice(
@@ -391,6 +400,10 @@ async def api_pay_invoice(
                     detail="Could not extract payment hash from invoice"
                 )
         
+        # Check if this is an internal payment
+        is_internal = await is_internal_payment(payment_hash)
+        logger.info(f"Internal payment detection for {payment_hash}: {is_internal}")
+        
         # Check if this is a self-payment
         is_self = await is_self_payment(payment_hash, wallet.wallet.user)
         logger.info(f"Self-payment detection for {payment_hash}: {is_self}")
@@ -398,8 +411,13 @@ async def api_pay_invoice(
         # Initialize wallet
         taproot_wallet = TaprootWalletExtension()
         
-        if is_self:
-            logger.info(f"Handling self-payment for invoice with hash: {payment_hash}")
+        # Set the user and wallet ID
+        taproot_wallet.user = wallet.wallet.user
+        taproot_wallet.id = wallet.wallet.id
+        
+        # If this is an internal payment, handle it with database updates
+        if is_internal:
+            logger.info(f"Handling internal payment for invoice with hash: {payment_hash}")
             
             # Get the invoice to retrieve asset_id
             invoice = await get_invoice_by_payment_hash(payment_hash)
@@ -409,7 +427,8 @@ async def api_pay_invoice(
                     detail="Invoice not found"
                 )
                 
-            # Use the update_after_payment method for self-payments
+            # Use the update_after_payment method for internal payments
+            # This now handles all database operations internally
             result = await taproot_wallet.update_taproot_assets_after_payment(
                 invoice=data.payment_request,
                 payment_hash=payment_hash,
@@ -418,52 +437,23 @@ async def api_pay_invoice(
             )
             
             if not result.ok:
-                raise Exception(f"Self-payment failed: {result.error_message}")
+                raise Exception(f"Internal payment failed: {result.error_message}")
             
-            # Create payment record for self-payment
-            try:
-                payment_record = await create_payment_record(
-                    payment_hash=payment_hash,
-                    payment_request=data.payment_request,
-                    asset_id=invoice.asset_id,
-                    asset_amount=invoice.asset_amount,
-                    fee_sats=0,  # No routing fee for self-payment
-                    user_id=wallet.wallet.user,
-                    wallet_id=wallet.wallet.id,
-                    memo=f"Self-payment: {invoice.memo or 'Taproot Asset Transfer'}",
-                    preimage=result.preimage or ""
-                )
-                
-                # Send WebSocket notification for payment
-                if payment_record:
-                    payment_data = {
-                        "id": payment_record.id,
-                        "payment_hash": payment_hash,
-                        "asset_id": invoice.asset_id,
-                        "asset_amount": invoice.asset_amount,
-                        "fee_sats": 0,
-                        "memo": payment_record.memo,
-                        "status": "completed",
-                        "created_at": payment_record.created_at.isoformat() if hasattr(payment_record.created_at, "isoformat") else str(payment_record.created_at)
-                    }
-                    await ws_manager.notify_payment_update(wallet.wallet.user, payment_data)
-            except Exception as db_error:
-                logger.error(f"Failed to create payment record for self-payment: {str(db_error)}")
-            
-            # Return success response for self-payment
+            # Return success response for internal payment
             return {
                 "success": True,
                 "payment_hash": payment_hash,
                 "preimage": result.preimage or "",
-                "fee_msat": 0,  # No routing fee for self-payment
+                "fee_msat": 0,  # No routing fee for internal payment
                 "sat_fee_paid": 0,
                 "routing_fees_sats": 0,
                 "asset_amount": invoice.asset_amount,
                 "asset_id": invoice.asset_id,
-                "self_payment": True  # Flag to indicate this was a self-payment
+                "internal_payment": True,  # Flag to indicate this was an internal payment
+                "self_payment": is_self  # Flag to indicate if this was a self-payment
             }
-        
-        # If not a self-payment, proceed with normal payment flow
+
+        # If not a self-payment or internal payment, proceed with normal payment flow
         # Set fee limit
         fee_limit_sats = max(taproot_settings.default_sat_fee, 10)
         
@@ -492,7 +482,7 @@ async def api_pay_invoice(
         # Create descriptive memo
         memo = f"Taproot Asset Transfer"
         
-        # Record the payment
+        # Record the payment - for external Lightning payments only
         try:
             payment_record = await create_payment_record(
                 payment_hash=payment_hash,
@@ -506,7 +496,7 @@ async def api_pay_invoice(
                 preimage=preimage
             )
             
-            # Record asset transaction and update balance
+            # Record asset transaction and update balance for external payments
             await record_asset_transaction(
                 wallet_id=wallet.wallet.id,
                 asset_id=asset_id,
@@ -534,6 +524,9 @@ async def api_pay_invoice(
                 # Also update asset balances via WebSocket
                 try:
                     taproot_wallet = TaprootWalletExtension()  # Create a fresh instance
+                    taproot_wallet.user = wallet.wallet.user
+                    taproot_wallet.id = wallet.wallet.id
+                    
                     assets = await taproot_wallet.list_assets()
                     filtered_assets = [asset for asset in assets if asset.get("channel_info")]
                     
@@ -574,8 +567,8 @@ async def api_pay_invoice(
         elif "peer" in error_details.lower() and "channel" in error_details.lower():
             detail = "Channel with peer appears to be offline. Please refresh and try again."
         elif "self-payments not allowed" in error_details.lower():
-            # Trying to catch and handle the self-payment error if our detection failed
-            detail = "Cannot pay your own invoice directly. The system will handle this as a self-payment automatically."
+            # This should be caught by internal payment detection now
+            detail = "This invoice belongs to another user on this node. The system will handle this as an internal payment automatically."
             
             # Log that our detection failed
             logger.warning(f"Self-payment detection failed for an invoice with error: {error_details}")
@@ -583,7 +576,7 @@ async def api_pay_invoice(
             # Try to extract payment hash from error message for debugging
             match = re.search(r'hash=([a-fA-F0-9]{64})', error_details)
             if match:
-                logger.warning(f"Potentially missed self-payment for hash: {match.group(1)}")
+                logger.warning(f"Potentially missed internal payment for hash: {match.group(1)}")
         else:
             detail = f"gRPC error: {error_details}"
             
@@ -606,12 +599,12 @@ async def api_pay_invoice(
         )
 
 
-@taproot_assets_api_router.post("/self-payment", status_code=HTTPStatus.OK)
-async def api_self_payment(
+@taproot_assets_api_router.post("/internal-payment", status_code=HTTPStatus.OK)
+async def api_internal_payment(
     data: TaprootPaymentRequest,
     wallet: WalletTypeInfo = Depends(require_admin_key),
 ):
-    """Process a self-payment for a Taproot Asset."""
+    """Process an internal payment for a Taproot Asset between different users on the same node."""
     try:
         # Parse the invoice to get payment hash
         try:
@@ -619,7 +612,7 @@ async def api_self_payment(
             payment_hash = parsed_invoice.get("payment_hash")
         except Exception as e:
             logger.error(f"Failed to parse invoice: {str(e)}")
-            
+
             # Try direct extraction as fallback
             try:
                 decoded = bolt11.decode(data.payment_request)
@@ -630,23 +623,113 @@ async def api_self_payment(
                     status_code=HTTPStatus.BAD_REQUEST,
                     detail="Could not extract payment hash from invoice"
                 )
-        
-        # Verify this is actually a self-payment
-        is_self = await is_self_payment(payment_hash, wallet.wallet.user)
-        if not is_self:
+
+        # Verify this is actually an internal payment
+        is_internal = await is_internal_payment(payment_hash)
+        if not is_internal:
             raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST, 
-                detail="Not a self-payment. Invoice was not created by this user."
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="Not an internal payment. Invoice was not created on this node."
             )
-            
+
         # Get the invoice to retrieve asset_id
         invoice = await get_invoice_by_payment_hash(payment_hash)
         if not invoice:
             raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Invoice not found")
-        
+
         # Initialize wallet
         taproot_wallet = TaprootWalletExtension()
-        
+
+        # Set the user and wallet ID
+        taproot_wallet.user = wallet.wallet.user
+        taproot_wallet.id = wallet.wallet.id
+
+        # Use the update_after_payment method which now handles all database operations internally
+        result = await taproot_wallet.update_taproot_assets_after_payment(
+            invoice=data.payment_request,
+            payment_hash=payment_hash,
+            fee_limit_sats=data.fee_limit_sats,
+            asset_id=invoice.asset_id
+        )
+
+        if not result.ok:
+            raise Exception(f"Internal payment failed: {result.error_message}")
+
+        # Return success response
+        return {
+            "success": True,
+            "payment_hash": payment_hash,
+            "preimage": result.preimage or "",
+            "asset_amount": invoice.asset_amount,
+            "asset_id": invoice.asset_id,
+            "internal_payment": True,
+            "self_payment": await is_self_payment(payment_hash, wallet.wallet.user)
+        }
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Internal payment error: {str(e)}")
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process internal payment: {str(e)}"
+        )
+
+
+# Keep self-payment endpoint for backward compatibility
+@taproot_assets_api_router.post("/self-payment", status_code=HTTPStatus.OK)
+async def api_self_payment(
+    data: TaprootPaymentRequest,
+    wallet: WalletTypeInfo = Depends(require_admin_key),
+):
+    """Process a self-payment for a Taproot Asset (deprecated, use internal-payment instead)."""
+    try:
+        # Parse the invoice to get payment hash
+        try:
+            parsed_invoice = await api_parse_invoice(data.payment_request, wallet)
+            payment_hash = parsed_invoice.get("payment_hash")
+        except Exception as e:
+            logger.error(f"Failed to parse invoice: {str(e)}")
+
+            # Try direct extraction as fallback
+            try:
+                decoded = bolt11.decode(data.payment_request)
+                payment_hash = decoded.payment_hash
+            except Exception as e2:
+                logger.error(f"Failed to extract payment hash: {str(e2)}")
+                raise HTTPException(
+                    status_code=HTTPStatus.BAD_REQUEST,
+                    detail="Could not extract payment hash from invoice"
+                )
+
+        # Check if this is an internal payment
+        is_internal = await is_internal_payment(payment_hash)
+        if not is_internal:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="Not an internal payment. Invoice was not created on this node."
+            )
+
+        # Get the invoice to retrieve asset_id
+        invoice = await get_invoice_by_payment_hash(payment_hash)
+        if not invoice:
+            raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Invoice not found")
+
+        # Check if this is a true self-payment (same user)
+        is_self = await is_self_payment(payment_hash, wallet.wallet.user)
+        if not is_self:
+            # Rather than failing, forward to internal payment endpoint
+            logger.info(f"Forwarding to internal payment since this is not a self-payment")
+            return await api_internal_payment(data, wallet)
+
+        # Initialize wallet
+        taproot_wallet = TaprootWalletExtension()
+
+        # Set the user and wallet ID
+        taproot_wallet.user = wallet.wallet.user
+        taproot_wallet.id = wallet.wallet.id
+
         # Use the update_after_payment method
         result = await taproot_wallet.update_taproot_assets_after_payment(
             invoice=data.payment_request,
@@ -654,40 +737,10 @@ async def api_self_payment(
             fee_limit_sats=data.fee_limit_sats,
             asset_id=invoice.asset_id
         )
-        
+
         if not result.ok:
             raise Exception(f"Self-payment failed: {result.error_message}")
-        
-        # Create payment record for self-payment
-        try:
-            payment_record = await create_payment_record(
-                payment_hash=payment_hash,
-                payment_request=data.payment_request,
-                asset_id=invoice.asset_id,
-                asset_amount=invoice.asset_amount,
-                fee_sats=0,  # No routing fee for self-payment
-                user_id=wallet.wallet.user,
-                wallet_id=wallet.wallet.id,
-                memo=f"Self-payment: {invoice.memo or 'Taproot Asset Transfer'}",
-                preimage=result.preimage or ""
-            )
-            
-            # Send WebSocket notification for payment
-            if payment_record:
-                payment_data = {
-                    "id": payment_record.id,
-                    "payment_hash": payment_hash,
-                    "asset_id": invoice.asset_id,
-                    "asset_amount": invoice.asset_amount,
-                    "fee_sats": 0,
-                    "memo": payment_record.memo,
-                    "status": "completed",
-                    "created_at": payment_record.created_at.isoformat() if hasattr(payment_record.created_at, "isoformat") else str(payment_record.created_at)
-                }
-                await ws_manager.notify_payment_update(wallet.wallet.user, payment_data)
-        except Exception as db_error:
-            logger.error(f"Failed to create payment record for self-payment: {str(db_error)}")
-            
+
         # Return success response
         return {
             "success": True,
@@ -704,7 +757,7 @@ async def api_self_payment(
     except Exception as e:
         logger.error(f"Self-payment error: {str(e)}")
         raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, 
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             detail=f"Failed to process self-payment: {str(e)}"
         )
 

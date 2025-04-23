@@ -958,15 +958,6 @@ window.app = Vue.createApp({
           this.paymentDialog.form.amount = response.data.amount || 0;
           this.paymentDialog.invoiceDecodeError = false;
           
-          // Check if this invoice might be a self-payment (checking if we have it in our invoices)
-          const paymentHash = response.data.payment_hash;
-          if (paymentHash) {
-            const ownInvoice = this.invoices.find(inv => inv.payment_hash === paymentHash);
-            if (ownInvoice) {
-              console.log('Self-payment detected for invoice:', ownInvoice);
-            }
-          }
-          
           // If amount is 0, warn the user
           if (response.data.amount === 0) {
             this.$q.notify({
@@ -1033,14 +1024,17 @@ window.app = Vue.createApp({
           payload.peer_pubkey = this.paymentDialog.selectedAsset.channel_info.peer_pubkey;
         }
 
-        // Make the payment request - the backend will determine if it's a self-payment
+        // Make the payment request - the backend will determine if it's an internal payment
         const response = await payInvoice(wallet.adminkey, payload);
         
         // Close payment dialog
         this.paymentDialog.show = false;
         
         // Customize success message based on response
-        if (response.data.self_payment) {
+        if (response.data.internal_payment) {
+          this.successDialog.title = 'Internal Payment Processed';
+          this.successDialog.message = 'Payment to another user on this node has been processed successfully.';
+        } else if (response.data.self_payment) {
           this.successDialog.title = 'Self-Payment Processed';
           this.successDialog.message = 'Self-payment has been processed successfully.';
         } else {
@@ -1069,17 +1063,17 @@ window.app = Vue.createApp({
         if (error.response && error.response.data && error.response.data.detail) {
           const errorDetail = error.response.data.detail.toLowerCase();
           
-          // Check for self-payment error
-          if (errorDetail.includes('self-payment') || errorDetail.includes('own invoice')) {
-            errorMessage = 'This is your own invoice. System will process it as a self-payment.';
+          // Check for internal payment hint
+          if (errorDetail.includes('internal payment') || errorDetail.includes('own invoice')) {
+            errorMessage = 'This invoice belongs to another user on this node. System will process it as an internal payment.';
             
-            // Try to process as self-payment automatically
+            // Try to process as internal payment automatically
             try {
-              this.processSelfPayment(this.paymentDialog.form.paymentRequest, this.paymentDialog.form.feeLimit);
-              return; // Exit early as we're handling it
-            } catch (selfPayError) {
-              console.error('Error in automatic self-payment handling:', selfPayError);
-              errorMessage = 'Failed to process self-payment. Please try again.';
+              const success = await this.processInternalPayment(this.paymentDialog.form.paymentRequest, this.paymentDialog.form.feeLimit);
+              if (success) return; // Exit early as we're handling it
+            } catch (internalPayError) {
+              console.error('Error in automatic internal payment handling:', internalPayError);
+              errorMessage = 'Failed to process internal payment. Please try again.';
             }
           }
           // Check for offline channel or channel-related errors
@@ -1115,10 +1109,10 @@ window.app = Vue.createApp({
       }
     },
     
-    // Process a self-payment - this is a backup method in case the automatic detection fails
-    async processSelfPayment(paymentRequest, feeLimit) {
+    // Process an internal payment - between different users on the same node
+    async processInternalPayment(paymentRequest, feeLimit) {
       try {
-        if (!this.g.user.wallets.length) return;
+        if (!this.g.user.wallets.length) return false;
         
         this.paymentDialog.inProgress = true;
         const wallet = this.g.user.wallets[0];
@@ -1129,15 +1123,15 @@ window.app = Vue.createApp({
           fee_limit_sats: feeLimit || 10
         };
         
-        // Call the explicit self-payment endpoint
-        const response = await processSelfPayment(wallet.adminkey, payload);
+        // Call the internal payment endpoint
+        const response = await processInternalPayment(wallet.adminkey, payload);
         
         // Close payment dialog
         this.paymentDialog.show = false;
         
-        // Show self-payment success dialog
-        this.successDialog.title = 'Self-Payment Processed';
-        this.successDialog.message = 'Self-payment has been processed successfully.';
+        // Show internal payment success dialog
+        this.successDialog.title = 'Internal Payment Processed';
+        this.successDialog.message = 'Payment to another user on this node has been processed successfully.';
         this.successDialog.show = true;
         
         // WebSockets will handle UI updates, but refresh just in case
@@ -1145,7 +1139,69 @@ window.app = Vue.createApp({
         
         // Force asset refresh after sending payment
         setTimeout(() => {
-          console.log('Self-payment completed - refreshing assets directly');
+          console.log('Internal payment completed - refreshing assets directly');
+          this.getAssets();
+        }, 500);
+        
+        return true;
+      } catch (error) {
+        console.error('Internal payment failed:', error);
+        
+        let errorMessage = 'Internal payment failed';
+        if (error.response && error.response.data && error.response.data.detail) {
+          errorMessage = error.response.data.detail;
+        }
+        
+        // Show error notification
+        this.$q.notify({
+          message: errorMessage,
+          color: 'negative',
+          icon: 'warning',
+          timeout: 2000
+        });
+        
+        return false;
+      } finally {
+        this.paymentDialog.inProgress = false;
+      }
+    },
+    
+    // Process a self-payment (backward compatibility)
+    async processSelfPayment(paymentRequest, feeLimit) {
+      try {
+        if (!this.g.user.wallets.length) return false;
+        
+        this.paymentDialog.inProgress = true;
+        const wallet = this.g.user.wallets[0];
+        
+        // Create payload
+        const payload = {
+          payment_request: paymentRequest,
+          fee_limit_sats: feeLimit || 10
+        };
+        
+        // Call the self-payment endpoint (now redirects to internal payment if needed)
+        const response = await processSelfPayment(wallet.adminkey, payload);
+        
+        // Close payment dialog
+        this.paymentDialog.show = false;
+        
+        // Show success dialog with appropriate title based on response
+        if (response.data.internal_payment) {
+          this.successDialog.title = 'Internal Payment Processed';
+          this.successDialog.message = 'Payment to another user on this node has been processed successfully.';
+        } else {
+          this.successDialog.title = 'Self-Payment Processed';
+          this.successDialog.message = 'Self-payment has been processed successfully.';
+        }
+        this.successDialog.show = true;
+        
+        // WebSockets will handle UI updates, but refresh just in case
+        await this.refreshTransactions();
+        
+        // Force asset refresh after sending payment
+        setTimeout(() => {
+          console.log('Self/Internal payment completed - refreshing assets directly');
           this.getAssets();
         }, 500);
         

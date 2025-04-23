@@ -16,7 +16,9 @@ from ..crud import (
     get_invoice_by_payment_hash,
     update_invoice_status,
     get_user_invoices,
-    record_asset_transaction
+    record_asset_transaction,
+    is_internal_payment,
+    is_self_payment
 )
 
 # Import WebSocket manager
@@ -25,10 +27,11 @@ from ..websocket import ws_manager
 # Singleton tracking for monitoring instances
 _monitoring_instances = set()
 
-# Module-level direct settlement function
+# Module-level direct settlement function for actual Lightning payments
 async def direct_settle_invoice(node, payment_hash: str) -> bool:
     """
     Settle an invoice directly using the stored preimage.
+    This is for actual Lightning Network payments.
     
     Args:
         node: The node instance
@@ -44,7 +47,7 @@ async def direct_settle_invoice(node, payment_hash: str) -> bool:
             logger.debug(f"Invoice {payment_hash} is already marked as paid in the database, skipping settlement")
             return True
 
-        logger.info(f"Settling invoice for payment hash {payment_hash}")
+        logger.info(f"Settling Lightning invoice for payment hash {payment_hash}")
 
         # Get the preimage for this payment hash
         preimage_hex = node._get_preimage(payment_hash)
@@ -198,6 +201,98 @@ async def direct_settle_invoice(node, payment_hash: str) -> bool:
         return False
 
 
+# New function for database-only settlement of internal payments
+async def settle_internal_payment(node, payment_hash: str) -> bool:
+    """
+    Settle an internal payment by directly updating database records.
+    This is for transfers between users on the same LNbits node (no Lightning Network payment).
+    
+    Args:
+        node: The node instance
+        payment_hash: The payment hash of the invoice to settle
+        
+    Returns:
+        bool: True if settled successfully, False otherwise
+    """
+    try:
+        # Check if invoice exists and get details
+        invoice = await get_invoice_by_payment_hash(payment_hash)
+        if not invoice:
+            logger.error(f"No invoice found for payment hash: {payment_hash}")
+            return False
+            
+        # Check if invoice is already paid
+        if invoice.status == "paid":
+            logger.debug(f"Invoice {payment_hash} is already marked as paid in the database")
+            return True
+            
+        # Get the preimage (for record keeping)
+        preimage_hex = node._get_preimage(payment_hash)
+        if not preimage_hex:
+            logger.warning(f"No preimage found for payment hash {payment_hash}, generating one")
+            # Generate a preimage if one doesn't exist
+            preimage = hashlib.sha256(f"{payment_hash}_{time.time()}".encode()).digest()
+            preimage_hex = preimage.hex()
+            # Store it
+            node._store_preimage(payment_hash, preimage_hex)
+        
+        # For internal payments, we don't need to call the gRPC SettleInvoice
+        # Just update the database records directly
+        
+        # Update invoice status to paid
+        updated_invoice = await update_invoice_status(invoice.id, "paid")
+        if not updated_invoice or updated_invoice.status != "paid":
+            logger.error(f"Failed to update invoice status in database")
+            return False
+            
+        logger.info(f"Database updated: Invoice {invoice.id} status set to paid (internal payment)")
+        
+        # Only record the credit transaction for the recipient here
+        # The debit transaction for the sender will be handled in taproot_payments.py
+        try:
+            await record_asset_transaction(
+                wallet_id=invoice.wallet_id,
+                asset_id=invoice.asset_id,
+                amount=invoice.asset_amount,
+                tx_type="credit",  # Incoming payment (recipient)
+                payment_hash=payment_hash,
+                memo=invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
+            )
+            logger.info(f"Recipient balance updated for asset_id={invoice.asset_id}, amount={invoice.asset_amount}")
+        except Exception as balance_err:
+            logger.error(f"Failed to update recipient balance: {str(balance_err)}")
+            # Continue even if balance update fails
+            
+        # Send WebSocket notification of the invoice update
+        await ws_manager.notify_invoice_update(
+            invoice.user_id, 
+            {
+                "id": invoice.id,
+                "payment_hash": payment_hash,
+                "status": "paid",
+                "asset_id": invoice.asset_id,
+                "asset_amount": invoice.asset_amount,
+                "paid_at": updated_invoice.paid_at.isoformat() if updated_invoice.paid_at else None
+            }
+        )
+        
+        # Try to update the asset displays via WebSocket
+        try:
+            assets = await node.list_assets()
+            filtered_assets = [asset for asset in assets if asset.get("channel_info")]
+            if filtered_assets:
+                logger.info(f"Sending {len(filtered_assets)} assets via WebSocket after internal payment")
+                await ws_manager.notify_assets_update(invoice.user_id, filtered_assets)
+        except Exception as asset_err:
+            logger.error(f"Failed to update assets display: {str(asset_err)}")
+            
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to settle internal payment: {str(e)}")
+        return False
+
+
 class TaprootTransferManager:
     """
     Handles Taproot Asset transfer monitoring.
@@ -268,9 +363,18 @@ class TaprootTransferManager:
                         TaprootTransferManager._settled_payment_hashes.add(payment_hash)
                         continue
                     
-                    # Attempt settlement
+                    # Check if this is an internal payment
+                    is_internal = await is_internal_payment(payment_hash)
+                    
+                    # Attempt settlement with appropriate method
                     logger.info(f"Found unprocessed payment, attempting settlement")
-                    success = await direct_settle_invoice(self.node, payment_hash)
+                    
+                    if is_internal:
+                        # Use database-only settlement for internal payments
+                        success = await settle_internal_payment(self.node, payment_hash)
+                    else:
+                        # Use Lightning Network settlement for external payments
+                        success = await direct_settle_invoice(self.node, payment_hash)
                     
                     # Track settlement status
                     if success:
@@ -405,6 +509,34 @@ class TaprootTransferManager:
         logger.info(f"Monitoring invoice {payment_hash}")
 
         try:
+            # First check if this is an internal payment
+            is_internal = await is_internal_payment(payment_hash)
+            
+            # For internal payments, skip the Lightning monitoring
+            if is_internal:
+                # Check if it's a self-payment (same user) or just internal (different users)
+                invoice = await get_invoice_by_payment_hash(payment_hash)
+                if invoice:
+                    is_self = False
+                    if hasattr(self.node, 'wallet') and self.node.wallet:
+                        is_self = await is_self_payment(payment_hash, self.node.wallet.user)
+                    
+                    if is_self:
+                        logger.info(f"Self-payment detected for {payment_hash}, using database settlement")
+                    else:
+                        logger.info(f"Internal payment detected for {payment_hash}, using database settlement")
+                    
+                    # Just use database settlement for internal payments
+                    success = await settle_internal_payment(self.node, payment_hash)
+                    if success:
+                        TaprootTransferManager._settled_payment_hashes.add(payment_hash)
+                        logger.info(f"Internal payment successfully settled: {payment_hash}")
+                    else:
+                        logger.error(f"Failed to settle internal payment: {payment_hash}")
+                        
+                return
+            
+            # Continue with Lightning monitoring for external payments
             # Convert payment hash to bytes
             payment_hash_bytes = bytes.fromhex(payment_hash) if isinstance(payment_hash, str) else payment_hash
             request = invoices_pb2.SubscribeSingleInvoiceRequest(r_hash=payment_hash_bytes)
@@ -424,7 +556,7 @@ class TaprootTransferManager:
                     if script_key_hex:
                         self.node.invoice_manager._store_script_key_mapping(script_key_hex, payment_hash)
                     
-                    # Attempt settlement
+                    # Attempt settlement with Lightning Network
                     success = await direct_settle_invoice(self.node, payment_hash)
                     
                     # Track settlement status
@@ -493,24 +625,33 @@ class TaprootTransferManager:
             return True
         
         try:
-            # Try to get the preimage directly from the payment hash
-            preimage_hex = self.node._get_preimage(payment_hash)
+            # Check if this is an internal payment
+            is_internal = await is_internal_payment(payment_hash)
             
-            # If not found and script key is provided, try to look up the payment hash
-            if not preimage_hex and script_key:
-                mapped_payment_hash = self.node.invoice_manager._get_payment_hash_from_script_key(script_key)
-                if mapped_payment_hash:
-                    preimage_hex = self.node._get_preimage(mapped_payment_hash)
-            
-            # Use the direct settle function
-            if preimage_hex:
-                success = await direct_settle_invoice(self.node, payment_hash)
-                if success:
-                    TaprootTransferManager._settled_payment_hashes.add(payment_hash)
-                return success
+            if is_internal:
+                # Use database settlement for internal payments
+                success = await settle_internal_payment(self.node, payment_hash)
             else:
-                logger.error(f"No preimage found for {payment_hash}")
-                return False
+                # Try to get the preimage directly from the payment hash
+                preimage_hex = self.node._get_preimage(payment_hash)
+                
+                # If not found and script key is provided, try to look up the payment hash
+                if not preimage_hex and script_key:
+                    mapped_payment_hash = self.node.invoice_manager._get_payment_hash_from_script_key(script_key)
+                    if mapped_payment_hash:
+                        preimage_hex = self.node._get_preimage(mapped_payment_hash)
+                
+                # Use direct settle for external payments
+                if preimage_hex:
+                    success = await direct_settle_invoice(self.node, payment_hash)
+                else:
+                    logger.error(f"No preimage found for {payment_hash}")
+                    return False
+                    
+            if success:
+                TaprootTransferManager._settled_payment_hashes.add(payment_hash)
+            
+            return success
                 
         except Exception as e:
             logger.error(f"Failed to manually settle invoice: {str(e)}")

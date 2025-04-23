@@ -1,3 +1,6 @@
+"""
+Database module for the Taproot Assets extension.
+"""
 import json
 import uuid
 from datetime import datetime, timedelta
@@ -421,7 +424,7 @@ async def get_user_invoices(user_id: str) -> List[TaprootInvoice]:
         raise
 
 
-# New function for self-payment detection
+# New function for self-payment detection (original - kept for backward compatibility)
 async def is_self_payment(payment_hash: str, user_id: str) -> bool:
     """
     Determine if a payment hash belongs to an invoice created by the same user.
@@ -435,6 +438,22 @@ async def is_self_payment(payment_hash: str, user_id: str) -> bool:
     """
     invoice = await get_invoice_by_payment_hash(payment_hash)
     return invoice is not None and invoice.user_id == user_id
+
+
+# New function for internal payment detection
+async def is_internal_payment(payment_hash: str) -> bool:
+    """
+    Determine if a payment hash belongs to an invoice created by any user on the same node.
+    This identifies payments between any users on the same LNbits instance.
+    
+    Args:
+        payment_hash: The payment hash to check
+        
+    Returns:
+        bool: True if this is an internal payment, False otherwise
+    """
+    invoice = await get_invoice_by_payment_hash(payment_hash)
+    return invoice is not None
 
 
 #
