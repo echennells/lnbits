@@ -304,18 +304,17 @@ class TaprootPaymentManager:
             
             logger.info(f"Using preimage: {preimage_hex}")
 
-            # Process as an internal payment - just update the database directly
+            # Process as an internal payment - first handle the receiver's side
             # Check if this is a self-payment (same user) or an internal payment (different user)
             is_self_pay = invoice.user_id == self.node.wallet.user
             
-            # First update the invoice status to paid
-            updated_invoice = await update_invoice_status(invoice.id, "paid")
-            if not updated_invoice or updated_invoice.status != "paid":
-                logger.error(f"Failed to update invoice status in database")
-                raise Exception("Failed to update invoice status")
+            # CRITICAL FIX: Call settle_internal_payment to handle the receiver's credit transaction
+            # Use the transfer_manager's settle_internal_payment method
+            success = await self.node.transfer_manager.settle_internal_payment(self.node, payment_hash)
+            if not success:
+                logger.error(f"Failed to process receiver's transaction")
+                raise Exception("Failed to update receiver's balance")
                 
-            logger.info(f"Database updated: Invoice {invoice.id} status set to paid (internal payment)")
-            
             # Sender: Record debit transaction and update balance
             user_id = self.node.wallet.user
             wallet_id = self.node.wallet.id
@@ -349,9 +348,6 @@ class TaprootPaymentManager:
                     memo=memo,
                     preimage=preimage_hex
                 )
-                
-                # Recipient: The credit transaction is already recorded by settle_internal_payment
-                # which is called during invoice settlement in views_api.py
                 
                 # Send payment update via WebSocket
                 if payment_record:
