@@ -33,11 +33,10 @@ async def get_or_create_settings() -> TaprootSettings:
     if row:
         return row
 
-    # Create default settings
-    settings = TaprootSettings()
+    # Create default settings with ID included
     settings_id = urlsafe_short_hash()
     
-    # Insert using direct SQL without setting the ID on the model
+    # Insert using direct SQL to avoid the model issue
     await db.execute(
         f"""
         INSERT INTO {get_table_name('settings')} (
@@ -53,14 +52,14 @@ async def get_or_create_settings() -> TaprootSettings:
         """,
         {
             "id": settings_id,
-            "tapd_host": settings.tapd_host,
-            "tapd_network": settings.tapd_network,
-            "tapd_tls_cert_path": settings.tapd_tls_cert_path,
-            "tapd_macaroon_path": settings.tapd_macaroon_path,
-            "tapd_macaroon_hex": settings.tapd_macaroon_hex,
-            "lnd_macaroon_path": settings.lnd_macaroon_path,
-            "lnd_macaroon_hex": settings.lnd_macaroon_hex,
-            "default_sat_fee": settings.default_sat_fee,
+            "tapd_host": "lit:10009",
+            "tapd_network": "mainnet",
+            "tapd_tls_cert_path": "/root/.lnd/tls.cert",
+            "tapd_macaroon_path": "/root/.tapd/data/mainnet/admin.macaroon",
+            "tapd_macaroon_hex": None,
+            "lnd_macaroon_path": "/root/.lnd/data/chain/bitcoin/mainnet/admin.macaroon",
+            "lnd_macaroon_hex": None,
+            "default_sat_fee": 1,
         }
     )
     
@@ -80,10 +79,10 @@ async def update_settings(settings: TaprootSettings) -> TaprootSettings:
         {},
         None
     )
-    settings_id = row["id"] if row else urlsafe_short_hash()
     
-    # If there's an existing row, update it using SQL directly
+    # Using direct SQL since the model might not have an id field
     if row:
+        # Update existing settings
         await db.execute(
             f"""
             UPDATE {get_table_name('settings')}
@@ -98,7 +97,7 @@ async def update_settings(settings: TaprootSettings) -> TaprootSettings:
             WHERE id = :id
             """,
             {
-                "id": settings_id,
+                "id": row["id"],
                 "tapd_host": settings.tapd_host,
                 "tapd_network": settings.tapd_network,
                 "tapd_tls_cert_path": settings.tapd_tls_cert_path,
@@ -110,7 +109,8 @@ async def update_settings(settings: TaprootSettings) -> TaprootSettings:
             }
         )
     else:
-        # Insert new record
+        # Create new settings
+        settings_id = urlsafe_short_hash()
         await db.execute(
             f"""
             INSERT INTO {get_table_name('settings')} (
@@ -154,28 +154,26 @@ async def create_asset(asset_data: Dict[str, Any], user_id: str) -> TaprootAsset
     asset_id = urlsafe_short_hash()
     now = datetime.now()
 
-    # Convert channel_info to JSON string if present
-    channel_info_json = json.dumps(asset_data.get("channel_info")) if asset_data.get("channel_info") else None
+    # Create the asset model with more concise initialization
+    asset_dict = {
+        "id": asset_id,
+        "name": asset_data.get("name", "Unknown"),
+        "user_id": user_id,
+        "created_at": now,
+        "updated_at": now,
+        # Properly handle channel_info which might need to be JSON serialized
+        "channel_info": asset_data.get("channel_info"),
+    }
+    
+    # Add all the required fields from asset_data
+    for field in ["asset_id", "type", "amount", "genesis_point", 
+                 "meta_hash", "version", "is_spent", "script_key"]:
+        asset_dict[field] = asset_data[field]
     
     # Create the asset model
-    asset = TaprootAsset(
-        id=asset_id,
-        name=asset_data.get("name", "Unknown"),
-        asset_id=asset_data["asset_id"],
-        type=asset_data["type"],
-        amount=asset_data["amount"],
-        genesis_point=asset_data["genesis_point"],
-        meta_hash=asset_data["meta_hash"],
-        version=asset_data["version"],
-        is_spent=asset_data["is_spent"],
-        script_key=asset_data["script_key"],
-        channel_info=asset_data.get("channel_info"),
-        user_id=user_id,
-        created_at=now,
-        updated_at=now,
-    )
+    asset = TaprootAsset(**asset_dict)
     
-    # Insert the asset using standard pattern
+    # Insert using standard pattern
     await db.insert(get_table_name("assets"), asset)
     
     return asset
@@ -236,7 +234,7 @@ async def create_invoice(
         paid_at=None
     )
     
-    # Insert using standard pattern
+    # Insert using standardized method
     await db.insert(get_table_name("invoices"), invoice)
     
     return invoice
@@ -273,7 +271,7 @@ async def update_invoice_status(invoice_id: str, status: str) -> Optional[Taproo
     if status == "paid":
         invoice.paid_at = now
     
-    # Update the invoice in the database
+    # Update the invoice in the database using standardized method
     await db.update(
         get_table_name("invoices"),
         invoice,
@@ -358,7 +356,7 @@ async def create_fee_transaction(
         created_at=now
     )
     
-    # Insert the transaction
+    # Insert using standardized method
     await db.insert(get_table_name("fee_transactions"), fee_transaction)
     
     return fee_transaction
@@ -415,7 +413,7 @@ async def create_payment_record(
         preimage=preimage
     )
     
-    # Insert using standard pattern
+    # Insert using standardized method
     await db.insert(get_table_name("payments"), payment)
     
     return payment
@@ -481,7 +479,7 @@ async def update_asset_balance(
             balance.last_payment_hash = payment_hash
         balance.updated_at = now
         
-        # Update in database
+        # Update in database using standardized method
         await db.update(
             get_table_name("asset_balances"),
             balance,
@@ -500,7 +498,7 @@ async def update_asset_balance(
             updated_at=now
         )
         
-        # Insert new balance
+        # Insert new balance using standardized method
         await db.insert(get_table_name("asset_balances"), balance)
     
     # Return the updated balance
@@ -537,7 +535,7 @@ async def record_asset_transaction(
         created_at=now
     )
     
-    # Insert transaction record
+    # Insert transaction record using standardized method
     await db.insert(get_table_name("asset_transactions"), transaction)
     
     # Update balance

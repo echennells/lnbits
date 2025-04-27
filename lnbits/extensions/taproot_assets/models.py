@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 class TaprootSettings(BaseModel):
     """Settings for the Taproot Assets extension."""
+    id: Optional[str] = None  # Add this field for database operations
     tapd_host: str = "lit:10009"
     tapd_network: str = "mainnet"
     tapd_tls_cert_path: str = "/root/.lnd/tls.cert"
