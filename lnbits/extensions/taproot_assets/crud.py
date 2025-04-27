@@ -4,7 +4,7 @@ Database module for the Taproot Assets extension.
 import json
 import uuid
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from loguru import logger
 
 from lnbits.helpers import urlsafe_short_hash
@@ -300,12 +300,16 @@ async def is_self_payment(payment_hash: str, user_id: str) -> bool:
     """
     Determine if a payment hash belongs to an invoice created by the same user.
     
+    This function checks if the invoice associated with the payment hash was
+    created by the user who is trying to pay it, which indicates a self-payment
+    (user paying themselves).
+    
     Args:
         payment_hash: The payment hash to check
         user_id: The ID of the current user
         
     Returns:
-        bool: True if this is a self-payment, False otherwise
+        bool: True if this is a self-payment (same user), False otherwise
     """
     invoice = await get_invoice_by_payment_hash(payment_hash)
     return invoice is not None and invoice.user_id == user_id
@@ -314,13 +318,17 @@ async def is_self_payment(payment_hash: str, user_id: str) -> bool:
 async def is_internal_payment(payment_hash: str) -> bool:
     """
     Determine if a payment hash belongs to an invoice created by any user on the same node.
-    This identifies payments between any users on the same LNbits instance.
+    
+    This function checks if the invoice associated with the payment hash exists in
+    the local database, which means it was created by some user on this LNbits instance.
+    This helps identify payments that can be processed internally without using the
+    Lightning Network.
     
     Args:
         payment_hash: The payment hash to check
         
     Returns:
-        bool: True if this is an internal payment, False otherwise
+        bool: True if this is an internal payment (any user on same node), False otherwise
     """
     invoice = await get_invoice_by_payment_hash(payment_hash)
     return invoice is not None
@@ -570,6 +578,7 @@ async def get_asset_transactions(
     return await db.fetchall(query, params, AssetTransaction)
 
 
+# REFACTORED FOR PHASE 4 CHANGE 2
 async def process_settlement_transaction(
     payment_hash: str,
     user_id: str,
@@ -578,52 +587,106 @@ async def process_settlement_transaction(
     notify_websocket: bool = True
 ) -> Dict[str, Any]:
     """
-    Process a settlement transaction using LNbits standard patterns.
+    Process a settlement transaction for a Taproot Asset invoice.
+    
+    This function handles the full settlement process when an invoice is paid,
+    including updating the invoice status and recording the asset transaction.
     
     Args:
         payment_hash: The payment hash of the invoice to settle
         user_id: User ID for the invoice owner
         wallet_id: Wallet ID for the invoice owner
-        update_status: Whether to update the invoice status
-        notify_websocket: Whether to send WebSocket notifications
+        update_status: Whether to update the invoice status to "paid"
+        notify_websocket: Whether to send WebSocket notifications (handled externally)
         
     Returns:
-        Dict with settlement results
+        Dict[str, Any]: A dictionary containing:
+            - success (bool): Whether the settlement was successful
+            - message (str): A human-readable message describing the result
+            - invoice (Optional[Dict]): The invoice data if available
+            - asset_id (Optional[str]): The asset ID for the settled invoice
+            - asset_amount (Optional[int]): The asset amount for the settled invoice
+            - error (Optional[str]): Error message if settlement failed
     """
-    # Get the invoice
+    logger.debug(f"Processing settlement for payment_hash={payment_hash}, user_id={user_id}")
+    
+    # Step 1: Fetch the invoice and validate
     invoice = await get_invoice_by_payment_hash(payment_hash)
     if not invoice:
-        return {"success": False, "error": "Invoice not found"}
-        
-    # Check if already paid
-    if invoice.status == "paid":
-        return {"success": True, "message": "Invoice already paid", "invoice": invoice.dict()}
-    
-    try:
-        # Update invoice status if needed
-        if update_status:
-            invoice = await update_invoice_status(invoice.id, "paid")
-        
-        # Create asset transaction for credit
-        memo = invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
-        await record_asset_transaction(
-            wallet_id=invoice.wallet_id,
-            asset_id=invoice.asset_id,
-            amount=invoice.asset_amount,
-            tx_type="credit",  # This is an incoming payment
-            payment_hash=payment_hash,
-            memo=memo
-        )
-        
-        # Return success response
+        logger.warning(f"Settlement failed: Invoice not found for payment_hash={payment_hash}")
         return {
-            "success": True, 
-            "message": "Settlement processed successfully",
-            "invoice": invoice.dict() if invoice else None,
+            "success": False, 
+            "error": "Invoice not found",
+            "payment_hash": payment_hash
+        }
+    
+    # Step 2: Check if invoice is already paid
+    if invoice.status == "paid":
+        logger.info(f"Invoice {payment_hash} already marked as paid, skipping settlement")
+        return {
+            "success": True,
+            "message": "Invoice already paid",
+            "invoice": invoice.dict(),
             "asset_id": invoice.asset_id,
             "asset_amount": invoice.asset_amount
         }
+    
+    try:
+        # Step 3: Update invoice status if requested
+        updated_invoice = invoice
+        if update_status:
+            logger.debug(f"Updating invoice {invoice.id} status to 'paid'")
+            updated_invoice = await update_invoice_status(invoice.id, "paid")
+            if not updated_invoice:
+                logger.error(f"Failed to update invoice status for {invoice.id}")
+                return {
+                    "success": False,
+                    "error": "Failed to update invoice status",
+                    "payment_hash": payment_hash
+                }
+        
+        # Step 4: Create asset transaction for credit
+        memo = invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
+        logger.debug(f"Recording asset transaction for {invoice.asset_id}, amount={invoice.asset_amount}")
+        
+        try:
+            transaction = await record_asset_transaction(
+                wallet_id=invoice.wallet_id,
+                asset_id=invoice.asset_id,
+                amount=invoice.asset_amount,
+                tx_type="credit",  # This is an incoming payment
+                payment_hash=payment_hash,
+                memo=memo
+            )
+            logger.info(f"Asset transaction recorded successfully: {transaction.id}")
+        except Exception as tx_error:
+            logger.error(f"Error recording asset transaction: {str(tx_error)}")
+            # Even if transaction recording fails, we consider this a partial success
+            # since the invoice was marked as paid
+            return {
+                "success": True,
+                "message": "Invoice marked as paid but failed to record transaction",
+                "invoice": updated_invoice.dict(),
+                "asset_id": invoice.asset_id,
+                "asset_amount": invoice.asset_amount,
+                "warning": f"Transaction recording failed: {str(tx_error)}"
+            }
+        
+        # Step 5: Return success response with complete information
+        logger.info(f"Settlement completed successfully for invoice {invoice.id}")
+        return {
+            "success": True, 
+            "message": "Settlement processed successfully",
+            "invoice": updated_invoice.dict(),
+            "asset_id": invoice.asset_id,
+            "asset_amount": invoice.asset_amount,
+            "payment_hash": payment_hash
+        }
             
     except Exception as e:
-        logger.error(f"Error in settlement: {str(e)}")
-        return {"success": False, "error": str(e)}
+        logger.error(f"Error in settlement process: {str(e)}")
+        return {
+            "success": False, 
+            "error": str(e),
+            "payment_hash": payment_hash
+        }
