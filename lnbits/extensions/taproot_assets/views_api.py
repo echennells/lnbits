@@ -12,6 +12,8 @@ from loguru import logger
 from pydantic import BaseModel
 import bolt11
 
+from .error_utils import handle_grpc_error, raise_http_exception, log_error, format_error_response
+
 from .crud import (
     get_or_create_settings,
     update_settings,
@@ -39,6 +41,7 @@ from .models import TaprootSettings, TaprootAsset, TaprootInvoice, TaprootInvoic
 from .wallets.taproot_wallet import TaprootWalletExtension
 from .tapd_settings import taproot_settings
 from .websocket import ws_manager
+from .db import get_table_name
 
 # The parent router in __init__.py already adds the "/taproot_assets" prefix
 # So we only need to add the API path here
@@ -171,13 +174,14 @@ async def api_parse_invoice(
             "asset_id": asset_id
         }
         
-        logger.info(f"Parsed invoice: {result}")
+        logger.debug(f"Parsed invoice: {result}")
         return result
     except Exception as e:
-        logger.error(f"Failed to parse invoice: {str(e)}")
-        raise HTTPException(
+        # Use the error utility with context
+        log_error(e, context="Parsing invoice")
+        raise_http_exception(
             status_code=HTTPStatus.BAD_REQUEST,
-            detail=f"Invalid invoice format: {str(e)}",
+            detail=f"Invalid invoice format: {str(e)}"
         )
 
 
@@ -290,9 +294,9 @@ async def api_create_invoice(
         )
 
         if not invoice_response.ok:
-            raise HTTPException(
+            raise_http_exception(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to create invoice: {invoice_response.error_message}",
+                detail=f"Failed to create invoice: {invoice_response.error_message}"
             )
 
         # Get satoshi fee from settings
@@ -323,7 +327,11 @@ async def api_create_invoice(
             "status": "pending",
             "created_at": invoice.created_at.isoformat() if hasattr(invoice.created_at, "isoformat") else str(invoice.created_at)
         }
-        await ws_manager.notify_invoice_update(wallet.wallet.user, invoice_data)
+        
+        # Use WebSocket notification with error handling
+        notification_sent = await ws_manager.notify_invoice_update(wallet.wallet.user, invoice_data)
+        if not notification_sent:
+            logger.warning(f"Failed to send WebSocket notification for invoice {invoice.id}")
 
         # Return response
         return {
@@ -336,36 +344,19 @@ async def api_create_invoice(
         }
         
     except grpc.aio.AioRpcError as e:
-        # Handle gRPC errors with specific error messages
-        error_details = e.details()
-        
-        if "multiple asset channels found" in error_details and "please specify the peer pubkey" in error_details:
-            detail = f"Multiple channels found for asset {data.asset_id}. Please select a specific channel."
-        elif "no asset channel found for asset" in error_details:
-            detail = f"Channel appears to be offline or unavailable for asset {data.asset_id}. Please refresh and try again."
-        elif "no asset channel balance found" in error_details:
-            detail = f"Channel appears to be offline or has insufficient balance for asset {data.asset_id}. Please refresh and try again."
-        elif "peer" in error_details.lower() and "channel" in error_details.lower():
-            detail = f"Channel with peer appears to be offline or unavailable. Please refresh and try again."
-        else:
-            detail = f"gRPC error: {error_details}"
-
-        logger.error(f"gRPC error creating invoice: {e.code()}: {error_details}")
-        
-        raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-            detail=detail,
-        )
+        # Use standardized gRPC error handling
+        context = f"Creating invoice for asset {data.asset_id}"
+        error_message, status_code = handle_grpc_error(e, context)
+        raise_http_exception(status_code, error_message)
     except HTTPException:
         # Don't re-wrap HTTPExceptions
         raise
     except Exception as e:
-        # General error handling
-        logger.error(f"Error creating invoice: {str(e)}")
-        
-        raise HTTPException(
+        # Log error with context and raise standard exception
+        log_error(e, context=f"Creating invoice for asset {data.asset_id}")
+        raise_http_exception(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create Taproot Asset invoice: {str(e)}",
+            detail=f"Failed to create Taproot Asset invoice: {str(e)}"
         )
 
 
@@ -557,43 +548,32 @@ async def api_pay_invoice(
         }
     
     except grpc.aio.AioRpcError as e:
-        # Handle gRPC errors with specific error messages
-        error_details = e.details()
+        # Use standardized gRPC error handling
+        context = "Processing payment"
+        error_message, status_code = handle_grpc_error(e, context)
         
-        if "no asset channel found for asset" in error_details:
-            detail = "Channel appears to be offline or unavailable. Please refresh and try again."
-        elif "no asset channel balance found" in error_details:
-            detail = "Insufficient channel balance for this asset. Please refresh and try again."
-        elif "peer" in error_details.lower() and "channel" in error_details.lower():
-            detail = "Channel with peer appears to be offline. Please refresh and try again."
-        elif "self-payments not allowed" in error_details.lower():
-            # This should be caught by internal payment detection now
-            detail = "This invoice belongs to another user on this node. The system will handle this as an internal payment automatically."
-            
+        # Handle special case for self-payment detection
+        if "self-payments not allowed" in e.details().lower():
             # Log that our detection failed
-            logger.warning(f"Self-payment detection failed for an invoice with error: {error_details}")
+            logger.warning(f"Self-payment detection failed for an invoice with error: {e.details()}")
             
             # Try to extract payment hash from error message for debugging
-            match = re.search(r'hash=([a-fA-F0-9]{64})', error_details)
+            match = re.search(r'hash=([a-fA-F0-9]{64})', e.details())
             if match:
                 logger.warning(f"Potentially missed internal payment for hash: {match.group(1)}")
-        else:
-            detail = f"gRPC error: {error_details}"
             
-        logger.error(f"gRPC error in payment: {e.code()}: {error_details}")
+            # Use more specific error message
+            error_message = "This invoice belongs to another user on this node. The system will handle this as an internal payment automatically."
         
-        raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-            detail=detail
-        )
+        # Raise the HTTP exception with the standardized error message
+        raise_http_exception(status_code, error_message)
     except HTTPException:
         # Let HTTP exceptions propagate
         raise
     except Exception as e:
-        # General error handling
-        logger.error(f"Payment error: {str(e)}")
-        
-        raise HTTPException(
+        # Use the error utility with context
+        log_error(e, context="Processing payment")
+        raise_http_exception(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR, 
             detail=f"Failed to pay Taproot Asset invoice: {str(e)}"
         )
