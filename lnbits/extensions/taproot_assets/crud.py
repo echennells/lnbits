@@ -4,7 +4,7 @@ Database module for the Taproot Assets extension.
 import json
 import uuid
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Union, Literal
 from loguru import logger
 
 from lnbits.helpers import urlsafe_short_hash
@@ -578,19 +578,108 @@ async def get_asset_transactions(
     return await db.fetchall(query, params, AssetTransaction)
 
 
-# REFACTORED FOR PHASE 4 CHANGE 2
+# Define types for settlement response
+SettlementResponse = Dict[str, Any]
+
+# Define helper functions for settlement process
+async def validate_invoice_for_settlement(payment_hash: str) -> Tuple[bool, Optional[TaprootInvoice], Optional[str]]:
+    """
+    Validate if an invoice can be settled.
+    
+    Args:
+        payment_hash: The payment hash to check
+        
+    Returns:
+        Tuple containing:
+        - success (bool): Whether the invoice is valid for settlement
+        - invoice (Optional[TaprootInvoice]): The invoice if found
+        - error_message (Optional[str]): Error message if validation fails
+    """
+    # Step 1: Check if invoice exists
+    invoice = await get_invoice_by_payment_hash(payment_hash)
+    if not invoice:
+        return False, None, "Invoice not found"
+    
+    # Step 2: Check if already paid
+    if invoice.status == "paid":
+        return False, invoice, "Invoice already paid"
+    
+    # Step 3: Check if expired
+    now = datetime.now()
+    if invoice.expires_at and invoice.expires_at < now:
+        return False, invoice, "Invoice expired"
+    
+    # All validations passed
+    return True, invoice, None
+
+
+async def update_invoice_for_settlement(invoice: TaprootInvoice) -> Optional[TaprootInvoice]:
+    """
+    Update an invoice to paid status for settlement.
+    
+    Args:
+        invoice: The invoice to update
+        
+    Returns:
+        Optional[TaprootInvoice]: The updated invoice or None if update failed
+    """
+    try:
+        return await update_invoice_status(invoice.id, "paid")
+    except Exception as e:
+        logger.error(f"Failed to update invoice status: {str(e)}")
+        return None
+
+
+async def record_settlement_transaction(
+    invoice: TaprootInvoice, 
+    payment_hash: str
+) -> Tuple[bool, Optional[AssetTransaction], Optional[str]]:
+    """
+    Record the asset transaction for a settlement.
+    
+    Args:
+        invoice: The invoice being settled
+        payment_hash: The payment hash
+        
+    Returns:
+        Tuple containing:
+        - success (bool): Whether transaction recording was successful
+        - transaction (Optional[AssetTransaction]): The recorded transaction if successful
+        - error_message (Optional[str]): Error message if recording fails
+    """
+    try:
+        memo = invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
+        
+        transaction = await record_asset_transaction(
+            wallet_id=invoice.wallet_id,
+            asset_id=invoice.asset_id,
+            amount=invoice.asset_amount,
+            tx_type="credit",
+            payment_hash=payment_hash,
+            memo=memo
+        )
+        
+        return True, transaction, None
+    except Exception as e:
+        error_msg = f"Failed to record transaction: {str(e)}"
+        logger.error(error_msg)
+        return False, None, error_msg
+
+
+# ENHANCED for PHASE 4 CHANGE 3
 async def process_settlement_transaction(
     payment_hash: str,
     user_id: str,
     wallet_id: str,
     update_status: bool = True,
     notify_websocket: bool = True
-) -> Dict[str, Any]:
+) -> SettlementResponse:
     """
     Process a settlement transaction for a Taproot Asset invoice.
     
     This function handles the full settlement process when an invoice is paid,
-    including updating the invoice status and recording the asset transaction.
+    including validating the invoice, updating its status, and recording the 
+    asset transaction with proper balance updates.
     
     Args:
         payment_hash: The payment hash of the invoice to settle
@@ -600,93 +689,106 @@ async def process_settlement_transaction(
         notify_websocket: Whether to send WebSocket notifications (handled externally)
         
     Returns:
-        Dict[str, Any]: A dictionary containing:
+        SettlementResponse: A dictionary containing:
             - success (bool): Whether the settlement was successful
             - message (str): A human-readable message describing the result
             - invoice (Optional[Dict]): The invoice data if available
             - asset_id (Optional[str]): The asset ID for the settled invoice
             - asset_amount (Optional[int]): The asset amount for the settled invoice
+            - tx_id (Optional[str]): Transaction ID if a transaction was recorded
             - error (Optional[str]): Error message if settlement failed
+            - payment_hash (str): The payment hash (for tracking)
     """
-    logger.debug(f"Processing settlement for payment_hash={payment_hash}, user_id={user_id}")
+    logger.debug(f"Processing settlement for payment_hash={payment_hash}")
     
-    # Step 1: Fetch the invoice and validate
-    invoice = await get_invoice_by_payment_hash(payment_hash)
-    if not invoice:
-        logger.warning(f"Settlement failed: Invoice not found for payment_hash={payment_hash}")
-        return {
-            "success": False, 
-            "error": "Invoice not found",
-            "payment_hash": payment_hash
-        }
+    # Track performance
+    start_time = datetime.now()
     
-    # Step 2: Check if invoice is already paid
-    if invoice.status == "paid":
+    # Step 1: Validate the invoice for settlement
+    valid, invoice, validation_message = await validate_invoice_for_settlement(payment_hash)
+    
+    # Special case: Already paid invoices are considered successful settlements
+    if not valid and invoice and validation_message == "Invoice already paid":
         logger.info(f"Invoice {payment_hash} already marked as paid, skipping settlement")
         return {
             "success": True,
             "message": "Invoice already paid",
             "invoice": invoice.dict(),
             "asset_id": invoice.asset_id,
-            "asset_amount": invoice.asset_amount
+            "asset_amount": invoice.asset_amount,
+            "payment_hash": payment_hash,
+            "status": "already_paid"
+        }
+    
+    # Handle other validation failures
+    if not valid:
+        logger.warning(f"Settlement validation failed: {validation_message}")
+        return {
+            "success": False, 
+            "error": validation_message,
+            "payment_hash": payment_hash,
+            "status": "validation_failed"
         }
     
     try:
-        # Step 3: Update invoice status if requested
+        # Step 2: Update invoice status if requested
         updated_invoice = invoice
         if update_status:
             logger.debug(f"Updating invoice {invoice.id} status to 'paid'")
-            updated_invoice = await update_invoice_status(invoice.id, "paid")
+            updated_invoice = await update_invoice_for_settlement(invoice)
             if not updated_invoice:
                 logger.error(f"Failed to update invoice status for {invoice.id}")
                 return {
                     "success": False,
                     "error": "Failed to update invoice status",
-                    "payment_hash": payment_hash
+                    "payment_hash": payment_hash,
+                    "status": "update_failed"
                 }
         
-        # Step 4: Create asset transaction for credit
-        memo = invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
-        logger.debug(f"Recording asset transaction for {invoice.asset_id}, amount={invoice.asset_amount}")
+        # Step 3: Record the asset transaction
+        tx_success, transaction, tx_error = await record_settlement_transaction(
+            invoice=updated_invoice,
+            payment_hash=payment_hash
+        )
         
-        try:
-            transaction = await record_asset_transaction(
-                wallet_id=invoice.wallet_id,
-                asset_id=invoice.asset_id,
-                amount=invoice.asset_amount,
-                tx_type="credit",  # This is an incoming payment
-                payment_hash=payment_hash,
-                memo=memo
-            )
-            logger.info(f"Asset transaction recorded successfully: {transaction.id}")
-        except Exception as tx_error:
-            logger.error(f"Error recording asset transaction: {str(tx_error)}")
-            # Even if transaction recording fails, we consider this a partial success
-            # since the invoice was marked as paid
+        # Handle transaction recording failure
+        if not tx_success:
+            logger.warning(f"Invoice paid but transaction recording failed: {tx_error}")
             return {
                 "success": True,
+                "partial": True,
                 "message": "Invoice marked as paid but failed to record transaction",
                 "invoice": updated_invoice.dict(),
                 "asset_id": invoice.asset_id,
                 "asset_amount": invoice.asset_amount,
-                "warning": f"Transaction recording failed: {str(tx_error)}"
+                "payment_hash": payment_hash,
+                "warning": tx_error,
+                "status": "paid_tx_failed"
             }
         
-        # Step 5: Return success response with complete information
-        logger.info(f"Settlement completed successfully for invoice {invoice.id}")
+        # Step 4: All steps successful
+        processing_time = (datetime.now() - start_time).total_seconds()
+        logger.info(f"Settlement completed successfully for invoice {invoice.id} in {processing_time:.2f}s")
+        
         return {
             "success": True, 
             "message": "Settlement processed successfully",
             "invoice": updated_invoice.dict(),
             "asset_id": invoice.asset_id,
             "asset_amount": invoice.asset_amount,
-            "payment_hash": payment_hash
+            "payment_hash": payment_hash,
+            "tx_id": transaction.id if transaction else None,
+            "status": "completed",
+            "processing_time": processing_time
         }
             
     except Exception as e:
-        logger.error(f"Error in settlement process: {str(e)}")
+        processing_time = (datetime.now() - start_time).total_seconds()
+        logger.error(f"Settlement failed after {processing_time:.2f}s: {str(e)}")
         return {
             "success": False, 
             "error": str(e),
-            "payment_hash": payment_hash
+            "payment_hash": payment_hash,
+            "status": "error",
+            "processing_time": processing_time
         }
