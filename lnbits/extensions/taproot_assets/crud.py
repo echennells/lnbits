@@ -3,13 +3,10 @@ Database module for the Taproot Assets extension.
 """
 import json
 import uuid
-import traceback
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
-from contextlib import asynccontextmanager
 from loguru import logger
 
-from lnbits.db import Connection, Database
 from lnbits.helpers import urlsafe_short_hash
 
 from .models import (
@@ -18,6 +15,7 @@ from .models import (
 )
 
 # Create a database instance for the extension
+from lnbits.db import Database
 db = Database("ext_taproot_assets")
 
 # Determine schema prefix to use based on database type
@@ -237,6 +235,7 @@ async def create_invoice(
         wallet_id=wallet_id,
         created_at=now,
         expires_at=expires_at,
+        paid_at=None
     )
     
     # Insert using standard pattern
@@ -603,13 +602,7 @@ async def process_settlement_transaction(
     try:
         # Update invoice status if needed
         if update_status:
-            invoice.status = "paid"
-            invoice.paid_at = datetime.now()
-            await db.update(
-                f"{SCHEMA_PREFIX}invoices", 
-                invoice,
-                "WHERE id = :id"
-            )
+            invoice = await update_invoice_status(invoice.id, "paid")
         
         # Create asset transaction for credit
         memo = invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
@@ -626,12 +619,11 @@ async def process_settlement_transaction(
         return {
             "success": True, 
             "message": "Settlement processed successfully",
-            "invoice": invoice.dict(),
+            "invoice": invoice.dict() if invoice else None,
             "asset_id": invoice.asset_id,
             "asset_amount": invoice.asset_amount
         }
             
     except Exception as e:
         logger.error(f"Error in settlement: {str(e)}")
-        logger.error(traceback.format_exc())
         return {"success": False, "error": str(e)}
