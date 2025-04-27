@@ -16,10 +16,8 @@ from .models import (
 
 # Create a database instance for the extension
 from lnbits.db import Database
-db = Database("ext_taproot_assets")
+from .db import db, get_table_name
 
-# Determine schema prefix to use based on database type
-SCHEMA_PREFIX = "taproot_assets."
 
 #
 # Settings
@@ -28,7 +26,7 @@ SCHEMA_PREFIX = "taproot_assets."
 async def get_or_create_settings() -> TaprootSettings:
     """Get or create Taproot Assets extension settings."""
     row = await db.fetchone(
-        f"SELECT * FROM {SCHEMA_PREFIX}settings LIMIT 1", 
+        f"SELECT * FROM {get_table_name('settings')} LIMIT 1", 
         {}, 
         TaprootSettings
     )
@@ -42,7 +40,7 @@ async def get_or_create_settings() -> TaprootSettings:
     # Insert using direct SQL without setting the ID on the model
     await db.execute(
         f"""
-        INSERT INTO {SCHEMA_PREFIX}settings (
+        INSERT INTO {get_table_name('settings')} (
             id, tapd_host, tapd_network, tapd_tls_cert_path,
             tapd_macaroon_path, tapd_macaroon_hex,
             lnd_macaroon_path, lnd_macaroon_hex, default_sat_fee
@@ -68,7 +66,7 @@ async def get_or_create_settings() -> TaprootSettings:
     
     # Fetch the newly created settings
     return await db.fetchone(
-        f"SELECT * FROM {SCHEMA_PREFIX}settings LIMIT 1", 
+        f"SELECT * FROM {get_table_name('settings')} LIMIT 1", 
         {}, 
         TaprootSettings
     )
@@ -78,7 +76,7 @@ async def update_settings(settings: TaprootSettings) -> TaprootSettings:
     """Update Taproot Assets extension settings."""
     # Get existing settings ID or create a new one
     row = await db.fetchone(
-        f"SELECT id FROM {SCHEMA_PREFIX}settings LIMIT 1",
+        f"SELECT id FROM {get_table_name('settings')} LIMIT 1",
         {},
         None
     )
@@ -88,7 +86,7 @@ async def update_settings(settings: TaprootSettings) -> TaprootSettings:
     if row:
         await db.execute(
             f"""
-            UPDATE {SCHEMA_PREFIX}settings
+            UPDATE {get_table_name('settings')}
             SET tapd_host = :tapd_host,
                 tapd_network = :tapd_network,
                 tapd_tls_cert_path = :tapd_tls_cert_path,
@@ -115,7 +113,7 @@ async def update_settings(settings: TaprootSettings) -> TaprootSettings:
         # Insert new record
         await db.execute(
             f"""
-            INSERT INTO {SCHEMA_PREFIX}settings (
+            INSERT INTO {get_table_name('settings')} (
                 id, tapd_host, tapd_network, tapd_tls_cert_path,
                 tapd_macaroon_path, tapd_macaroon_hex,
                 lnd_macaroon_path, lnd_macaroon_hex, default_sat_fee
@@ -141,7 +139,7 @@ async def update_settings(settings: TaprootSettings) -> TaprootSettings:
     
     # Return the updated settings
     return await db.fetchone(
-        f"SELECT * FROM {SCHEMA_PREFIX}settings LIMIT 1", 
+        f"SELECT * FROM {get_table_name('settings')} LIMIT 1", 
         {}, 
         TaprootSettings
     )
@@ -178,7 +176,7 @@ async def create_asset(asset_data: Dict[str, Any], user_id: str) -> TaprootAsset
     )
     
     # Insert the asset using standard pattern
-    await db.insert(f"{SCHEMA_PREFIX}assets", asset)
+    await db.insert(get_table_name("assets"), asset)
     
     return asset
 
@@ -186,7 +184,7 @@ async def create_asset(asset_data: Dict[str, Any], user_id: str) -> TaprootAsset
 async def get_assets(user_id: str) -> List[TaprootAsset]:
     """Get all Taproot Assets for a user."""
     return await db.fetchall(
-        f"SELECT * FROM {SCHEMA_PREFIX}assets WHERE user_id = :user_id ORDER BY created_at DESC",
+        f"SELECT * FROM {get_table_name('assets')} WHERE user_id = :user_id ORDER BY created_at DESC",
         {"user_id": user_id},
         TaprootAsset
     )
@@ -195,7 +193,7 @@ async def get_assets(user_id: str) -> List[TaprootAsset]:
 async def get_asset(asset_id: str) -> Optional[TaprootAsset]:
     """Get a specific Taproot Asset by ID."""
     return await db.fetchone(
-        f"SELECT * FROM {SCHEMA_PREFIX}assets WHERE id = :id",
+        f"SELECT * FROM {get_table_name('assets')} WHERE id = :id",
         {"id": asset_id},
         TaprootAsset
     )
@@ -239,7 +237,7 @@ async def create_invoice(
     )
     
     # Insert using standard pattern
-    await db.insert(f"{SCHEMA_PREFIX}invoices", invoice)
+    await db.insert(get_table_name("invoices"), invoice)
     
     return invoice
 
@@ -247,7 +245,7 @@ async def create_invoice(
 async def get_invoice(invoice_id: str) -> Optional[TaprootInvoice]:
     """Get a specific Taproot Asset invoice by ID."""
     return await db.fetchone(
-        f"SELECT * FROM {SCHEMA_PREFIX}invoices WHERE id = :id",
+        f"SELECT * FROM {get_table_name('invoices')} WHERE id = :id",
         {"id": invoice_id},
         TaprootInvoice
     )
@@ -256,7 +254,7 @@ async def get_invoice(invoice_id: str) -> Optional[TaprootInvoice]:
 async def get_invoice_by_payment_hash(payment_hash: str) -> Optional[TaprootInvoice]:
     """Get a specific Taproot Asset invoice by payment hash."""
     return await db.fetchone(
-        f"SELECT * FROM {SCHEMA_PREFIX}invoices WHERE payment_hash = :payment_hash",
+        f"SELECT * FROM {get_table_name('invoices')} WHERE payment_hash = :payment_hash",
         {"payment_hash": payment_hash},
         TaprootInvoice
     )
@@ -277,7 +275,7 @@ async def update_invoice_status(invoice_id: str, status: str) -> Optional[Taproo
     
     # Update the invoice in the database
     await db.update(
-        f"{SCHEMA_PREFIX}invoices",
+        get_table_name("invoices"),
         invoice,
         "WHERE id = :id"
     )
@@ -289,7 +287,7 @@ async def update_invoice_status(invoice_id: str, status: str) -> Optional[Taproo
 async def get_user_invoices(user_id: str) -> List[TaprootInvoice]:
     """Get all Taproot Asset invoices for a user."""
     return await db.fetchall(
-        f"SELECT * FROM {SCHEMA_PREFIX}invoices WHERE user_id = :user_id ORDER BY created_at DESC",
+        f"SELECT * FROM {get_table_name('invoices')} WHERE user_id = :user_id ORDER BY created_at DESC",
         {"user_id": user_id},
         TaprootInvoice
     )
@@ -361,7 +359,7 @@ async def create_fee_transaction(
     )
     
     # Insert the transaction
-    await db.insert(f"{SCHEMA_PREFIX}fee_transactions", fee_transaction)
+    await db.insert(get_table_name("fee_transactions"), fee_transaction)
     
     return fee_transaction
 
@@ -370,13 +368,13 @@ async def get_fee_transactions(user_id: Optional[str] = None) -> List[FeeTransac
     """Get fee transactions, optionally filtered by user ID."""
     if user_id:
         return await db.fetchall(
-            f"SELECT * FROM {SCHEMA_PREFIX}fee_transactions WHERE user_id = :user_id ORDER BY created_at DESC",
+            f"SELECT * FROM {get_table_name('fee_transactions')} WHERE user_id = :user_id ORDER BY created_at DESC",
             {"user_id": user_id},
             FeeTransaction
         )
     else:
         return await db.fetchall(
-            f"SELECT * FROM {SCHEMA_PREFIX}fee_transactions ORDER BY created_at DESC",
+            f"SELECT * FROM {get_table_name('fee_transactions')} ORDER BY created_at DESC",
             {},
             FeeTransaction
         )
@@ -418,7 +416,7 @@ async def create_payment_record(
     )
     
     # Insert using standard pattern
-    await db.insert(f"{SCHEMA_PREFIX}payments", payment)
+    await db.insert(get_table_name("payments"), payment)
     
     return payment
 
@@ -426,7 +424,7 @@ async def create_payment_record(
 async def get_user_payments(user_id: str) -> List[TaprootPayment]:
     """Get all sent payments for a user."""
     return await db.fetchall(
-        f"SELECT * FROM {SCHEMA_PREFIX}payments WHERE user_id = :user_id ORDER BY created_at DESC",
+        f"SELECT * FROM {get_table_name('payments')} WHERE user_id = :user_id ORDER BY created_at DESC",
         {"user_id": user_id},
         TaprootPayment
     )
@@ -440,7 +438,7 @@ async def get_asset_balance(wallet_id: str, asset_id: str) -> Optional[AssetBala
     """Get asset balance for a specific wallet and asset."""
     return await db.fetchone(
         f"""
-        SELECT * FROM {SCHEMA_PREFIX}asset_balances
+        SELECT * FROM {get_table_name('asset_balances')}
         WHERE wallet_id = :wallet_id AND asset_id = :asset_id
         """,
         {
@@ -455,7 +453,7 @@ async def get_wallet_asset_balances(wallet_id: str) -> List[AssetBalance]:
     """Get all asset balances for a wallet."""
     return await db.fetchall(
         f"""
-        SELECT * FROM {SCHEMA_PREFIX}asset_balances
+        SELECT * FROM {get_table_name('asset_balances')}
         WHERE wallet_id = :wallet_id
         ORDER BY updated_at DESC
         """,
@@ -485,7 +483,7 @@ async def update_asset_balance(
         
         # Update in database
         await db.update(
-            f"{SCHEMA_PREFIX}asset_balances",
+            get_table_name("asset_balances"),
             balance,
             "WHERE wallet_id = :wallet_id AND asset_id = :asset_id"
         )
@@ -503,7 +501,7 @@ async def update_asset_balance(
         )
         
         # Insert new balance
-        await db.insert(f"{SCHEMA_PREFIX}asset_balances", balance)
+        await db.insert(get_table_name("asset_balances"), balance)
     
     # Return the updated balance
     return await get_asset_balance(wallet_id, asset_id)
@@ -540,7 +538,7 @@ async def record_asset_transaction(
     )
     
     # Insert transaction record
-    await db.insert(f"{SCHEMA_PREFIX}asset_transactions", transaction)
+    await db.insert(get_table_name("asset_transactions"), transaction)
     
     # Update balance
     # For debit, amount should be negative for balance update
@@ -557,7 +555,7 @@ async def get_asset_transactions(
 ) -> List[AssetTransaction]:
     """Get asset transactions, optionally filtered by wallet and/or asset."""
     # Build query
-    query = f"SELECT * FROM {SCHEMA_PREFIX}asset_transactions"
+    query = f"SELECT * FROM {get_table_name('asset_transactions')}"
     params = {}
     where_clauses = []
 
@@ -666,7 +664,6 @@ async def record_settlement_transaction(
         return False, None, error_msg
 
 
-# ENHANCED for PHASE 4 CHANGE 3
 async def process_settlement_transaction(
     payment_hash: str,
     user_id: str,

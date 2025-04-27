@@ -20,14 +20,21 @@ async def reuse_conn(conn):
 if not hasattr(db, 'reuse_conn'):
     db.reuse_conn = reuse_conn
 
-# This is the database schema for the Taproot Assets extension
-# The actual tables are created in the migrations.py file
-
-# Define the database schema version
-async def get_schema_version(db: Connection) -> int:
-    """Get the current schema version."""
-    row = await db.fetchone("SELECT version FROM dbversions WHERE db = ?", ("taproot_assets",))
-    return row[0] if row else 0
+# Helper function to get proper table name with schema only when needed
+def get_table_name(base_name):
+    """
+    Get the properly formatted table name based on database type.
+    
+    Args:
+        base_name: The base table name without schema
+        
+    Returns:
+        str: Full table name with schema prefix if needed
+    """
+    if db.type in ["POSTGRES", "COCKROACH"]:
+        return f"{db.schema}.{base_name}"
+    else:  # SQLite
+        return base_name
 
 # Connect function that will be used during the migration process
 # This needs to return the database instance itself, which already has the proper async context manager

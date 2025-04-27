@@ -1,12 +1,13 @@
 from loguru import logger
+from .db import get_table_name
 
 async def m001_initial(db):
     """
     Initial database migration for the Taproot Assets extension.
     """
     await db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS taproot_assets.settings (
+        f"""
+        CREATE TABLE IF NOT EXISTS {get_table_name("settings")} (
             id TEXT PRIMARY KEY,
             tapd_host TEXT NOT NULL,
             tapd_network TEXT NOT NULL,
@@ -15,16 +16,16 @@ async def m001_initial(db):
             tapd_macaroon_hex TEXT,
             lnd_macaroon_path TEXT NOT NULL,
             lnd_macaroon_hex TEXT,
-            default_sat_fee INTEGER NOT NULL DEFAULT 1,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            default_sat_fee {db.big_int} NOT NULL DEFAULT 1,
+            created_at TIMESTAMP NOT NULL DEFAULT {db.timestamp_now},
+            updated_at TIMESTAMP NOT NULL DEFAULT {db.timestamp_now}
         );
         """
     )
 
     await db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS taproot_assets.assets (
+        f"""
+        CREATE TABLE IF NOT EXISTS {get_table_name("assets")} (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             asset_id TEXT NOT NULL,
@@ -37,26 +38,26 @@ async def m001_initial(db):
             script_key TEXT NOT NULL,
             channel_info TEXT, -- JSON encoded channel info
             user_id TEXT NOT NULL,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP NOT NULL DEFAULT {db.timestamp_now},
+            updated_at TIMESTAMP NOT NULL DEFAULT {db.timestamp_now}
         );
         """
     )
 
     await db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS taproot_assets.invoices (
+        f"""
+        CREATE TABLE IF NOT EXISTS {get_table_name("invoices")} (
             id TEXT PRIMARY KEY,
             payment_hash TEXT NOT NULL,
             payment_request TEXT NOT NULL,
             asset_id TEXT NOT NULL,
-            asset_amount INTEGER NOT NULL,
-            satoshi_amount INTEGER NOT NULL DEFAULT 1,
+            asset_amount {db.big_int} NOT NULL,
+            satoshi_amount {db.big_int} NOT NULL DEFAULT 1,
             memo TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
             user_id TEXT NOT NULL,
             wallet_id TEXT NOT NULL,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP NOT NULL DEFAULT {db.timestamp_now},
             expires_at TIMESTAMP,
             paid_at TIMESTAMP
         );
@@ -69,18 +70,34 @@ async def m002_add_sat_fee_column(db):
     Migration to add default_sat_fee column to settings table if it doesn't exist.
     """
     try:
-        # Check if the column exists - without schema prefix for SQLite
-        columns = await db.fetchall(
-            "SELECT name FROM pragma_table_info('settings')"
-        )
+        # Check if the column exists - using db.type to handle different syntax
+        columns = None
+        table_name = get_table_name("settings")
+        
+        if db.type == "SQLITE":
+            # For SQLite, we need to use pragma which doesn't support schema prefix
+            safe_table = table_name.split(".")[-1]  # Get just the table name without schema
+            columns = await db.fetchall(
+                f"SELECT name FROM pragma_table_info('{safe_table}')"
+            )
+        else:  # POSTGRES or COCKROACH
+            schema = db.schema
+            columns = await db.fetchall(
+                f"""
+                SELECT column_name as name
+                FROM information_schema.columns
+                WHERE table_schema = '{schema}' AND table_name = 'settings'
+                """
+            )
+
         column_names = [col["name"] for col in columns]
 
-        # Add column if it doesn't exist - without schema prefix for SQLite
+        # Add column if it doesn't exist - using portable syntax
         if "default_sat_fee" not in column_names:
             await db.execute(
-                """
-                ALTER TABLE settings
-                ADD COLUMN default_sat_fee INTEGER NOT NULL DEFAULT 1;
+                f"""
+                ALTER TABLE {table_name}
+                ADD COLUMN default_sat_fee {db.big_int} NOT NULL DEFAULT 1;
                 """
             )
             logger.info("Added default_sat_fee column to settings table")
@@ -96,19 +113,19 @@ async def m003_create_fee_transactions_table(db):
     """
     try:
         await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS taproot_assets.fee_transactions (
+            f"""
+            CREATE TABLE IF NOT EXISTS {get_table_name("fee_transactions")} (
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
                 wallet_id TEXT NOT NULL,
                 asset_payment_hash TEXT NOT NULL,
-                fee_amount_msat INTEGER NOT NULL,
+                fee_amount_msat {db.big_int} NOT NULL,
                 status TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP NOT NULL DEFAULT {db.timestamp_now}
             );
             """
         )
-        logger.info("Created taproot_assets.fee_transactions table")
+        logger.info(f"Created fee_transactions table")
     except Exception as e:
         logger.warning(f"Error in migration m003_create_fee_transactions_table: {str(e)}")
 
@@ -119,38 +136,43 @@ async def m004_create_payments_table(db):
     """
     try:
         # Create the payments table with indices
+        payments_table = get_table_name("payments")
+        
         await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS taproot_assets.payments (
+            f"""
+            CREATE TABLE IF NOT EXISTS {payments_table} (
                 id TEXT PRIMARY KEY,
                 payment_hash TEXT NOT NULL,
                 payment_request TEXT NOT NULL,
                 asset_id TEXT NOT NULL,
-                asset_amount INTEGER NOT NULL,
-                fee_sats INTEGER NOT NULL DEFAULT 0,
+                asset_amount {db.big_int} NOT NULL,
+                fee_sats {db.big_int} NOT NULL DEFAULT 0,
                 memo TEXT,
                 status TEXT NOT NULL DEFAULT 'completed',
                 user_id TEXT NOT NULL,
                 wallet_id TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT {db.timestamp_now},
                 preimage TEXT
             );
             """
         )
         
-        # Add index on payment_hash for faster lookups - without schema prefix
+        # Add index on payment_hash for faster lookups
+        # Use table name without schema for SQLite
+        index_table = payments_table.split(".")[-1] if db.type == "SQLITE" else payments_table
+        
         await db.execute(
-            """
+            f"""
             CREATE INDEX IF NOT EXISTS payments_payment_hash_idx 
-            ON payments (payment_hash);
+            ON {index_table} (payment_hash);
             """
         )
         
-        # Add index on user_id for faster user-specific queries - without schema prefix
+        # Add index on user_id for faster user-specific queries
         await db.execute(
-            """
+            f"""
             CREATE INDEX IF NOT EXISTS payments_user_id_idx 
-            ON payments (user_id);
+            ON {index_table} (user_id);
             """
         )
         
@@ -165,49 +187,57 @@ async def m005_create_asset_balances_table(db):
     Migration to create a table for tracking user asset balances.
     """
     try:
+        # Create the asset_balances table
+        balances_table = get_table_name("asset_balances")
+        
         await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS taproot_assets.asset_balances (
+            f"""
+            CREATE TABLE IF NOT EXISTS {balances_table} (
                 id TEXT PRIMARY KEY,
                 wallet_id TEXT NOT NULL,
                 asset_id TEXT NOT NULL,
-                balance INTEGER NOT NULL DEFAULT 0,
+                balance {db.big_int} NOT NULL DEFAULT 0,
                 last_payment_hash TEXT,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT {db.timestamp_now},
+                updated_at TIMESTAMP NOT NULL DEFAULT {db.timestamp_now},
                 UNIQUE(wallet_id, asset_id)
             );
             """
         )
 
-        # Create indexes without schema prefix for SQLite
+        # Create indexes for asset_balances
+        # Use table name without schema for SQLite
+        index_table = balances_table.split(".")[-1] if db.type == "SQLITE" else balances_table
+        
         await db.execute(
-            """
+            f"""
             CREATE INDEX IF NOT EXISTS asset_balances_wallet_id_idx
-            ON asset_balances (wallet_id);
+            ON {index_table} (wallet_id);
             """
         )
 
         await db.execute(
-            """
+            f"""
             CREATE INDEX IF NOT EXISTS asset_balances_asset_id_idx
-            ON asset_balances (asset_id);
+            ON {index_table} (asset_id);
             """
         )
 
         # Create transaction history table
+        transactions_table = get_table_name("asset_transactions")
+        
         await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS taproot_assets.asset_transactions (
+            f"""
+            CREATE TABLE IF NOT EXISTS {transactions_table} (
                 id TEXT PRIMARY KEY,
                 wallet_id TEXT NOT NULL,
                 asset_id TEXT NOT NULL,
                 payment_hash TEXT,
-                amount INTEGER NOT NULL,
-                fee INTEGER DEFAULT 0,
+                amount {db.big_int} NOT NULL,
+                fee {db.big_int} DEFAULT 0,
                 memo TEXT,
                 type TEXT NOT NULL,  -- 'credit', 'debit'
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP NOT NULL DEFAULT {db.timestamp_now}
             );
             """
         )
@@ -215,3 +245,89 @@ async def m005_create_asset_balances_table(db):
         logger.info("Created asset_balances and asset_transactions tables")
     except Exception as e:
         logger.warning(f"Error in migration m005_create_asset_balances_table: {str(e)}")
+
+
+async def m006_add_asset_indexes(db):
+    """
+    Migration to add indexes for better query performance.
+    """
+    try:
+        # Define tables
+        assets_table = get_table_name("assets")
+        invoices_table = get_table_name("invoices")
+        transactions_table = get_table_name("asset_transactions")
+        
+        # Use table names without schema for SQLite indexes
+        assets_index_table = assets_table.split(".")[-1] if db.type == "SQLITE" else assets_table
+        invoices_index_table = invoices_table.split(".")[-1] if db.type == "SQLITE" else invoices_table
+        transactions_index_table = transactions_table.split(".")[-1] if db.type == "SQLITE" else transactions_table
+        
+        # Add indexes for assets table
+        await db.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS assets_asset_id_idx
+            ON {assets_index_table} (asset_id);
+            """
+        )
+
+        await db.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS assets_user_id_idx
+            ON {assets_index_table} (user_id);
+            """
+        )
+
+        # Add indexes for invoices table
+        await db.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS invoices_payment_hash_idx
+            ON {invoices_index_table} (payment_hash);
+            """
+        )
+
+        await db.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS invoices_user_id_idx
+            ON {invoices_index_table} (user_id);
+            """
+        )
+
+        await db.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS invoices_status_idx
+            ON {invoices_index_table} (status);
+            """
+        )
+
+        # Add indexes for asset_transactions table
+        await db.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS asset_transactions_wallet_id_idx
+            ON {transactions_index_table} (wallet_id);
+            """
+        )
+
+        await db.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS asset_transactions_asset_id_idx
+            ON {transactions_index_table} (asset_id);
+            """
+        )
+
+        await db.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS asset_transactions_payment_hash_idx
+            ON {transactions_index_table} (payment_hash);
+            """
+        )
+
+        await db.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS asset_transactions_created_at_idx
+            ON {transactions_index_table} (created_at);
+            """
+        )
+
+        logger.info("Added performance indexes for Taproot Assets tables")
+    except Exception as e:
+        logger.warning(f"Error in migration m006_add_asset_indexes: {str(e)}")
