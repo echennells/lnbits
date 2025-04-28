@@ -80,62 +80,19 @@ async def update_settings(settings: TaprootSettings) -> TaprootSettings:
         None
     )
     
-    # Using direct SQL since the model might not have an id field
     if row:
         # Update existing settings
-        await db.execute(
-            f"""
-            UPDATE {get_table_name('settings')}
-            SET tapd_host = :tapd_host,
-                tapd_network = :tapd_network,
-                tapd_tls_cert_path = :tapd_tls_cert_path,
-                tapd_macaroon_path = :tapd_macaroon_path,
-                tapd_macaroon_hex = :tapd_macaroon_hex,
-                lnd_macaroon_path = :lnd_macaroon_path,
-                lnd_macaroon_hex = :lnd_macaroon_hex,
-                default_sat_fee = :default_sat_fee
-            WHERE id = :id
-            """,
-            {
-                "id": row["id"],
-                "tapd_host": settings.tapd_host,
-                "tapd_network": settings.tapd_network,
-                "tapd_tls_cert_path": settings.tapd_tls_cert_path,
-                "tapd_macaroon_path": settings.tapd_macaroon_path,
-                "tapd_macaroon_hex": settings.tapd_macaroon_hex,
-                "lnd_macaroon_path": settings.lnd_macaroon_path,
-                "lnd_macaroon_hex": settings.lnd_macaroon_hex,
-                "default_sat_fee": settings.default_sat_fee,
-            }
+        # Set the ID from the existing record
+        settings.id = row["id"]
+        await db.update(
+            get_table_name("settings"),
+            settings,
+            "WHERE id = :id"
         )
     else:
-        # Create new settings
-        settings_id = urlsafe_short_hash()
-        await db.execute(
-            f"""
-            INSERT INTO {get_table_name('settings')} (
-                id, tapd_host, tapd_network, tapd_tls_cert_path,
-                tapd_macaroon_path, tapd_macaroon_hex,
-                lnd_macaroon_path, lnd_macaroon_hex, default_sat_fee
-            )
-            VALUES (
-                :id, :tapd_host, :tapd_network, :tapd_tls_cert_path,
-                :tapd_macaroon_path, :tapd_macaroon_hex,
-                :lnd_macaroon_path, :lnd_macaroon_hex, :default_sat_fee
-            )
-            """,
-            {
-                "id": settings_id,
-                "tapd_host": settings.tapd_host,
-                "tapd_network": settings.tapd_network,
-                "tapd_tls_cert_path": settings.tapd_tls_cert_path,
-                "tapd_macaroon_path": settings.tapd_macaroon_path,
-                "tapd_macaroon_hex": settings.tapd_macaroon_hex,
-                "lnd_macaroon_path": settings.lnd_macaroon_path,
-                "lnd_macaroon_hex": settings.lnd_macaroon_hex,
-                "default_sat_fee": settings.default_sat_fee,
-            }
-        )
+        # Create new settings with a generated ID
+        settings.id = urlsafe_short_hash()
+        await db.insert(get_table_name("settings"), settings)
     
     # Return the updated settings
     return await db.fetchone(
@@ -179,18 +136,36 @@ async def create_asset(asset_data: Dict[str, Any], user_id: str) -> TaprootAsset
     return asset
 
 
-async def get_assets(user_id: str) -> List[TaprootAsset]:
-    """Get all Taproot Assets for a user."""
-    return await db.fetchall(
+async def get_assets(user_id: str, conn=None) -> List[TaprootAsset]:
+    """
+    Get all Taproot Assets for a user.
+    
+    Args:
+        user_id: The user ID to get assets for
+        conn: Optional database connection to reuse
+        
+    Returns:
+        List[TaprootAsset]: List of assets owned by the user
+    """
+    return await (conn or db).fetchall(
         f"SELECT * FROM {get_table_name('assets')} WHERE user_id = :user_id ORDER BY created_at DESC",
         {"user_id": user_id},
         TaprootAsset
     )
 
 
-async def get_asset(asset_id: str) -> Optional[TaprootAsset]:
-    """Get a specific Taproot Asset by ID."""
-    return await db.fetchone(
+async def get_asset(asset_id: str, conn=None) -> Optional[TaprootAsset]:
+    """
+    Get a specific Taproot Asset by ID.
+    
+    Args:
+        asset_id: The asset ID to look up
+        conn: Optional database connection to reuse
+        
+    Returns:
+        Optional[TaprootAsset]: The asset if found, None otherwise
+    """
+    return await (conn or db).fetchone(
         f"SELECT * FROM {get_table_name('assets')} WHERE id = :id",
         {"id": asset_id},
         TaprootAsset
@@ -211,8 +186,26 @@ async def create_invoice(
     wallet_id: str,
     memo: Optional[str] = None,
     expiry: Optional[int] = None,
+    conn=None
 ) -> TaprootInvoice:
-    """Create a new Taproot Asset invoice."""
+    """
+    Create a new Taproot Asset invoice.
+    
+    Args:
+        asset_id: The ID of the asset being invoiced
+        asset_amount: The amount of the asset being invoiced
+        satoshi_amount: The satoshi amount for protocol requirements
+        payment_hash: The payment hash for the invoice
+        payment_request: The payment request string
+        user_id: The ID of the user creating the invoice
+        wallet_id: The ID of the wallet for the invoice
+        memo: Optional memo for the invoice
+        expiry: Optional expiry time in seconds
+        conn: Optional database connection to reuse
+        
+    Returns:
+        TaprootInvoice: The created invoice
+    """
     invoice_id = urlsafe_short_hash()
     now = datetime.now()
     expires_at = now + timedelta(seconds=expiry) if expiry else None
@@ -235,32 +228,60 @@ async def create_invoice(
     )
     
     # Insert using standardized method
-    await db.insert(get_table_name("invoices"), invoice)
+    await (conn or db).insert(get_table_name("invoices"), invoice)
     
     return invoice
 
 
-async def get_invoice(invoice_id: str) -> Optional[TaprootInvoice]:
-    """Get a specific Taproot Asset invoice by ID."""
-    return await db.fetchone(
+async def get_invoice(invoice_id: str, conn=None) -> Optional[TaprootInvoice]:
+    """
+    Get a specific Taproot Asset invoice by ID.
+    
+    Args:
+        invoice_id: The ID of the invoice to get
+        conn: Optional database connection to reuse
+        
+    Returns:
+        Optional[TaprootInvoice]: The invoice if found, None otherwise
+    """
+    return await (conn or db).fetchone(
         f"SELECT * FROM {get_table_name('invoices')} WHERE id = :id",
         {"id": invoice_id},
         TaprootInvoice
     )
 
 
-async def get_invoice_by_payment_hash(payment_hash: str) -> Optional[TaprootInvoice]:
-    """Get a specific Taproot Asset invoice by payment hash."""
-    return await db.fetchone(
+async def get_invoice_by_payment_hash(payment_hash: str, conn=None) -> Optional[TaprootInvoice]:
+    """
+    Get a specific Taproot Asset invoice by payment hash.
+    
+    Args:
+        payment_hash: The payment hash to look up
+        conn: Optional database connection to reuse
+        
+    Returns:
+        Optional[TaprootInvoice]: The invoice if found, None otherwise
+    """
+    return await (conn or db).fetchone(
         f"SELECT * FROM {get_table_name('invoices')} WHERE payment_hash = :payment_hash",
         {"payment_hash": payment_hash},
         TaprootInvoice
     )
 
 
-async def update_invoice_status(invoice_id: str, status: str) -> Optional[TaprootInvoice]:
-    """Update the status of a Taproot Asset invoice."""
-    invoice = await get_invoice(invoice_id)
+async def update_invoice_status(invoice_id: str, status: str, conn=None) -> Optional[TaprootInvoice]:
+    """
+    Update the status of a Taproot Asset invoice.
+    
+    Args:
+        invoice_id: The ID of the invoice to update
+        status: The new status for the invoice
+        conn: Optional database connection to reuse
+        
+    Returns:
+        Optional[TaprootInvoice]: The updated invoice if found, None otherwise
+    """
+    invoice = await get_invoice(invoice_id, conn)
     if not invoice:
         return None
         
@@ -272,14 +293,14 @@ async def update_invoice_status(invoice_id: str, status: str) -> Optional[Taproo
         invoice.paid_at = now
     
     # Update the invoice in the database using standardized method
-    await db.update(
+    await (conn or db).update(
         get_table_name("invoices"),
         invoice,
         "WHERE id = :id"
     )
     
     # Return the updated invoice
-    return await get_invoice(invoice_id)
+    return await get_invoice(invoice_id, conn)
 
 
 async def get_user_invoices(user_id: str) -> List[TaprootInvoice]:
@@ -432,9 +453,19 @@ async def get_user_payments(user_id: str) -> List[TaprootPayment]:
 # Asset Balances
 #
 
-async def get_asset_balance(wallet_id: str, asset_id: str) -> Optional[AssetBalance]:
-    """Get asset balance for a specific wallet and asset."""
-    return await db.fetchone(
+async def get_asset_balance(wallet_id: str, asset_id: str, conn=None) -> Optional[AssetBalance]:
+    """
+    Get asset balance for a specific wallet and asset.
+    
+    Args:
+        wallet_id: The wallet ID to get the balance for
+        asset_id: The asset ID to get the balance for
+        conn: Optional database connection to reuse
+        
+    Returns:
+        Optional[AssetBalance]: The asset balance if found, None otherwise
+    """
+    return await (conn or db).fetchone(
         f"""
         SELECT * FROM {get_table_name('asset_balances')}
         WHERE wallet_id = :wallet_id AND asset_id = :asset_id
@@ -464,13 +495,26 @@ async def update_asset_balance(
     wallet_id: str,
     asset_id: str,
     amount_change: int,
-    payment_hash: Optional[str] = None
+    payment_hash: Optional[str] = None,
+    conn=None
 ) -> Optional[AssetBalance]:
-    """Update asset balance, creating it if it doesn't exist."""
+    """
+    Update asset balance, creating it if it doesn't exist.
+    
+    Args:
+        wallet_id: The wallet ID to update the balance for
+        asset_id: The asset ID to update the balance for
+        amount_change: The amount to change the balance by (positive or negative)
+        payment_hash: Optional payment hash to associate with the balance update
+        conn: Optional database connection to reuse
+        
+    Returns:
+        Optional[AssetBalance]: The updated asset balance
+    """
     now = datetime.now()
     
     # Check if balance exists
-    balance = await get_asset_balance(wallet_id, asset_id)
+    balance = await get_asset_balance(wallet_id, asset_id, conn)
     
     if balance:
         # Update existing balance
@@ -480,7 +524,7 @@ async def update_asset_balance(
         balance.updated_at = now
         
         # Update in database using standardized method
-        await db.update(
+        await (conn or db).update(
             get_table_name("asset_balances"),
             balance,
             "WHERE wallet_id = :wallet_id AND asset_id = :asset_id"
@@ -499,10 +543,10 @@ async def update_asset_balance(
         )
         
         # Insert new balance using standardized method
-        await db.insert(get_table_name("asset_balances"), balance)
+        await (conn or db).insert(get_table_name("asset_balances"), balance)
     
     # Return the updated balance
-    return await get_asset_balance(wallet_id, asset_id)
+    return await get_asset_balance(wallet_id, asset_id, conn)
 
 
 #
@@ -516,34 +560,83 @@ async def record_asset_transaction(
     tx_type: str,  # 'credit' or 'debit'
     payment_hash: Optional[str] = None,
     fee: int = 0,
-    memo: Optional[str] = None
+    memo: Optional[str] = None,
+    conn=None
 ) -> AssetTransaction:
-    """Record an asset transaction and update the balance."""
-    now = datetime.now()
-    tx_id = urlsafe_short_hash()
+    """
+    Record an asset transaction and update the balance atomically.
     
-    # Create transaction record
-    transaction = AssetTransaction(
-        id=tx_id,
-        wallet_id=wallet_id,
-        asset_id=asset_id,
-        payment_hash=payment_hash,
-        amount=amount,
-        fee=fee,
-        memo=memo,
-        type=tx_type,
-        created_at=now
-    )
-    
-    # Insert transaction record using standardized method
-    await db.insert(get_table_name("asset_transactions"), transaction)
-    
-    # Update balance
-    # For debit, amount should be negative for balance update
-    balance_change = amount if tx_type == 'credit' else -amount
-    await update_asset_balance(wallet_id, asset_id, balance_change, payment_hash)
-    
-    return transaction
+    Args:
+        wallet_id: The wallet ID for the transaction
+        asset_id: The asset ID for the transaction
+        amount: The amount of the asset
+        tx_type: The type of transaction ('credit' or 'debit')
+        payment_hash: Optional payment hash for the transaction
+        fee: Optional fee amount
+        memo: Optional memo for the transaction
+        conn: Optional database connection to reuse
+        
+    Returns:
+        AssetTransaction: The recorded transaction
+    """
+    # Use a connection context manager to ensure atomicity
+    async with db.reuse_conn(conn) if conn else db.connect() as new_conn:
+        now = datetime.now()
+        tx_id = urlsafe_short_hash()
+        
+        # Create transaction record
+        transaction = AssetTransaction(
+            id=tx_id,
+            wallet_id=wallet_id,
+            asset_id=asset_id,
+            payment_hash=payment_hash,
+            amount=amount,
+            fee=fee,
+            memo=memo,
+            type=tx_type,
+            created_at=now
+        )
+        
+        # Insert transaction record using standardized method
+        await new_conn.insert(get_table_name("asset_transactions"), transaction)
+        
+        # Update balance
+        # For debit, amount should be negative for balance update
+        balance_change = amount if tx_type == 'credit' else -amount
+        
+        # Check if balance exists
+        balance = await get_asset_balance(wallet_id, asset_id, conn=new_conn)
+        
+        if balance:
+            # Update existing balance
+            balance.balance += balance_change
+            if payment_hash:
+                balance.last_payment_hash = payment_hash
+            balance.updated_at = now
+            
+            # Update in database using standardized method
+            await new_conn.update(
+                get_table_name("asset_balances"),
+                balance,
+                "WHERE wallet_id = :wallet_id AND asset_id = :asset_id"
+            )
+        else:
+            # Create new balance
+            balance_id = urlsafe_short_hash()
+            balance = AssetBalance(
+                id=balance_id,
+                wallet_id=wallet_id,
+                asset_id=asset_id,
+                balance=balance_change,
+                last_payment_hash=payment_hash,
+                created_at=now,
+                updated_at=now
+            )
+            
+            # Insert new balance using standardized method
+            await new_conn.insert(get_table_name("asset_balances"), balance)
+        
+        return transaction
 
 
 async def get_asset_transactions(
@@ -578,12 +671,15 @@ async def get_asset_transactions(
 SettlementResponse = Dict[str, Any]
 
 # Define helper functions for settlement process
-async def validate_invoice_for_settlement(payment_hash: str) -> Tuple[bool, Optional[TaprootInvoice], Optional[str]]:
+
+
+async def validate_invoice_for_settlement(payment_hash: str, conn=None) -> Tuple[bool, Optional[TaprootInvoice], Optional[str]]:
     """
     Validate if an invoice can be settled.
     
     Args:
         payment_hash: The payment hash to check
+        conn: Optional database connection to reuse
         
     Returns:
         Tuple containing:
@@ -592,7 +688,7 @@ async def validate_invoice_for_settlement(payment_hash: str) -> Tuple[bool, Opti
         - error_message (Optional[str]): Error message if validation fails
     """
     # Step 1: Check if invoice exists
-    invoice = await get_invoice_by_payment_hash(payment_hash)
+    invoice = await get_invoice_by_payment_hash(payment_hash, conn)
     if not invoice:
         return False, None, "Invoice not found"
     
@@ -609,18 +705,19 @@ async def validate_invoice_for_settlement(payment_hash: str) -> Tuple[bool, Opti
     return True, invoice, None
 
 
-async def update_invoice_for_settlement(invoice: TaprootInvoice) -> Optional[TaprootInvoice]:
+async def update_invoice_for_settlement(invoice: TaprootInvoice, conn=None) -> Optional[TaprootInvoice]:
     """
     Update an invoice to paid status for settlement.
     
     Args:
         invoice: The invoice to update
+        conn: Optional database connection to reuse
         
     Returns:
         Optional[TaprootInvoice]: The updated invoice or None if update failed
     """
     try:
-        return await update_invoice_status(invoice.id, "paid")
+        return await update_invoice_status(invoice.id, "paid", conn)
     except Exception as e:
         logger.error(f"Failed to update invoice status: {str(e)}")
         return None
@@ -628,7 +725,8 @@ async def update_invoice_for_settlement(invoice: TaprootInvoice) -> Optional[Tap
 
 async def record_settlement_transaction(
     invoice: TaprootInvoice, 
-    payment_hash: str
+    payment_hash: str,
+    conn=None
 ) -> Tuple[bool, Optional[AssetTransaction], Optional[str]]:
     """
     Record the asset transaction for a settlement.
@@ -636,6 +734,7 @@ async def record_settlement_transaction(
     Args:
         invoice: The invoice being settled
         payment_hash: The payment hash
+        conn: Optional database connection to reuse
         
     Returns:
         Tuple containing:
@@ -652,7 +751,8 @@ async def record_settlement_transaction(
             amount=invoice.asset_amount,
             tx_type="credit",
             payment_hash=payment_hash,
-            memo=memo
+            memo=memo,
+            conn=conn
         )
         
         return True, transaction, None
@@ -703,14 +803,14 @@ async def process_settlement_transaction(
     valid, invoice, validation_message = await validate_invoice_for_settlement(payment_hash)
     
     # Special case: Already paid invoices are considered successful settlements
-    if not valid and invoice and validation_message == "Invoice already paid":
+    if not valid and invoice is not None and validation_message == "Invoice already paid":
         logger.info(f"Invoice {payment_hash} already marked as paid, skipping settlement")
         return {
             "success": True,
             "message": "Invoice already paid",
-            "invoice": invoice.dict(),
-            "asset_id": invoice.asset_id,
-            "asset_amount": invoice.asset_amount,
+            "invoice": invoice.dict() if invoice else None,
+            "asset_id": invoice.asset_id if invoice else None,
+            "asset_amount": invoice.asset_amount if invoice else None,
             "payment_hash": payment_hash,
             "status": "already_paid"
         }
@@ -726,56 +826,69 @@ async def process_settlement_transaction(
         }
     
     try:
-        # Step 2: Update invoice status if requested
-        updated_invoice = invoice
-        if update_status:
-            logger.debug(f"Updating invoice {invoice.id} status to 'paid'")
-            updated_invoice = await update_invoice_for_settlement(invoice)
-            if not updated_invoice:
-                logger.error(f"Failed to update invoice status for {invoice.id}")
+        # Use a connection context manager to ensure atomicity for all operations
+        async with db.connect() as conn:
+            # Step 2: Update invoice status if requested
+            updated_invoice = invoice
+            if update_status and invoice:
+                logger.debug(f"Updating invoice {invoice.id} status to 'paid'")
+                updated_invoice = await update_invoice_for_settlement(invoice, conn)
+                if not updated_invoice:
+                    logger.error(f"Failed to update invoice status for {invoice.id}")
+                    return {
+                        "success": False,
+                        "error": "Failed to update invoice status",
+                        "payment_hash": payment_hash,
+                        "status": "update_failed"
+                    }
+            
+            # Step 3: Record the asset transaction
+            if updated_invoice:
+                tx_success, transaction, tx_error = await record_settlement_transaction(
+                    invoice=updated_invoice,
+                    payment_hash=payment_hash,
+                    conn=conn
+                )
+                
+                # Handle transaction recording failure
+                if not tx_success:
+                    logger.warning(f"Invoice paid but transaction recording failed: {tx_error}")
+                    return {
+                        "success": True,
+                        "partial": True,
+                        "message": "Invoice marked as paid but failed to record transaction",
+                        "invoice": updated_invoice.dict() if updated_invoice else None,
+                        "asset_id": updated_invoice.asset_id if updated_invoice else None,
+                        "asset_amount": updated_invoice.asset_amount if updated_invoice else None,
+                        "payment_hash": payment_hash,
+                        "warning": tx_error,
+                        "status": "paid_tx_failed"
+                    }
+                
+                # Step 4: All steps successful
+                processing_time = (datetime.now() - start_time).total_seconds()
+                logger.info(f"Settlement completed successfully for invoice {updated_invoice.id} in {processing_time:.2f}s")
+                
+                return {
+                    "success": True, 
+                    "message": "Settlement processed successfully",
+                    "invoice": updated_invoice.dict() if updated_invoice else None,
+                    "asset_id": updated_invoice.asset_id if updated_invoice else None,
+                    "asset_amount": updated_invoice.asset_amount if updated_invoice else None,
+                    "payment_hash": payment_hash,
+                    "tx_id": transaction.id if transaction else None,
+                    "status": "completed",
+                    "processing_time": processing_time
+                }
+            else:
+                # This should not happen, but handle it just in case
+                logger.error(f"No valid invoice found for payment_hash={payment_hash}")
                 return {
                     "success": False,
-                    "error": "Failed to update invoice status",
+                    "error": "No valid invoice found",
                     "payment_hash": payment_hash,
-                    "status": "update_failed"
+                    "status": "error"
                 }
-        
-        # Step 3: Record the asset transaction
-        tx_success, transaction, tx_error = await record_settlement_transaction(
-            invoice=updated_invoice,
-            payment_hash=payment_hash
-        )
-        
-        # Handle transaction recording failure
-        if not tx_success:
-            logger.warning(f"Invoice paid but transaction recording failed: {tx_error}")
-            return {
-                "success": True,
-                "partial": True,
-                "message": "Invoice marked as paid but failed to record transaction",
-                "invoice": updated_invoice.dict(),
-                "asset_id": invoice.asset_id,
-                "asset_amount": invoice.asset_amount,
-                "payment_hash": payment_hash,
-                "warning": tx_error,
-                "status": "paid_tx_failed"
-            }
-        
-        # Step 4: All steps successful
-        processing_time = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Settlement completed successfully for invoice {invoice.id} in {processing_time:.2f}s")
-        
-        return {
-            "success": True, 
-            "message": "Settlement processed successfully",
-            "invoice": updated_invoice.dict(),
-            "asset_id": invoice.asset_id,
-            "asset_amount": invoice.asset_amount,
-            "payment_hash": payment_hash,
-            "tx_id": transaction.id if transaction else None,
-            "status": "completed",
-            "processing_time": processing_time
-        }
             
     except Exception as e:
         processing_time = (datetime.now() - start_time).total_seconds()
