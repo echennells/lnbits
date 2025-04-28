@@ -581,6 +581,7 @@ window.app = Vue.createApp({
       }
     },
     
+    // UPDATED: This function now immediately refreshes assets when an invoice is paid
     handleInvoiceWebSocketMessage(event) {
       try {
         const data = JSON.parse(event.data);
@@ -614,12 +615,9 @@ window.app = Vue.createApp({
                 timeout: 2000
               });
               
-              // Force a direct refresh of assets after payment
-              console.log('Invoice paid - scheduling asset refresh');
-              setTimeout(() => {
-                console.log('Running delayed asset refresh');
-                this.getAssets();
-              }, 500);
+              // Force an immediate refresh of assets instead of delaying
+              console.log('Invoice paid - refreshing assets immediately');
+              this.getAssets();
             }
           } else {
             // Add new invoice
@@ -662,6 +660,12 @@ window.app = Vue.createApp({
             const newPayment = mapPayment(data.data);
             newPayment._isNew = true;
             this.payments.push(newPayment);
+            
+            // Immediately refresh assets for newly completed payments
+            if (newPayment.status === 'completed') {
+              console.log('Payment completed - refreshing assets immediately');
+              this.getAssets();
+            }
           }
           
           // Update combined transactions
@@ -672,28 +676,18 @@ window.app = Vue.createApp({
       }
     },
     
+    // SIMPLIFIED: Just use WebSocket message as a trigger to refresh assets
     handleBalancesWebSocketMessage(event) {
       try {
         const data = JSON.parse(event.data);
-        console.log('Balances WebSocket message:', data);
+        console.log('Balances WebSocket message received');
         
         if (data.type === 'assets_update' && Array.isArray(data.data)) {
-          console.log('New assets data from WebSocket:', data.data);
-          
-          // Create a completely new array with deep copies of each asset
-          const newAssets = JSON.parse(JSON.stringify(data.data));
-          
-          // Log the current assets for comparison
-          console.log('Current assets before update:', this.assets);
-          
-          // Replace the assets array with the new data
-          this.assets = newAssets;
-          
-          // Log the updated assets
-          console.log('Assets after update:', this.assets);
-          
-          // Update transaction descriptions with new asset names
-          this.updateTransactionDescriptions();
+          // Instead of processing WebSocket data, just refresh from API
+          if (!this.isRefreshing) {
+            console.log('Balance WebSocket received - refreshing assets from API');
+            this.getAssets();
+          }
         }
       } catch (e) {
         console.error('Error handling balances WebSocket message:', e);
@@ -1045,14 +1039,12 @@ window.app = Vue.createApp({
         // Show success dialog
         this.successDialog.show = true;
         
-        // WebSockets will handle UI updates, but refresh just in case
-        await this.refreshTransactions();
+        // Immediately refresh assets to get updated balances
+        console.log('Payment completed - refreshing assets immediately');
+        this.getAssets();
         
-        // Force asset refresh after sending payment
-        setTimeout(() => {
-          console.log('Payment completed - refreshing assets directly');
-          this.getAssets();
-        }, 500);
+        // Also refresh transactions
+        this.refreshTransactions();
 
       } catch (error) {
         console.error('Payment failed:', error);
@@ -1134,14 +1126,12 @@ window.app = Vue.createApp({
         this.successDialog.message = 'Payment to another user on this node has been processed successfully.';
         this.successDialog.show = true;
         
-        // WebSockets will handle UI updates, but refresh just in case
-        await this.refreshTransactions();
+        // Immediately refresh assets to show updated balances
+        console.log('Internal payment completed - refreshing assets immediately');
+        this.getAssets();
         
-        // Force asset refresh after sending payment
-        setTimeout(() => {
-          console.log('Internal payment completed - refreshing assets directly');
-          this.getAssets();
-        }, 500);
+        // Also refresh transactions
+        this.refreshTransactions();
         
         return true;
       } catch (error) {
@@ -1196,14 +1186,12 @@ window.app = Vue.createApp({
         }
         this.successDialog.show = true;
         
-        // WebSockets will handle UI updates, but refresh just in case
-        await this.refreshTransactions();
+        // Immediately refresh assets to show updated balances 
+        console.log('Self/Internal payment completed - refreshing assets immediately');
+        this.getAssets();
         
-        // Force asset refresh after sending payment
-        setTimeout(() => {
-          console.log('Self/Internal payment completed - refreshing assets directly');
-          this.getAssets();
-        }, 500);
+        // Also refresh transactions
+        this.refreshTransactions();
         
         return true;
       } catch (error) {
