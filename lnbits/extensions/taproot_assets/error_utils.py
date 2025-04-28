@@ -1,10 +1,18 @@
 """
 Standardized error handling utilities for the Taproot Assets extension.
 """
-from typing import Dict, Any, Optional, Tuple, Union
+import functools
+from http import HTTPStatus
+from typing import Dict, Any, Optional, Tuple, Union, Callable, TypeVar, Awaitable, cast
+
 import grpc
-from fastapi import HTTPException
+from fastapi import HTTPException, Request, Response
 from loguru import logger
+
+from .models import ApiResponse, ErrorDetail
+
+# Define a type variable for the decorated function
+F = TypeVar('F', bound=Callable[..., Awaitable[Any]])
 
 
 def format_error_response(error_message: str, error_details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -121,3 +129,62 @@ def log_error(error: Exception, context: str = "", level: str = "error") -> None
         logger.critical(message)
     else:
         logger.error(message)
+
+
+def handle_api_error(func: F) -> F:
+    """
+    Decorator for consistent API error handling.
+    
+    This decorator wraps API endpoint functions to provide standardized error handling.
+    It catches exceptions, formats them appropriately, and returns consistent error responses.
+    
+    Args:
+        func: The API endpoint function to decorate
+        
+    Returns:
+        The decorated function
+    """
+    @functools.wraps(func)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            # Call the original function
+            return await func(*args, **kwargs)
+        except grpc.aio.AioRpcError as e:
+            # Handle gRPC errors
+            error_message, status_code = handle_grpc_error(e, context=func.__name__)
+            
+            # Create error details
+            details = ErrorDetail(
+                code="GRPC_ERROR",
+                source="taproot_daemon",
+                context={"grpc_code": str(e.code())}
+            )
+            
+            # Return standardized error response
+            return ApiResponse.error_response(
+                message=error_message,
+                details=details,
+                status_code=status_code
+            )
+        except HTTPException as e:
+            # Pass through FastAPI HTTP exceptions
+            raise e
+        except Exception as e:
+            # Handle unexpected errors
+            log_error(e, context=func.__name__)
+            
+            # Create error details
+            details = ErrorDetail(
+                code="INTERNAL_ERROR",
+                source="taproot_assets",
+                context={"error_type": type(e).__name__}
+            )
+            
+            # Return standardized error response
+            return ApiResponse.error_response(
+                message=f"An unexpected error occurred: {str(e)}",
+                details=details,
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+    
+    return cast(F, wrapper)

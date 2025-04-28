@@ -1,7 +1,11 @@
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from http import HTTPStatus
+from typing import Optional, List, Dict, Any, Generic, TypeVar, Union
 
 from pydantic import BaseModel, Field
+
+# Define a generic type variable for response data
+T = TypeVar('T')
 
 
 class TaprootSettings(BaseModel):
@@ -117,3 +121,86 @@ class AssetTransaction(BaseModel):
     memo: Optional[str] = None
     type: str  # 'credit', 'debit'
     created_at: datetime
+
+
+# API Response Models
+
+class ErrorDetail(BaseModel):
+    """Model for detailed error information."""
+    code: Optional[str] = None
+    source: Optional[str] = None
+    context: Optional[Dict[str, Any]] = None
+
+
+class ApiResponse(Generic[T]):
+    """
+    Generic API response model.
+    
+    This model provides a standardized structure for all API responses,
+    with consistent fields for success status, data, and error information.
+    """
+    success: bool
+    data: Optional[T] = None
+    error: Optional[str] = None
+    details: Optional[ErrorDetail] = None
+    
+    @classmethod
+    def success_response(cls, data: Optional[T] = None) -> Dict[str, Any]:
+        """Create a success response."""
+        return {
+            "success": True,
+            "data": data
+        }
+    
+    @classmethod
+    def error_response(
+        cls, 
+        message: str, 
+        details: Optional[ErrorDetail] = None,
+        status_code: int = HTTPStatus.INTERNAL_SERVER_ERROR
+    ) -> Dict[str, Any]:
+        """Create an error response."""
+        response = {
+            "success": False,
+            "error": message
+        }
+        
+        if details:
+            response["details"] = details
+            
+        return response
+
+
+class InvoiceResponse(BaseModel):
+    """Standardized response for invoice creation."""
+    payment_hash: str
+    payment_request: str
+    asset_id: str
+    asset_amount: int
+    satoshi_amount: int
+    checking_id: str
+
+
+class PaymentResponse(BaseModel):
+    """Standardized response for payment operations."""
+    success: bool
+    payment_hash: str
+    preimage: Optional[str] = None
+    fee_msat: Optional[int] = None
+    sat_fee_paid: Optional[int] = None
+    routing_fees_sats: Optional[int] = None
+    asset_amount: int
+    asset_id: Optional[str] = None
+    internal_payment: Optional[bool] = False
+    self_payment: Optional[bool] = False
+
+
+class ParsedInvoice(BaseModel):
+    """Model for parsed invoice data."""
+    payment_hash: str
+    amount: float
+    description: str
+    expiry: int
+    timestamp: int
+    valid: bool
+    asset_id: Optional[str] = None
