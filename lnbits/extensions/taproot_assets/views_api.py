@@ -41,6 +41,7 @@ from .models import TaprootSettings, TaprootAsset, TaprootInvoice, TaprootInvoic
 from .wallets.taproot_wallet import TaprootWalletExtension
 from .tapd_settings import taproot_settings
 from .websocket import ws_manager
+from .notification_service import NotificationService
 from .db import get_table_name
 
 # The parent router in __init__.py already adds the "/taproot_assets" prefix
@@ -221,9 +222,9 @@ async def api_list_assets(
             else:
                 asset["user_balance"] = 0
                 
-        # Send WebSocket notification with assets data
+        # Send WebSocket notification with assets data using NotificationService
         if assets_data:
-            await ws_manager.notify_assets_update(wallet.wallet.user, assets_data)
+            await NotificationService.notify_assets_update(wallet.wallet.user, assets_data)
             
         return assets_data
     except Exception as e:
@@ -328,8 +329,8 @@ async def api_create_invoice(
             "created_at": invoice.created_at.isoformat() if hasattr(invoice.created_at, "isoformat") else str(invoice.created_at)
         }
         
-        # Use WebSocket notification with error handling
-        notification_sent = await ws_manager.notify_invoice_update(wallet.wallet.user, invoice_data)
+        # Use NotificationService for WebSocket notification
+        notification_sent = await NotificationService.notify_invoice_update(wallet.wallet.user, invoice_data)
         if not notification_sent:
             logger.warning(f"Failed to send WebSocket notification for invoice {invoice.id}")
 
@@ -498,39 +499,21 @@ async def api_pay_invoice(
                 memo=memo
             )
             
-            # Send WebSocket notification of payment
+            # Send notifications using the NotificationService
             if payment_record:
-                payment_data = {
-                    "id": payment_record.id,
-                    "payment_hash": payment_hash,
-                    "asset_id": asset_id,
-                    "asset_amount": asset_amount,
-                    "fee_sats": routing_fees_sats,
-                    "memo": memo,
-                    "status": "completed",
-                    "created_at": payment_record.created_at.isoformat() if hasattr(payment_record.created_at, "isoformat") else str(payment_record.created_at)
-                }
-                await ws_manager.notify_payment_update(wallet.wallet.user, payment_data)
-                
-                # Also update asset balances via WebSocket
-                try:
-                    taproot_wallet = TaprootWalletExtension()  # Create a fresh instance
-                    taproot_wallet.user = wallet.wallet.user
-                    taproot_wallet.id = wallet.wallet.id
-                    
-                    assets = await taproot_wallet.list_assets()
-                    filtered_assets = [asset for asset in assets if asset.get("channel_info")]
-                    
-                    # Add user balance information
-                    for asset in filtered_assets:
-                        asset_id = asset.get("asset_id")
-                        balance = await get_asset_balance(wallet.wallet.id, asset_id)
-                        asset["user_balance"] = balance.balance if balance else 0
-                        
-                    if filtered_assets:
-                        await ws_manager.notify_assets_update(wallet.wallet.user, filtered_assets)
-                except Exception as asset_err:
-                    logger.error(f"Failed to update assets after payment: {str(asset_err)}")
+                # Use the notification service to send all notifications in one go
+                await NotificationService.notify_transaction_complete(
+                    user_id=wallet.wallet.user,
+                    wallet_id=wallet.wallet.id,
+                    payment_hash=payment_hash,
+                    asset_id=asset_id,
+                    asset_amount=asset_amount,
+                    tx_type="debit",  # Outgoing payment
+                    memo=memo,
+                    fee_sats=routing_fees_sats,
+                    is_internal=False,
+                    is_self_payment=False
+                )
                 
         except Exception as db_error:
             # Don't fail if payment record creation fails
@@ -635,6 +618,23 @@ async def api_internal_payment(
         if not result.ok:
             raise Exception(f"Internal payment failed: {result.error_message}")
 
+        # Check if this is a self-payment
+        is_self = await is_self_payment(payment_hash, wallet.wallet.user)
+        
+        # Send notifications using the NotificationService
+        await NotificationService.notify_transaction_complete(
+            user_id=wallet.wallet.user,
+            wallet_id=wallet.wallet.id,
+            payment_hash=payment_hash,
+            asset_id=invoice.asset_id,
+            asset_amount=invoice.asset_amount,
+            tx_type="debit",  # Outgoing payment
+            memo=invoice.memo or "Internal Taproot Asset Transfer",
+            fee_sats=0,  # No fee for internal payments
+            is_internal=True,
+            is_self_payment=is_self
+        )
+        
         # Return success response
         return {
             "success": True,
@@ -643,7 +643,7 @@ async def api_internal_payment(
             "asset_amount": invoice.asset_amount,
             "asset_id": invoice.asset_id,
             "internal_payment": True,
-            "self_payment": await is_self_payment(payment_hash, wallet.wallet.user)
+            "self_payment": is_self
         }
 
     except HTTPException:
@@ -721,6 +721,20 @@ async def api_self_payment(
         if not result.ok:
             raise Exception(f"Self-payment failed: {result.error_message}")
 
+        # Send notifications using the NotificationService
+        await NotificationService.notify_transaction_complete(
+            user_id=wallet.wallet.user,
+            wallet_id=wallet.wallet.id,
+            payment_hash=payment_hash,
+            asset_id=invoice.asset_id,
+            asset_amount=invoice.asset_amount,
+            tx_type="debit",  # Outgoing payment
+            memo=invoice.memo or "Self-payment Taproot Asset Transfer",
+            fee_sats=0,  # No fee for self-payments
+            is_internal=True,
+            is_self_payment=True
+        )
+        
         # Return success response
         return {
             "success": True,
@@ -863,7 +877,7 @@ async def api_update_invoice_status(
         except Exception as e:
             logger.error(f"Failed to update asset balance: {str(e)}")
     
-    # Send WebSocket notification about status update
+    # Send WebSocket notification about status update using NotificationService
     if updated_invoice:
         invoice_data = {
             "id": updated_invoice.id,
@@ -872,7 +886,7 @@ async def api_update_invoice_status(
             "asset_id": updated_invoice.asset_id,
             "asset_amount": updated_invoice.asset_amount
         }
-        await ws_manager.notify_invoice_update(wallet.wallet.user, invoice_data)
+        await NotificationService.notify_invoice_update(wallet.wallet.user, invoice_data)
     
     return updated_invoice
 
