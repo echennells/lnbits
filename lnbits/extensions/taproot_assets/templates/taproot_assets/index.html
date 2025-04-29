@@ -3,6 +3,12 @@
 
 {% block scripts %}
 {{ window_vars(user) }}
+<script>
+  // Simple fix for missing $t function (the part that actually worked)
+  if (typeof window.$t !== 'function') {
+    window.$t = function(key) { return key; };
+  }
+</script>
 <!-- Load utility files first -->
 <script src="{{ static_url_for('taproot_assets/static', path='js/utils.js') }}"></script>
 <script src="{{ static_url_for('taproot_assets/static', path='js/api.js') }}"></script>

@@ -2,11 +2,30 @@
  * Main JavaScript for Taproot Assets extension
  */
 
-// Create the Vue application
+// Create the Vue application with i18n compatibility
 window.app = Vue.createApp({
   mixins: [windowMixin],
   
+  // Add a translation function to prevent $t errors
+  methods: {
+    $t(key) {
+      // Simple fallback translation function
+      return key;
+    }
+  },
+  
   data() {
+    // Check for localStorage availability to prevent errors
+    const hasLocalStorage = (function() {
+      try {
+        localStorage.setItem('test', 'test');
+        localStorage.removeItem('test');
+        return true;
+      } catch (e) {
+        return false;
+      }
+    })();
+    
     return {
       // Settings
       settings: {
@@ -20,6 +39,9 @@ window.app = Vue.createApp({
         default_sat_fee: 1
       },
       showSettings: false,
+      
+      // Add localStorage availability flag
+      hasLocalStorage: hasLocalStorage,
       
       // Assets
       assets: [],
@@ -1314,7 +1336,7 @@ window.app = Vue.createApp({
   created() {
     console.log("Vue app created");
     
-    if (this.g.user.wallets.length) {
+    if (this.g.user && this.g.user.wallets && this.g.user.wallets.length) {
       this.getSettings();
       this.getAssets();
       this.getInvoices(true);
@@ -1344,7 +1366,7 @@ window.app = Vue.createApp({
   
   activated() {
     console.log("Vue app activated");
-    if (this.g.user.wallets.length) {
+    if (this.g.user && this.g.user.wallets && this.g.user.wallets.length) {
       this.resetInvoiceForm();
       this.resetPaymentForm();
       this.refreshTransactions();
@@ -1366,6 +1388,11 @@ window.app = Vue.createApp({
     this.closeWebSockets();
   }
 });
+
+// Add a global $t function to help with i18n errors
+window.app.config.globalProperties.$t = function(key) {
+  return key;
+};
 
 // Mount the Vue app
 window.app.mount('#vue');
