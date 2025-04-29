@@ -1,12 +1,15 @@
 from typing import AsyncGenerator, Dict, List, Optional, Any
 
-from loguru import logger
-
 from lnbits.settings import settings
 
 from .taproot_node import TaprootAssetsNodeExtension
 from ..crud import get_or_create_settings
 from ..tapd_settings import taproot_settings
+from ..logging_utils import (
+    log_debug, log_info, log_warning, log_error, 
+    log_exception, WALLET, LogContext
+)
+from ..error_utils import ErrorContext
 
 
 class InvoiceResponse:
@@ -69,7 +72,7 @@ class TaprootWalletExtension:
             return
 
         # Create a node instance
-        logger.debug("Creating TaprootAssetsNodeExtension instance")
+        log_debug(WALLET, "Creating TaprootAssetsNodeExtension instance")
         self.node = TaprootAssetsNodeExtension(wallet=self)
 
         # Mark as initialized
@@ -82,14 +85,9 @@ class TaprootWalletExtension:
 
     async def list_assets(self) -> List[Dict[str, Any]]:
         """List all Taproot Assets."""
-        try:
+        with LogContext(WALLET, "listing assets"):
             await self._init_connection()
             return await self.node.list_assets()
-        except Exception as e:
-            logger.error(f"Failed to list assets: {str(e)}")
-            raise Exception(f"Failed to list assets: {str(e)}")
-        finally:
-            await self.cleanup()
 
     async def manually_settle_invoice(
         self,
@@ -108,13 +106,14 @@ class TaprootWalletExtension:
             bool: True if settlement was successful, False otherwise
         """
         try:
-            await self._init_connection()
-            return await self.node.manually_settle_invoice(
-                payment_hash=payment_hash,
-                script_key=script_key
-            )
+            with LogContext(WALLET, f"manually settling invoice {payment_hash[:8]}..."):
+                await self._init_connection()
+                return await self.node.manually_settle_invoice(
+                    payment_hash=payment_hash,
+                    script_key=script_key
+                )
         except Exception as e:
-            logger.error(f"Error in manual settlement: {str(e)}")
+            log_error(WALLET, f"Error in manual settlement: {str(e)}")
             return False
         finally:
             await self.cleanup()
@@ -149,11 +148,15 @@ class TaprootWalletExtension:
         # Extract asset_id from kwargs
         asset_id = kwargs.get("asset_id")
         if not asset_id:
+            log_warning(WALLET, "Missing asset_id parameter in create_invoice")
             return InvoiceResponse(False, None, None, "Missing asset_id parameter", None)
 
         try:
             # Get peer_pubkey from kwargs if provided
             peer_pubkey = kwargs.get("peer_pubkey")
+            peer_info = f" with peer {peer_pubkey[:8]}..." if peer_pubkey else ""
+            
+            log_info(WALLET, f"Creating invoice for asset {asset_id[:8]}..., amount={amount}{peer_info}")
             
             # Create the invoice
             invoice_result = await self.create_asset_invoice(
@@ -167,6 +170,8 @@ class TaprootWalletExtension:
             # Extract payment details
             payment_hash = invoice_result["invoice_result"]["r_hash"]
             payment_request = invoice_result["invoice_result"]["payment_request"]
+            
+            log_info(WALLET, f"Invoice created successfully, payment_hash={payment_hash[:8]}...")
 
             # Create extra data
             extra = {
@@ -183,7 +188,7 @@ class TaprootWalletExtension:
                 extra=extra
             )
         except Exception as e:
-            logger.error(f"Failed to create invoice: {str(e)}")
+            log_error(WALLET, f"Failed to create invoice: {str(e)}")
             return InvoiceResponse(
                 ok=False,
                 error_message=f"Failed to create invoice: {str(e)}"
@@ -216,20 +221,21 @@ class TaprootWalletExtension:
         Returns:
             Dict containing the invoice information with accepted_buy_quote and invoice_result
         """
-        try:
+        with ErrorContext("create_asset_invoice", WALLET):
             await self._init_connection()
-            return await self.node.create_asset_invoice(
+            peer_info = f" with peer {peer_pubkey[:8]}..." if peer_pubkey else ""
+            log_debug(WALLET, f"Creating asset invoice for {asset_id[:8]}..., amount={asset_amount}{peer_info}")
+            
+            result = await self.node.create_asset_invoice(
                 memo=memo,
                 asset_id=asset_id,
                 asset_amount=asset_amount,
                 expiry=expiry,
                 peer_pubkey=peer_pubkey
             )
-        except Exception as e:
-            logger.error(f"Failed to create asset invoice: {str(e)}")
-            raise Exception(f"Failed to create asset invoice: {str(e)}")
-        finally:
-            await self.cleanup()
+            
+            log_debug(WALLET, f"Asset invoice created successfully")
+            return result
 
     async def pay_asset_invoice(
         self,
@@ -253,9 +259,13 @@ class TaprootWalletExtension:
         """
         try:
             await self._init_connection()
-
+            
             # Extract asset_id from kwargs if provided
             asset_id = kwargs.get("asset_id")
+            asset_info = f" using asset {asset_id[:8]}..." if asset_id else ""
+            peer_info = f" with peer {peer_pubkey[:8]}..." if peer_pubkey else ""
+            
+            log_info(WALLET, f"Paying asset invoice{asset_info}{peer_info}, fee_limit={fee_limit_sats or 'default'} sats")
 
             # Call the node's pay_asset_invoice method
             payment_result = await self.node.pay_asset_invoice(
@@ -269,6 +279,8 @@ class TaprootWalletExtension:
             payment_hash = payment_result.get("payment_hash", "")
             preimage = payment_result.get("payment_preimage", "")
             fee_msat = payment_result.get("fee_sats", 0) * 1000  # Convert sats to msats
+            
+            log_info(WALLET, f"Payment successful, hash={payment_hash[:8]}..., fee={fee_msat//1000} sats")
             
             # Get extra information
             extra = {
@@ -284,7 +296,7 @@ class TaprootWalletExtension:
                 extra=extra
             )
         except Exception as e:
-            logger.error(f"Failed to pay invoice: {str(e)}")
+            log_error(WALLET, f"Failed to pay invoice: {str(e)}")
             return PaymentResponse(
                 ok=False,
                 error_message=f"Failed to pay invoice: {str(e)}"
@@ -318,11 +330,11 @@ class TaprootWalletExtension:
         """
         try:
             await self._init_connection()
-            logger.info(f"Processing internal payment for {payment_hash}, asset_id={asset_id}")
+            log_info(WALLET, f"Processing internal payment for {payment_hash[:8]}..., asset_id={asset_id[:8] if asset_id else 'unknown'}")
 
             # Make sure the node has wallet information
             if not self.node.wallet:
-                logger.debug("Ensuring node has wallet information")
+                log_debug(WALLET, "Ensuring node has wallet information")
                 self.node.wallet = self
 
             # Call the node's update_after_payment method
@@ -333,7 +345,7 @@ class TaprootWalletExtension:
                 asset_id=asset_id
             )
             
-            logger.info(f"Internal payment result: {update_result}")
+            log_debug(WALLET, f"Internal payment result: {update_result}")
 
             # Build extra data based on the type of internal payment
             extra = {
@@ -343,8 +355,12 @@ class TaprootWalletExtension:
             }
             
             # Add self-payment flag if this was a self-payment
-            if update_result.get("self_payment"):
+            is_self_payment = update_result.get("self_payment", False)
+            if is_self_payment:
                 extra["self_payment"] = True
+                log_info(WALLET, "Processed as self-payment")
+            else:
+                log_info(WALLET, "Processed as internal payment")
 
             # Create response
             response = PaymentResponse(
@@ -355,12 +371,9 @@ class TaprootWalletExtension:
                 extra=extra
             )
             
-            # Log the response for debugging
-            logger.info(f"Internal payment response: ok={response.ok}, checking_id={response.checking_id}")
-            
             return response
         except Exception as e:
-            logger.error(f"Failed to update Taproot Assets after payment: {str(e)}")
+            log_error(WALLET, f"Failed to update Taproot Assets after payment: {str(e)}")
             return PaymentResponse(
                 ok=False,
                 checking_id=payment_hash,

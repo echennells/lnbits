@@ -6,6 +6,10 @@ from typing import Dict, Any, List, Optional, Union
 from loguru import logger
 
 from .websocket import ws_manager
+from .logging_utils import (
+    log_debug, log_info, log_warning, log_error, 
+    WEBSOCKET, ASSET
+)
 
 class NotificationService:
     """
@@ -25,6 +29,7 @@ class NotificationService:
         Returns:
             bool: True if notification was sent successfully, False otherwise
         """
+        log_debug(WEBSOCKET, f"Sending invoice update notification to user {user_id}")
         return await ws_manager.notify_invoice_update(user_id, invoice_data)
     
     @staticmethod
@@ -39,6 +44,7 @@ class NotificationService:
         Returns:
             bool: True if notification was sent successfully, False otherwise
         """
+        log_debug(WEBSOCKET, f"Sending payment update notification to user {user_id}")
         return await ws_manager.notify_payment_update(user_id, payment_data)
     
     @staticmethod
@@ -53,6 +59,7 @@ class NotificationService:
         Returns:
             bool: True if notification was sent successfully, False otherwise
         """
+        log_debug(WEBSOCKET, f"Sending assets update notification to user {user_id}")
         return await ws_manager.notify_assets_update(user_id, assets_data)
     
     @staticmethod
@@ -74,12 +81,15 @@ class NotificationService:
         results = {}
         
         if not user_id:
-            logger.warning("Cannot send notifications with empty user_id")
+            log_warning(WEBSOCKET, "Cannot send notifications with empty user_id")
             return {k: False for k in updates.keys()}
+        
+        log_info(WEBSOCKET, f"Sending batch notifications to user {user_id}: {', '.join(updates.keys())}")
         
         # Process each update type
         for update_type, data in updates.items():
             if not data:
+                log_warning(WEBSOCKET, f"Empty data for {update_type} notification")
                 results[update_type] = False
                 continue
                 
@@ -91,10 +101,10 @@ class NotificationService:
                 elif update_type == "assets" and isinstance(data, list):
                     results[update_type] = await ws_manager.notify_assets_update(user_id, data)
                 else:
-                    logger.warning(f"Unknown notification type: {update_type}")
+                    log_warning(WEBSOCKET, f"Unknown notification type: {update_type}")
                     results[update_type] = False
             except Exception as e:
-                logger.error(f"Error sending {update_type} notification: {str(e)}")
+                log_error(WEBSOCKET, f"Error sending {update_type} notification: {str(e)}")
                 results[update_type] = False
         
         return results
@@ -134,6 +144,8 @@ class NotificationService:
         from .wallets.taproot_wallet import TaprootWalletExtension
         from .crud.balances import get_asset_balance
         
+        log_info(WEBSOCKET, f"Preparing transaction complete notifications for user {user_id}")
+        
         updates = {}
         
         # Create payment data for notification
@@ -156,6 +168,8 @@ class NotificationService:
             # Get assets directly from the database instead of using the wallet
             from .crud.assets import get_assets
             
+            log_debug(ASSET, f"Fetching assets for user {user_id} for notification")
+            
             # Get assets for this user
             assets = await get_assets(user_id)
             
@@ -170,9 +184,10 @@ class NotificationService:
                     asset["user_balance"] = balance.balance if balance else 0
             
             if filtered_assets:
+                log_debug(ASSET, f"Including {len(filtered_assets)} assets in notification")
                 updates["assets"] = filtered_assets
         except Exception as e:
-            logger.error(f"Failed to fetch assets for notification: {str(e)}")
+            log_error(ASSET, f"Failed to fetch assets for notification: {str(e)}")
         
         # Send all notifications in one batch
         return await NotificationService.notify_batch_updates(user_id, updates)

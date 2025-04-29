@@ -12,6 +12,7 @@ import bolt11
 from lnbits.core.models import WalletTypeInfo
 
 from ..models import TaprootPaymentRequest, PaymentResponse, ParsedInvoice
+from ..logging_utils import log_debug, log_info, log_warning, log_error, PAYMENT, API
 from ..wallets.taproot_wallet import TaprootWalletExtension
 from ..error_utils import log_error, handle_grpc_error, raise_http_exception
 from ..crud import (
@@ -317,6 +318,46 @@ class PaymentService:
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Failed to process internal payment: {str(e)}"
             )
+    
+    @staticmethod
+    async def process_payment(
+        data: TaprootPaymentRequest,
+        wallet: WalletTypeInfo,
+        force_payment_type: Optional[str] = None
+    ) -> PaymentResponse:
+        """
+        Process a payment request, automatically determining the payment type
+        unless a specific type is forced.
+        
+        Args:
+            data: The payment request data
+            wallet: The wallet information
+            force_payment_type: Optional parameter to force a specific payment type
+                           ("internal", "self", or "external")
+        
+        Returns:
+            PaymentResponse: The payment result
+        """
+        # Parse the invoice to get payment details
+        parsed_invoice = await PaymentService.parse_invoice(data.payment_request)
+        
+        # Determine the payment type if not forced
+        if force_payment_type:
+            payment_type = force_payment_type
+            log_info(PAYMENT, f"Using forced payment type: {payment_type}")
+        else:
+            payment_type = await PaymentService.determine_payment_type(
+                parsed_invoice.payment_hash, wallet.wallet.user
+            )
+            log_info(PAYMENT, f"Payment type determined: {payment_type}")
+        
+        # Process the payment based on its type
+        if payment_type == "internal":
+            return await PaymentService.process_internal_payment(data, wallet, parsed_invoice)
+        elif payment_type == "self":
+            return await PaymentService.process_self_payment(data, wallet, parsed_invoice)
+        else:
+            return await PaymentService.process_external_payment(data, wallet, parsed_invoice)
     
     @staticmethod
     async def process_self_payment(
