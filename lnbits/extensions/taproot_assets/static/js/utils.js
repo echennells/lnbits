@@ -96,39 +96,129 @@ function shortify(text, maxLength = 10) {
   return `${text.substring(0, half)}...${text.substring(text.length - half)}`;
 }
 
-// Copy text to clipboard
+// Copy text to clipboard - updated for better browser compatibility
 function copyText(text, notifyCallback) {
-  if (!text) return;
-  
-  try {
-    // Create a temporary input element
-    const tempInput = document.createElement('input');
-    tempInput.value = text;
-    document.body.appendChild(tempInput);
-    tempInput.select();
-    document.execCommand('copy');
-    document.body.removeChild(tempInput);
-    
-    // Execute notification callback if provided
+  if (!text) {
     if (notifyCallback) {
       notifyCallback({
-        message: 'Copied to clipboard',
-        color: 'positive',
-        icon: 'check',
+        message: 'Nothing to copy',
+        color: 'warning',
+        icon: 'warning',
         timeout: 1000
       });
     }
-  } catch (e) {
-    console.error('Failed to copy text:', e);
-    if (notifyCallback) {
-      notifyCallback({
-        message: 'Failed to copy to clipboard',
-        color: 'negative',
-        icon: 'error',
-        timeout: 1000
+    return;
+  }
+  
+  // Use the new clipboard API if available
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text)
+      .then(() => {
+        if (notifyCallback) {
+          notifyCallback({
+            message: 'Copied to clipboard',
+            color: 'positive',
+            icon: 'check',
+            timeout: 1000
+          });
+        }
+      })
+      .catch(err => {
+        console.error('Failed to copy text using Clipboard API:', err);
+        fallbackCopy();
       });
+  } else {
+    fallbackCopy();
+  }
+  
+  // Fallback method for older browsers
+  function fallbackCopy() {
+    try {
+      // Create a temporary input element
+      const tempInput = document.createElement('input');
+      tempInput.style.position = 'fixed';
+      tempInput.style.opacity = 0;
+      tempInput.value = text;
+      document.body.appendChild(tempInput);
+      tempInput.select();
+      tempInput.setSelectionRange(0, 99999); // For mobile devices
+      
+      // Execute copy command
+      const successful = document.execCommand('copy');
+      
+      // Clean up
+      document.body.removeChild(tempInput);
+      
+      // Execute notification callback if provided
+      if (notifyCallback) {
+        notifyCallback({
+          message: successful ? 'Copied to clipboard' : 'Failed to copy',
+          color: successful ? 'positive' : 'negative',
+          icon: successful ? 'check' : 'error',
+          timeout: 1000
+        });
+      }
+    } catch (e) {
+      console.error('Failed to copy text using fallback method:', e);
+      if (notifyCallback) {
+        notifyCallback({
+          message: 'Failed to copy to clipboard',
+          color: 'negative',
+          icon: 'error',
+          timeout: 1000
+        });
+      }
     }
   }
+}
+
+// Get status color for display
+function getStatusColor(status) {
+  switch (status) {
+    case 'paid':
+    case 'completed':
+      return 'positive';
+    case 'pending':
+      return 'warning';
+    case 'expired':
+      return 'negative';
+    case 'cancelled':
+    default:
+      return 'grey';
+  }
+}
+
+// Format asset balance for display
+function formatAssetBalance(balance, decimals = 0) {
+  if (balance === undefined || balance === null) return '0';
+  
+  // Convert to number if it's a string
+  const amount = typeof balance === 'string' ? parseFloat(balance) : balance;
+  
+  // Handle NaN or non-numeric values
+  if (isNaN(amount)) return '0';
+  
+  // Format with the specified number of decimal places
+  return amount.toFixed(decimals);
+}
+
+// Parse asset value from any format
+function parseAssetValue(value) {
+  if (!value) return 0;
+  
+  // Handle string values
+  if (typeof value === 'string') {
+    // Remove any non-numeric characters except decimal point
+    const cleanValue = value.replace(/[^0-9.]/g, '');
+    return parseFloat(cleanValue) || 0;
+  }
+  
+  // Handle numeric values
+  if (typeof value === 'number') {
+    return isNaN(value) ? 0 : value;
+  }
+  
+  return 0;
 }
 
 // Helper function to generate CSV content
@@ -183,53 +273,4 @@ function downloadCSV(rows, filename, notifyCallback) {
       timeout: 2000
     });
   }
-}
-
-// Get status color for display
-function getStatusColor(status) {
-  switch (status) {
-    case 'paid':
-    case 'completed':
-      return 'positive';
-    case 'pending':
-      return 'warning';
-    case 'expired':
-      return 'negative';
-    case 'cancelled':
-    default:
-      return 'grey';
-  }
-}
-
-// Format asset balance for display
-function formatAssetBalance(balance, decimals = 0) {
-  if (balance === undefined || balance === null) return '0';
-  
-  // Convert to number if it's a string
-  const amount = typeof balance === 'string' ? parseFloat(balance) : balance;
-  
-  // Handle NaN or non-numeric values
-  if (isNaN(amount)) return '0';
-  
-  // Format with the specified number of decimal places
-  return amount.toFixed(decimals);
-}
-
-// Parse asset value from any format
-function parseAssetValue(value) {
-  if (!value) return 0;
-  
-  // Handle string values
-  if (typeof value === 'string') {
-    // Remove any non-numeric characters except decimal point
-    const cleanValue = value.replace(/[^0-9.]/g, '');
-    return parseFloat(cleanValue) || 0;
-  }
-  
-  // Handle numeric values
-  if (typeof value === 'number') {
-    return isNaN(value) ? 0 : value;
-  }
-  
-  return 0;
 }

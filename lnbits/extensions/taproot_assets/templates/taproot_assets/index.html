@@ -215,45 +215,6 @@
       </div>
     </q-card>
   </div>
-
-  <div class="col-12 col-md-4 col-lg-5" v-if="createdInvoice">
-    <q-card v-if="createdInvoice" class="q-mt-md">
-      <q-card-section>
-        <h6 class="text-subtitle1 q-my-none text-white">Invoice Created</h6>
-        <q-separator class="q-my-sm"></q-separator>
-
-        <div class="invoice-created-container">
-          <div class="row items-center">
-            <div class="col">
-              <div class="invoice-label">Asset:</div>
-              <div class="invoice-value">{% raw %}{{ createdInvoice.asset_name || (invoiceDialog.selectedAsset ? invoiceDialog.selectedAsset.name : '') }}{% endraw %}</div>
-            </div>
-            <div class="col-auto">
-              <q-btn flat round dense icon="content_copy" size="lg" color="purple-3" @click="copyInvoice(createdInvoice.payment_request || createdInvoice.id)" />
-            </div>
-          </div>
-
-          <div class="invoice-amount-row">
-            <div>
-              <div class="invoice-label">Asset Amount:</div>
-              <div class="invoice-value">{% raw %}{{ invoiceDialog.form.amount || createdInvoice.asset_amount }}{% endraw %}</div>
-            </div>
-            <div>
-              <div class="invoice-label">Protocol Fee:</div>
-              <div class="invoice-value">{% raw %}{{ createdInvoice.satoshi_amount }}{% endraw %} sats</div>
-            </div>
-          </div>
-
-          <div class="mt-4">
-            <div class="invoice-label">Invoice:</div>
-            <div class="full-invoice">
-              {% raw %}{{ createdInvoice.payment_request || createdInvoice.id }}{% endraw %}
-            </div>
-          </div>
-        </div>
-      </q-card-section>
-    </q-card>
-  </div>
 </div>
 
 <!-- Invoice dialog popup - SIMPLIFIED VERSION -->
@@ -296,6 +257,63 @@
           </div>
         </div>
       </form>
+    </q-card-section>
+  </q-card>
+</q-dialog>
+
+<!-- Created Invoice Dialog with QR Code -->
+<q-dialog v-model="createdInvoiceDialog.show">
+  <q-card class="q-pa-lg" style="min-width: 380px; max-width: 500px; background-color: #121212;">
+    <q-card-section class="q-pa-none">
+      <div class="text-center">
+        <h6 class="text-h6 q-my-none">{% raw %}{{ createdInvoiceDialog.title }}{% endraw %}</h6>
+        
+        <div v-if="createdInvoice" class="q-mt-md">
+          <div class="text-subtitle2 q-mb-md">
+            <span class="text-bold">Asset:</span> {% raw %}{{ createdInvoice.asset_name || (invoiceDialog.selectedAsset ? invoiceDialog.selectedAsset.name : 'Unknown') }}{% endraw %}<br>
+            <span class="text-bold">Amount:</span> {% raw %}{{ invoiceDialog.form.amount || createdInvoice.asset_amount }}{% endraw %} units
+          </div>
+          
+          <!-- QR Code using LNBits built-in component -->
+          <div class="q-my-md text-center">
+            <a :href="'lightning:' + createdInvoice.payment_request">
+              <lnbits-qrcode 
+                :value="'lightning:' + createdInvoice.payment_request" 
+                :options="{
+                  width: 280,
+                  margin: 0
+                }"
+              ></lnbits-qrcode>
+            </a>
+          </div>
+          
+          <!-- Helper text -->
+          <p class="text-caption q-my-md">
+            Tap the QR code to open in wallet or use the buttons below
+          </p>
+          
+          <!-- Action buttons -->
+          <div class="row q-mt-lg q-col-gutter-md justify-center">
+            <div class="col-auto">
+              <q-btn 
+                outline
+                color="grey" 
+                icon-right="content_copy" 
+                label="Copy Invoice" 
+                @click="copyInvoice(createdInvoice.payment_request)"
+              ></q-btn>
+            </div>
+            <div class="col-auto">
+              <q-btn
+                unelevated
+                color="primary"
+                label="Done"
+                v-close-popup
+              ></q-btn>
+            </div>
+          </div>
+        </div>
+      </div>
     </q-card-section>
   </q-card>
 </q-dialog>

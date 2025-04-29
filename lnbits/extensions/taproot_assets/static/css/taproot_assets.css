@@ -133,6 +133,37 @@
   text-align: center;
 }
 
+/* QR Code Dialog Styling */
+.q-dialog lnbits-qrcode {
+  display: inline-block;
+  background-color: white;
+  padding: 15px;
+  border-radius: 8px;
+  margin: 0 auto;
+}
+
+.q-dialog lnbits-qrcode svg {
+  width: 100%;
+  height: auto;
+}
+
+.text-bold {
+  font-weight: 600;
+}
+
+/* Styles to match LNBits invoice display */
+.q-dialog h6.text-h6 {
+  font-size: 1.2rem;
+  font-weight: 500;
+  margin-bottom: 1.5rem;
+}
+
+.q-dialog .text-subtitle2 {
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.8);
+}
+
 /* Created invoice display */
 .invoice-created-container {
   padding: 10px 5px;

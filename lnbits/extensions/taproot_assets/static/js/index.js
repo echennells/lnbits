@@ -53,6 +53,12 @@ window.app = Vue.createApp({
         }
       },
 
+      // Created invoice popup dialog with QR code - NEW
+      createdInvoiceDialog: {
+        show: false,
+        title: 'Invoice Created'
+      },
+
       // Created invoice data
       createdInvoice: null,
 
@@ -581,7 +587,6 @@ window.app = Vue.createApp({
       }
     },
     
-    // UPDATED: This function now immediately refreshes assets when an invoice is paid
     handleInvoiceWebSocketMessage(event) {
       try {
         const data = JSON.parse(event.data);
@@ -615,7 +620,7 @@ window.app = Vue.createApp({
                 timeout: 2000
               });
               
-              // Force an immediate refresh of assets instead of delaying
+              // Force an immediate refresh of assets
               console.log('Invoice paid - refreshing assets immediately');
               this.getAssets();
             }
@@ -824,16 +829,46 @@ window.app = Vue.createApp({
 
       createInvoice(wallet.adminkey, payload)
         .then(response => {
+          // Store the created invoice data
           this.createdInvoice = response.data;
+
+          // Ensure there's a payment_request property
+          if (!this.createdInvoice.payment_request) {
+            console.error('No payment_request in the response:', response.data);
+            this.$q.notify({
+              message: 'Invoice created but payment request is missing',
+              color: 'warning',
+              icon: 'warning',
+              timeout: 2000
+            });
+            return;
+          }
+
+          // Log the payment request for debugging
+          console.log('Created invoice with payment request:', this.createdInvoice.payment_request);
 
           // Add asset name for display
           if (this.invoiceDialog.selectedAsset?.name) {
             this.createdInvoice.asset_name = this.invoiceDialog.selectedAsset.name;
           }
+          
+          // Set a more descriptive title that includes the asset name
+          this.createdInvoiceDialog.title = `${this.createdInvoice.asset_name || 'Asset'} Invoice`;
 
-          // Copy to clipboard
-          this.copyInvoice(response.data.payment_request || response.data.id);
-
+          // Close the invoice creation dialog
+          this.invoiceDialog.show = false;
+          
+          // Show the created invoice dialog with QR code
+          this.createdInvoiceDialog.show = true;
+          
+          // Notify user that invoice was created successfully
+          this.$q.notify({
+            message: 'Invoice created successfully',
+            color: 'positive',
+            icon: 'check_circle',
+            timeout: 2000
+          });
+          
           // WebSockets will handle UI updates, but refresh just in case
           this.refreshTransactions();
         })
@@ -1218,11 +1253,36 @@ window.app = Vue.createApp({
     
     // Invoice copy helper
     copyInvoice(invoice) {
-      const textToCopy = typeof invoice === 'string'
-        ? invoice
-        : (invoice.payment_request || invoice.id || JSON.stringify(invoice) || 'No invoice data available');
+      // First determine what we're copying
+      let textToCopy;
+      
+      if (typeof invoice === 'string') {
+        // If a string was directly passed, use it
+        textToCopy = invoice;
+      } else if (invoice && invoice.payment_request) {
+        // Prioritize the payment_request field
+        textToCopy = invoice.payment_request;
+      } else if (invoice) {
+        // Fall back to other possibilities
+        textToCopy = invoice.id || JSON.stringify(invoice) || 'No invoice data available';
+      } else {
+        // Handle the case where invoice is undefined
+        textToCopy = 'No invoice data available';
+      }
 
+      // Log what's being copied for debugging
+      console.log('Copying invoice:', textToCopy);
+      
+      // Use the copyText utility function for actual copying
       this.copyText(textToCopy);
+      
+      // Show success notification
+      this.$q.notify({
+        message: 'Invoice copied to clipboard',
+        color: 'positive',
+        icon: 'content_copy',
+        timeout: 1500
+      });
     },
     
     // Refresh methods
@@ -1306,3 +1366,6 @@ window.app = Vue.createApp({
     this.closeWebSockets();
   }
 });
+
+// Mount the Vue app
+window.app.mount('#vue');
