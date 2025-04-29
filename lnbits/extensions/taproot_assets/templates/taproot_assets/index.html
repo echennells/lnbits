@@ -216,67 +216,7 @@
     </q-card>
   </div>
 
-  <div class="col-12 col-md-4 col-lg-5" v-if="invoiceDialog.show || createdInvoice">
-    <q-card v-if="invoiceDialog.show">
-      <q-card-section>
-        <h6 class="text-subtitle1 q-my-none text-white">Create Invoice</h6>
-        <q-separator class="q-my-sm"></q-separator>
-
-        <div class="invoice-form-container">
-          <div class="selected-asset-info" v-if="invoiceDialog.selectedAsset">
-            <div class="text-white">
-              <div>Selected asset:</div>
-              <div class="asset-name">{% raw %}{{ invoiceDialog.selectedAsset.name || 'Unknown' }}{% endraw %}</div>
-              <div class="asset-detail">
-                <div class="row q-col-gutter-md">
-                  <div class="col-12">
-                    <div>Balance: {% raw %}{{ invoiceDialog.selectedAsset.user_balance || 0 }}{% endraw %}</div>
-                    <div v-if="invoiceDialog.selectedAsset.channel_info && invoiceDialog.selectedAsset.channel_info.capacity && invoiceDialog.selectedAsset.channel_info.local_balance" class="text-positive">
-                      Max Receivable: {% raw %}{{ maxInvoiceAmount }}{% endraw %}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div v-else class="text-light q-pa-sm">
-            No asset selected. Please click RECEIVE on an asset.
-          </div>
-
-          <form @submit.prevent="submitInvoiceForm" class="invoice-form">
-            <div class="invoice-form-row">
-              <div class="invoice-form-col">
-                <label class="invoice-input-label">Amount</label>
-                <input v-model.number="invoiceDialog.form.amount" type="number" min="0.000001" step="0.000001" class="invoice-input" required
-                       :max="maxInvoiceAmount" />
-                <div class="text-negative" v-if="!isInvoiceAmountValid">
-                  <small>Amount exceeds maximum receivable</small>
-                </div>
-              </div>
-              <div class="invoice-form-col">
-                <label class="invoice-input-label">Memo (optional)</label>
-                <input v-model="invoiceDialog.form.memo" type="text" class="invoice-input" />
-              </div>
-              <div class="invoice-form-col">
-                <label class="invoice-input-label">Expiry (seconds)</label>
-                <input v-model.number="invoiceDialog.form.expiry" type="number" min="1" class="invoice-input" />
-              </div>
-            </div>
-
-            <div class="invoice-button-container">
-              <div class="invoice-buttons">
-                <button type="submit" class="create-invoice-btn"
-                        :disabled="!invoiceDialog.selectedAsset || !isInvoiceAmountValid || isSubmitting">
-                  {% raw %}{{ isSubmitting ? 'CREATING...' : 'CREATE INVOICE' }}{% endraw %}
-                </button>
-                <button type="button" class="cancel-btn" @click="closeInvoiceDialog()">CANCEL</button>
-              </div>
-            </div>
-          </form>
-        </div>
-      </q-card-section>
-    </q-card>
-
+  <div class="col-12 col-md-4 col-lg-5" v-if="createdInvoice">
     <q-card v-if="createdInvoice" class="q-mt-md">
       <q-card-section>
         <h6 class="text-subtitle1 q-my-none text-white">Invoice Created</h6>
@@ -315,6 +255,50 @@
     </q-card>
   </div>
 </div>
+
+<!-- Invoice dialog popup - SIMPLIFIED VERSION -->
+<q-dialog v-model="invoiceDialog.show">
+  <q-card style="min-width: 500px; background-color: #1d1e42;">
+    <q-card-section class="q-pt-lg">
+      <div v-if="invoiceDialog.selectedAsset" class="text-center q-mb-md">
+        <div class="text-h6 text-white">{% raw %}{{ invoiceDialog.selectedAsset.name || 'Unknown' }}{% endraw %}</div>
+        <div v-if="invoiceDialog.selectedAsset.channel_info && invoiceDialog.selectedAsset.channel_info.capacity && invoiceDialog.selectedAsset.channel_info.local_balance" class="text-positive">
+          Max Receivable: {% raw %}{{ maxInvoiceAmount }}{% endraw %}
+        </div>
+      </div>
+
+      <form @submit.prevent="submitInvoiceForm" class="q-mt-md">
+        <div class="row q-col-gutter-md">
+          <div class="col-12 col-md-6">
+            <label class="text-white q-mb-sm block">Amount</label>
+            <input v-model.number="invoiceDialog.form.amount" type="number" min="0.000001" step="0.000001" 
+                  class="invoice-input full-width" required :max="maxInvoiceAmount" />
+            <div class="text-negative" v-if="!isInvoiceAmountValid">
+              <small>Amount exceeds maximum receivable</small>
+            </div>
+          </div>
+          <div class="col-12 col-md-6">
+            <label class="text-white q-mb-sm block">Memo (optional)</label>
+            <input v-model="invoiceDialog.form.memo" type="text" class="invoice-input full-width" />
+          </div>
+        </div>
+
+        <div class="row q-mt-lg">
+          <div class="col-12">
+            <button type="submit" class="full-width q-py-sm bg-primary text-white q-mb-sm" style="border: none; border-radius: 4px;" 
+                   :disabled="!invoiceDialog.selectedAsset || !isInvoiceAmountValid || isSubmitting">
+              {% raw %}{{ isSubmitting ? 'CREATING...' : 'CREATE INVOICE' }}{% endraw %}
+            </button>
+            <button type="button" class="full-width q-py-sm bg-transparent text-white" style="border: none; border-radius: 4px;" 
+                   @click="closeInvoiceDialog()">
+              CANCEL
+            </button>
+          </div>
+        </div>
+      </form>
+    </q-card-section>
+  </q-card>
+</q-dialog>
 
 <!-- Send payment modal -->
 <q-dialog v-model="paymentDialog.show">
