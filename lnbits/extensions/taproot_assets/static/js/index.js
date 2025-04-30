@@ -15,17 +15,6 @@ window.app = Vue.createApp({
   },
   
   data() {
-    // Check for localStorage availability to prevent errors
-    const hasLocalStorage = (function() {
-      try {
-        localStorage.setItem('test', 'test');
-        localStorage.removeItem('test');
-        return true;
-      } catch (e) {
-        return false;
-      }
-    })();
-    
     return {
       // Settings
       settings: {
@@ -41,7 +30,7 @@ window.app = Vue.createApp({
       showSettings: false,
       
       // Add localStorage availability flag
-      hasLocalStorage: hasLocalStorage,
+      hasLocalStorage: true,
       
       // Assets
       assets: [],
@@ -612,9 +601,29 @@ window.app = Vue.createApp({
     handleInvoiceWebSocketMessage(event) {
       try {
         const data = JSON.parse(event.data);
-        console.log('Invoice WebSocket message:', data);
+        console.log('Invoice WebSocket message received:', data);
         
         if (data.type === 'invoice_update' && data.data) {
+          // Debug the current state
+          console.log('Current dialog state:', {
+            dialogShowing: this.createdInvoiceDialog.show,
+            hasCreatedInvoice: !!this.createdInvoice
+          });
+          
+          if (this.createdInvoice) {
+            console.log('Current displayed invoice:', {
+              payment_hash: this.createdInvoice.payment_hash,
+              id: this.createdInvoice.id,
+              payment_request: this.createdInvoice.payment_request?.substring(0, 30) + '...'
+            });
+          }
+          
+          console.log('Received invoice update:', {
+            id: data.data.id,
+            payment_hash: data.data.payment_hash,
+            status: data.data.status
+          });
+          
           // Find existing invoice
           const index = this.invoices.findIndex(invoice => invoice.id === data.data.id);
           
@@ -631,10 +640,14 @@ window.app = Vue.createApp({
             // Update in array (Vue 3 way)
             this.invoices[index] = updatedInvoice;
             
-            // Notify user about paid invoices and force asset refresh
-            if (data.data.status === 'paid' && this.invoices[index].status !== 'paid') {
+            // Check if this invoice was paid
+            if (data.data.status === 'paid') {
+              console.log('PAID INVOICE DETECTED');
+              
               const assetName = this.findAssetName(data.data.asset_id) || 'Unknown Asset';
               const amount = data.data.asset_amount || this.invoices[index].asset_amount;
+              
+              // Notify user about paid invoice
               this.$q.notify({
                 message: `Invoice Paid: ${amount} ${assetName}`,
                 color: 'positive',
@@ -645,6 +658,45 @@ window.app = Vue.createApp({
               // Force an immediate refresh of assets
               console.log('Invoice paid - refreshing assets immediately');
               this.getAssets();
+              
+              // Check if we should close the invoice dialog
+              if (this.createdInvoiceDialog.show && this.createdInvoice) {
+                console.log('Checking if we should close the invoice dialog...');
+                
+                // Try multiple ways to match the invoice
+                let matchFound = false;
+                
+                // Match by ID
+                if (this.createdInvoice.id === data.data.id) {
+                  console.log('Match found by invoice ID');
+                  matchFound = true;
+                }
+                
+                // Match by payment hash
+                else if (this.createdInvoice.payment_hash === data.data.payment_hash) {
+                  console.log('Match found by payment hash');
+                  matchFound = true;
+                }
+                
+                // If the displayed invoice is the one that was paid, close the dialog
+                if (matchFound) {
+                  console.log('CLOSING INVOICE DIALOG - Match found between displayed invoice and paid invoice');
+                  // Close the dialog
+                  this.createdInvoiceDialog.show = false;
+                  
+                  // Show a notification
+                  this.$q.notify({
+                    message: 'Invoice has been paid',
+                    color: 'positive',
+                    icon: 'check_circle',
+                    timeout: 2000
+                  });
+                } else {
+                  console.log('Not closing dialog - displayed invoice does not match the paid one');
+                }
+              } else {
+                console.log('Invoice dialog not showing or no created invoice to check');
+              }
             }
           } else {
             // Add new invoice
@@ -657,7 +709,7 @@ window.app = Vue.createApp({
           this.combineTransactions();
         }
       } catch (e) {
-        console.error('Error handling invoice WebSocket message:', e);
+        console.error('Error handling invoice WebSocket message:', e, e.stack);
       }
     },
     
@@ -851,8 +903,15 @@ window.app = Vue.createApp({
 
       createInvoice(wallet.adminkey, payload)
         .then(response => {
-          // Store the created invoice data
-          this.createdInvoice = response.data;
+          // Store the created invoice data with complete details
+          this.createdInvoice = {
+            ...response.data,
+            id: response.data.id || response.data.checking_id || '',  // Make sure ID is stored
+            asset_name: this.invoiceDialog.selectedAsset?.name || 'Unknown'
+          };
+
+          // Log the full invoice data for debugging
+          console.log('Full invoice data stored:', this.createdInvoice);
 
           // Ensure there's a payment_request property
           if (!this.createdInvoice.payment_request) {
@@ -868,11 +927,6 @@ window.app = Vue.createApp({
 
           // Log the payment request for debugging
           console.log('Created invoice with payment request:', this.createdInvoice.payment_request);
-
-          // Add asset name for display
-          if (this.invoiceDialog.selectedAsset?.name) {
-            this.createdInvoice.asset_name = this.invoiceDialog.selectedAsset.name;
-          }
           
           // Set a more descriptive title that includes the asset name
           this.createdInvoiceDialog.title = `${this.createdInvoice.asset_name || 'Asset'} Invoice`;
