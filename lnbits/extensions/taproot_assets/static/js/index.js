@@ -1273,7 +1273,7 @@ window.app = Vue.createApp({
       }
     },
     
-    // Invoice copy helper - FIXED VERSION
+    // Invoice copy helper - SIMPLIFIED VERSION using Quasar's built-in functionality
     copyInvoice(invoice) {
       // First determine what we're copying
       let textToCopy;
@@ -1295,10 +1295,25 @@ window.app = Vue.createApp({
       // Log what's being copied for debugging
       console.log('Copying invoice:', textToCopy);
       
-      // Use the copyText utility function with proper notification callback
-      copyText(textToCopy, notification => {
-        this.$q.notify(notification);
-      });
+      // Use Quasar's built-in copyToClipboard method (same as main LNbits app)
+      Quasar.copyToClipboard(textToCopy)
+        .then(() => {
+          this.$q.notify({
+            message: 'Copied to clipboard!',
+            color: 'positive',
+            icon: 'check',
+            timeout: 2000
+          });
+        })
+        .catch(err => {
+          console.error('Failed to copy to clipboard:', err);
+          this.$q.notify({
+            message: 'Failed to copy to clipboard',
+            color: 'negative',
+            icon: 'error',
+            timeout: 2000
+          });
+        });
     },
     
     // Refresh methods
