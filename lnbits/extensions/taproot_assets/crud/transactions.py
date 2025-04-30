@@ -157,15 +157,14 @@ async def record_settlement_transaction(
         - error_message (Optional[str]): Error message if recording fails
     """
     try:
-        memo = invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
-        
+        # Use the memo directly from the invoice without setting a default
         transaction = await record_asset_transaction(
             wallet_id=invoice.wallet_id,
             asset_id=invoice.asset_id,
             amount=invoice.asset_amount,
             tx_type="credit",
             payment_hash=payment_hash,
-            memo=memo,
+            memo=invoice.memo,
             conn=conn
         )
         

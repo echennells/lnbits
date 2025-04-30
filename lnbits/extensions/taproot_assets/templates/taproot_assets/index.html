@@ -141,12 +141,13 @@
               <th class="type-col"></th>
               <th class="date-col">Date</th>
               <th class="asset-col">Asset</th>
+              <th class="memo-col">Memo</th>
               <th class="amount-col">Amount</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="filteredTransactions.length === 0">
-              <td colspan="4" class="text-center q-py-lg">
+              <td colspan="5" class="text-center q-py-lg">
                 <q-icon name="warning" color="warning" size="sm" class="q-mr-xs"></q-icon>
                 No data available
               </td>
@@ -176,6 +177,9 @@
               <td class="asset-col">
                 {% raw %}{{ getAssetNameFromId(tx.asset_id) || 'Unknown' }}{% endraw %}
               </td>
+              <td class="memo-col">
+                <div class="ellipsis">{% raw %}{{ tx.memo || '' }}{% endraw %}</div>
+              </td>
               <td class="amount-col text-right">
                 {% raw %}{{ tx.asset_amount || tx.extra?.asset_amount || '0' }}{% endraw %}
               </td>
@@ -183,7 +187,7 @@
           </tbody>
           <tfoot>
             <tr>
-              <td colspan="4">
+              <td colspan="5">
                 <div class="row justify-between items-center q-px-sm">
                   <div>
                     Records per page:

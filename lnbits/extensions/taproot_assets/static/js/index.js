@@ -290,22 +290,11 @@ window.app = Vue.createApp({
     },
     
     updateTransactionDescriptions() {
-      // Update both invoices and payments with asset names
-      const updateMemo = (item) => {
-        const assetName = this.findAssetName(item.asset_id);
-        if (assetName) {
-          item.memo = `Taproot Asset Transfer: ${assetName}`;
-        }
-      };
-      
-      this.invoices.forEach(updateMemo);
-      this.payments.forEach(updateMemo);
-      
       // Refresh combined transactions
       this.combineTransactions();
     },
     
-    getInvoices(isInitialLoad = false) {
+      getInvoices(isInitialLoad = false) {
       if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
 
@@ -319,16 +308,9 @@ window.app = Vue.createApp({
 
       getInvoices(wallet.adminkey)
         .then(response => {
-          // Process invoices with asset names
+          // Process invoices
           const processedInvoices = Array.isArray(response.data)
-            ? response.data.map(invoice => {
-                const mappedInvoice = mapInvoice(invoice);
-                const assetName = this.findAssetName(mappedInvoice.asset_id);
-                if (assetName) {
-                  mappedInvoice.memo = `Taproot Asset Transfer: ${assetName}`;
-                }
-                return mappedInvoice;
-              })
+            ? response.data.map(invoice => mapInvoice(invoice))
             : [];
 
           // Update or set invoices based on changes
@@ -367,16 +349,9 @@ window.app = Vue.createApp({
 
       getPayments(wallet.adminkey)
         .then(response => {
-          // Process payments with asset names
+          // Process payments
           const processedPayments = Array.isArray(response.data)
-            ? response.data.map(payment => {
-                const mappedPayment = mapPayment(payment);
-                const assetName = this.findAssetName(mappedPayment.asset_id);
-                if (assetName) {
-                  mappedPayment.memo = `Taproot Asset Transfer: ${assetName}`;
-                }
-                return mappedPayment;
-              })
+            ? response.data.map(payment => mapPayment(payment))
             : [];
 
           this.payments = processedPayments;
@@ -804,6 +779,7 @@ window.app = Vue.createApp({
           description: tx.memo || '',
           amount: tx.asset_amount || tx.extra?.asset_amount || '',
           asset: this.findAssetName(tx.asset_id) || tx.asset_id || '',
+          memo: tx.memo || '',
           status: tx.status || ''
         };
       });
@@ -821,6 +797,7 @@ window.app = Vue.createApp({
           description: tx.memo || '',
           amount: tx.asset_amount || tx.extra?.asset_amount || '',
           asset: this.findAssetName(tx.asset_id) || tx.asset_id || '',
+          memo: tx.memo || '',
           status: tx.status || '',
           id: tx.id || '',
           payment_hash: tx.payment_hash || ''

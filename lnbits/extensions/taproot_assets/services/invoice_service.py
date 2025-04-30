@@ -61,7 +61,7 @@ class InvoiceService:
             # Create the invoice
             invoice_response = await taproot_wallet.create_invoice(
                 amount=data.amount,
-                memo=data.memo or "Taproot Asset Transfer",
+                memo=data.memo or "",
                 asset_id=data.asset_id,
                 expiry=data.expiry,
                 peer_pubkey=data.peer_pubkey,
@@ -85,7 +85,7 @@ class InvoiceService:
                 payment_request=invoice_response.payment_request,
                 user_id=user_id,
                 wallet_id=wallet_id,
-                memo=data.memo or f"Taproot Asset Transfer: {data.asset_id}",
+                memo=data.memo or "",
                 expiry=data.expiry,
             )
 
@@ -234,7 +234,7 @@ class InvoiceService:
                     amount=invoice.asset_amount,
                     tx_type="credit",  # Incoming payment
                     payment_hash=invoice.payment_hash,
-                    memo=invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
+                    memo=invoice.memo
                 )
             except Exception as e:
                 logger.error(f"Failed to update asset balance: {str(e)}")

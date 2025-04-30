@@ -239,6 +239,12 @@
   text-align: left;
 }
 
+.lnbits-transactions-table .memo-col {
+  width: 200px;
+  color: white !important;
+  text-align: left;
+}
+
 .lnbits-transactions-table .amount-col {
   width: 120px;
   text-align: right;
@@ -371,6 +377,8 @@
 .body--dark .lnbits-transactions-table .amount-col,
 .lnbits-transactions-table .amount-col,
 .body--dark .lnbits-transactions-table .asset-col,
-.lnbits-transactions-table .asset-col {
+.lnbits-transactions-table .asset-col,
+.body--dark .lnbits-transactions-table .memo-col,
+.lnbits-transactions-table .memo-col {
   color: white !important;
 }

@@ -160,8 +160,8 @@ class PaymentService:
             # Get asset details from extra
             asset_id = payment.extra.get("asset_id", parsed_invoice.asset_id or "")
             
-            # Create descriptive memo
-            memo = f"Taproot Asset Transfer"
+            # Use the memo from the invoice if available
+            memo = None
             
             # Record the payment - for external Lightning payments only
             try:
@@ -408,7 +408,7 @@ class PaymentService:
                 asset_id=invoice.asset_id,
                 asset_amount=invoice.asset_amount,
                 tx_type="debit",  # Outgoing payment
-                memo=invoice.memo or "Self-payment Taproot Asset Transfer",
+                memo=invoice.memo or "",
                 fee_sats=0,  # No fee for self-payments
                 is_internal=True,
                 is_self_payment=True
