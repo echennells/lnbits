@@ -1273,7 +1273,7 @@ window.app = Vue.createApp({
       }
     },
     
-    // Invoice copy helper
+    // Invoice copy helper - FIXED VERSION
     copyInvoice(invoice) {
       // First determine what we're copying
       let textToCopy;
@@ -1295,15 +1295,9 @@ window.app = Vue.createApp({
       // Log what's being copied for debugging
       console.log('Copying invoice:', textToCopy);
       
-      // Use the copyText utility function for actual copying
-      this.copyText(textToCopy);
-      
-      // Show success notification
-      this.$q.notify({
-        message: 'Invoice copied to clipboard',
-        color: 'positive',
-        icon: 'content_copy',
-        timeout: 1500
+      // Use the copyText utility function with proper notification callback
+      copyText(textToCopy, notification => {
+        this.$q.notify(notification);
       });
     },
     
