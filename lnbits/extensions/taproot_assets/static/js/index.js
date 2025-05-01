@@ -880,6 +880,8 @@ window.app = Vue.createApp({
 
       createInvoice(wallet.adminkey, payload)
         .then(response => {
+          console.log('Raw invoice API response:', response.data);
+          
           // Store the created invoice data with complete details
           this.createdInvoice = {
             ...response.data,
@@ -1304,33 +1306,28 @@ window.app = Vue.createApp({
       }
     },
     
-    // Invoice copy helper - SIMPLIFIED VERSION using Quasar's built-in functionality
+    // Simplified invoice copy function that just uses the payment_request property directly
     copyInvoice(invoice) {
-      // First determine what we're copying
-      let textToCopy;
+      // Simply use the payment_request property directly - same as what QR code uses
+      const paymentRequest = invoice.payment_request;
       
-      if (typeof invoice === 'string') {
-        // If a string was directly passed, use it
-        textToCopy = invoice;
-      } else if (invoice && invoice.payment_request) {
-        // Prioritize the payment_request field
-        textToCopy = invoice.payment_request;
-      } else if (invoice) {
-        // Fall back to other possibilities
-        textToCopy = invoice.id || JSON.stringify(invoice) || 'No invoice data available';
-      } else {
-        // Handle the case where invoice is undefined
-        textToCopy = 'No invoice data available';
+      if (!paymentRequest) {
+        console.error('Missing payment_request in invoice:', invoice);
+        this.$q.notify({
+          message: 'Error: No invoice data found',
+          color: 'negative',
+          icon: 'error',
+          timeout: 2000
+        });
+        return;
       }
-
-      // Log what's being copied for debugging
-      console.log('Copying invoice:', textToCopy);
       
-      // Use Quasar's built-in copyToClipboard method (same as main LNbits app)
-      Quasar.copyToClipboard(textToCopy)
+      console.log('Copying invoice payment request:', paymentRequest);
+      
+      Quasar.copyToClipboard(paymentRequest)
         .then(() => {
           this.$q.notify({
-            message: 'Copied to clipboard!',
+            message: 'Invoice copied to clipboard!',
             color: 'positive',
             icon: 'check',
             timeout: 2000
@@ -1434,5 +1431,6 @@ window.app.config.globalProperties.$t = function(key) {
   return key;
 };
 
-// Mount the Vue app
-window.app.mount('#vue');
+// IMPORTANT: This line was causing the navigation issues 
+// and has been removed:
+// window.app.mount('#vue');
