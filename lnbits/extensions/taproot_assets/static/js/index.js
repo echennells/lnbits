@@ -1430,7 +1430,3 @@ window.app = Vue.createApp({
 window.app.config.globalProperties.$t = function(key) {
   return key;
 };
-
-// IMPORTANT: This line was causing the navigation issues 
-// and has been removed:
-// window.app.mount('#vue');
