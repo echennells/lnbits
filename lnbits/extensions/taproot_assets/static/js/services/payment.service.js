@@ -1,6 +1,7 @@
 /**
  * Payments Service for Taproot Assets extension
  * Handles payment processing, fetching, and management
+ * Updated to use the centralized store with error handling
  */
 
 const PaymentService = {
@@ -16,14 +17,24 @@ const PaymentService = {
         throw new Error('Valid wallet is required');
       }
       
-      // Use timestamp for cache busting if needed
-      const timestamp = cache ? new Date().getTime() : null;
-      const url = `/taproot_assets/api/v1/taproot/payments${timestamp ? `?_=${timestamp}` : ''}`;
+      // Set loading state (safely)
+      if (window.taprootStore && window.taprootStore.actions) {
+        window.taprootStore.actions.setTransactionsLoading(true);
+      }
+      
+      // Update current wallet in store (safely)
+      if (window.taprootStore && window.taprootStore.actions) {
+        window.taprootStore.actions.setCurrentWallet(wallet);
+      }
       
       // Request payments from the API
-      const response = await LNbits.api.request('GET', url, wallet.adminkey);
+      const response = await ApiService.getPayments(wallet.adminkey, cache);
       
       if (!response || !response.data) {
+        // Update store safely
+        if (window.taprootStore && window.taprootStore.actions) {
+          window.taprootStore.actions.setPayments([]);
+        }
         return [];
       }
       
@@ -32,10 +43,20 @@ const PaymentService = {
         ? response.data.map(payment => this._mapPayment(payment))
         : [];
       
+      // Update the store (safely)
+      if (window.taprootStore && window.taprootStore.actions) {
+        window.taprootStore.actions.setPayments(payments);
+      }
+      
       return payments;
     } catch (error) {
       console.error('Failed to fetch payments:', error);
       throw error;
+    } finally {
+      // Ensure loading state is reset (safely)
+      if (window.taprootStore && window.taprootStore.actions) {
+        window.taprootStore.actions.setTransactionsLoading(false);
+      }
     }
   },
   
@@ -56,11 +77,7 @@ const PaymentService = {
       }
       
       // Request parsing from the API
-      const response = await LNbits.api.request(
-        'GET', 
-        `/taproot_assets/api/v1/taproot/parse-invoice?payment_request=${encodeURIComponent(paymentRequest)}`, 
-        wallet.adminkey
-      );
+      const response = await ApiService.parseInvoice(wallet.adminkey, paymentRequest);
       
       if (!response || !response.data) {
         throw new Error('Failed to parse invoice: No data returned');
@@ -102,15 +119,43 @@ const PaymentService = {
       }
       
       // Make the payment request
-      const response = await LNbits.api.request(
-        'POST', 
-        '/taproot_assets/api/v1/taproot/pay', 
-        wallet.adminkey, 
-        payload
-      );
+      const response = await ApiService.payInvoice(wallet.adminkey, payload);
       
       if (!response || !response.data) {
         throw new Error('Failed to process payment: No data returned');
+      }
+      
+      // Update asset information in the store with new balance (safely)
+      if (response.data.asset_id && assetData && window.taprootStore && window.taprootStore.actions) {
+        // Deduct the asset amount from the user's balance
+        const newBalance = (assetData.user_balance || 0) - response.data.asset_amount;
+        
+        // Update the asset in the store
+        window.taprootStore.actions.updateAsset(assetData.asset_id, { 
+          user_balance: Math.max(0, newBalance) 
+        });
+      }
+      
+      // Create payment record for store
+      const payment = {
+        id: response.data.payment_hash || Date.now().toString(),
+        payment_hash: response.data.payment_hash,
+        payment_request: paymentData.paymentRequest,
+        asset_id: response.data.asset_id || assetData.asset_id,
+        asset_amount: response.data.asset_amount,
+        fee_sats: response.data.fee_msat ? Math.ceil(response.data.fee_msat / 1000) : 0,
+        memo: assetData.name ? `Sent ${response.data.asset_amount} ${assetData.name}` : 'Asset payment',
+        status: 'completed',
+        user_id: wallet.user,
+        wallet_id: wallet.id,
+        created_at: new Date().toISOString(),
+        preimage: response.data.preimage
+      };
+      
+      // Add mapped payment to store (safely)
+      const mappedPayment = this._mapPayment(payment);
+      if (window.taprootStore && window.taprootStore.actions) {
+        window.taprootStore.actions.addPayment(mappedPayment);
       }
       
       return response.data;
@@ -157,15 +202,50 @@ const PaymentService = {
       };
       
       // Call the internal payment endpoint
-      const response = await LNbits.api.request(
-        'POST', 
-        '/taproot_assets/api/v1/taproot/internal-payment', 
-        wallet.adminkey, 
-        payload
-      );
+      const response = await ApiService.processInternalPayment(wallet.adminkey, payload);
       
       if (!response || !response.data) {
         throw new Error('Failed to process internal payment: No data returned');
+      }
+      
+      // Find the asset in the store (safely)
+      let asset = null;
+      if (window.taprootStore && window.taprootStore.state && window.taprootStore.state.assets) {
+        asset = window.taprootStore.state.assets.find(a => a.asset_id === response.data.asset_id);
+      }
+      
+      // Update asset information in the store if found (safely)
+      if (response.data.asset_id && asset && window.taprootStore && window.taprootStore.actions) {
+        // Deduct the asset amount from the user's balance
+        const newBalance = (asset.user_balance || 0) - response.data.asset_amount;
+        
+        // Update the asset in the store
+        window.taprootStore.actions.updateAsset(asset.asset_id, { 
+          user_balance: Math.max(0, newBalance) 
+        });
+      }
+      
+      // Create payment record for store
+      const payment = {
+        id: response.data.payment_hash || Date.now().toString(),
+        payment_hash: response.data.payment_hash,
+        payment_request: paymentData.paymentRequest,
+        asset_id: response.data.asset_id,
+        asset_amount: response.data.asset_amount,
+        fee_sats: 0, // Internal payments have zero fee
+        memo: asset ? `Sent ${response.data.asset_amount} ${asset.name} (Internal)` : 'Internal asset payment',
+        status: 'completed',
+        user_id: wallet.user,
+        wallet_id: wallet.id,
+        created_at: new Date().toISOString(),
+        preimage: response.data.preimage,
+        internal_payment: true
+      };
+      
+      // Add mapped payment to store (safely)
+      const mappedPayment = this._mapPayment(payment);
+      if (window.taprootStore && window.taprootStore.actions) {
+        window.taprootStore.actions.addPayment(mappedPayment);
       }
       
       return response.data;
@@ -198,15 +278,35 @@ const PaymentService = {
       };
       
       // Call the self-payment endpoint
-      const response = await LNbits.api.request(
-        'POST', 
-        '/taproot_assets/api/v1/taproot/self-payment', 
-        wallet.adminkey, 
-        payload
-      );
+      const response = await ApiService.processSelfPayment(wallet.adminkey, payload);
       
       if (!response || !response.data) {
         throw new Error('Failed to process self-payment: No data returned');
+      }
+      
+      // Self-payments don't affect balance, but we still add to payment history
+      
+      // Create payment record for store
+      const payment = {
+        id: response.data.payment_hash || Date.now().toString(),
+        payment_hash: response.data.payment_hash,
+        payment_request: paymentData.paymentRequest,
+        asset_id: response.data.asset_id,
+        asset_amount: response.data.asset_amount,
+        fee_sats: 0, // Self payments have zero fee
+        memo: `Self-transfer of ${response.data.asset_amount} units`,
+        status: 'completed',
+        user_id: wallet.user,
+        wallet_id: wallet.id,
+        created_at: new Date().toISOString(),
+        preimage: response.data.preimage,
+        self_payment: true
+      };
+      
+      // Add mapped payment to store (safely)
+      const mappedPayment = this._mapPayment(payment);
+      if (window.taprootStore && window.taprootStore.actions) {
+        window.taprootStore.actions.addPayment(mappedPayment);
       }
       
       return response.data;
@@ -278,6 +378,37 @@ const PaymentService = {
     };
     
     return mapped;
+  },
+  
+  /**
+   * Process WebSocket payment update
+   * @param {Object} data - Payment data from WebSocket
+   */
+  processWebSocketUpdate(data) {
+    if (data && data.type === 'payment_update' && data.data) {
+      // Map the payment
+      const payment = this._mapPayment(data.data);
+      
+      // Add to store (safely)
+      if (window.taprootStore && window.taprootStore.actions) {
+        window.taprootStore.actions.addPayment(payment);
+      }
+      
+      // Return the processed payment
+      return payment;
+    }
+    return null;
+  },
+  
+  /**
+   * Updates a payment in the store
+   * @param {string} paymentId - Payment ID to update
+   * @param {Object} changes - Changes to apply
+   */
+  updatePayment(paymentId, changes) {
+    if (window.taprootStore && window.taprootStore.actions) {
+      window.taprootStore.actions.updatePayment(paymentId, changes);
+    }
   }
 };
 

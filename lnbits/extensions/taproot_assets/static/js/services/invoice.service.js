@@ -1,12 +1,10 @@
 /**
  * Invoice Service for Taproot Assets extension
  * Handles invoice creation, fetching, and management
+ * Updated to use the centralized store with error handling
  */
 
 const InvoiceService = {
-  // Cache for recent invoices
-  _invoiceCache: [],
-  
   /**
    * Get all invoices for the current user
    * @param {Object} wallet - Wallet object with adminkey
@@ -19,28 +17,47 @@ const InvoiceService = {
         throw new Error('Valid wallet is required');
       }
       
+      // Set loading state (safely)
+      if (window.taprootStore && window.taprootStore.actions) {
+        window.taprootStore.actions.setTransactionsLoading(true);
+      }
+      
+      // Update current wallet in store (safely)
+      if (window.taprootStore && window.taprootStore.actions) {
+        window.taprootStore.actions.setCurrentWallet(wallet);
+      }
+      
       // Request invoices from the API
       const timestamp = new Date().getTime();
-      const response = await LNbits.api.request(
-        'GET',
-        `/taproot_assets/api/v1/taproot/invoices?_=${timestamp}`,
-        wallet.adminkey
-      );
+      const response = await ApiService.getInvoices(wallet.adminkey, true);
       
       if (!response || !response.data) {
+        // Update store safely
+        if (window.taprootStore && window.taprootStore.actions) {
+          window.taprootStore.actions.setInvoices([]);
+        }
         return [];
       }
       
-      // Process and cache the invoices
+      // Process the invoices
       const invoices = Array.isArray(response.data)
         ? response.data.map(invoice => this._mapInvoice(invoice))
         : [];
       
-      this._invoiceCache = invoices;
+      // Update the store (safely)
+      if (window.taprootStore && window.taprootStore.actions) {
+        window.taprootStore.actions.setInvoices(invoices);
+      }
+      
       return invoices;
     } catch (error) {
       console.error('Failed to fetch invoices:', error);
       throw error;
+    } finally {
+      // Ensure loading state is reset (safely)
+      if (window.taprootStore && window.taprootStore.actions) {
+        window.taprootStore.actions.setTransactionsLoading(false);
+      }
     }
   },
   
@@ -75,12 +92,7 @@ const InvoiceService = {
       }
       
       // Request creation from the API
-      const response = await LNbits.api.request(
-        'POST',
-        '/taproot_assets/api/v1/taproot/invoice',
-        wallet.adminkey,
-        payload
-      );
+      const response = await ApiService.createInvoice(wallet.adminkey, payload);
       
       if (!response || !response.data) {
         throw new Error('Failed to create invoice: No data returned');
@@ -91,6 +103,14 @@ const InvoiceService = {
       
       // Add asset name to the created invoice for better UX
       createdInvoice.asset_name = assetData.name || 'Unknown';
+      
+      // Process invoice for store
+      const mappedInvoice = this._mapInvoice(createdInvoice);
+      
+      // Add to store (safely)
+      if (window.taprootStore && window.taprootStore.actions) {
+        window.taprootStore.actions.addInvoice(mappedInvoice);
+      }
       
       return createdInvoice;
     } catch (error) {
@@ -115,17 +135,21 @@ const InvoiceService = {
         throw new Error('Invoice ID is required');
       }
       
-      // Check cache first
-      const cachedInvoice = this._invoiceCache.find(i => i.id === invoiceId);
+      // Check store first (safely)
+      const storeInvoices = window.taprootStore && window.taprootStore.state ? 
+        window.taprootStore.state.invoices : [];
+      const cachedInvoice = storeInvoices.find(i => i.id === invoiceId);
       if (cachedInvoice) {
         return cachedInvoice;
       }
       
-      // If not in cache, fetch all invoices (API doesn't have get-by-id endpoint)
+      // If not in store, fetch all invoices (API doesn't have get-by-id endpoint)
       await this.getInvoices(wallet, true);
       
-      // Check cache again
-      return this._invoiceCache.find(i => i.id === invoiceId) || null;
+      // Check store again (safely)
+      const updatedInvoices = window.taprootStore && window.taprootStore.state ? 
+        window.taprootStore.state.invoices : [];
+      return updatedInvoices.find(i => i.id === invoiceId) || null;
     } catch (error) {
       console.error(`Failed to fetch invoice ${invoiceId}:`, error);
       throw error;
@@ -243,10 +267,34 @@ const InvoiceService = {
   },
   
   /**
-   * Clear the invoice cache
+   * Updates an invoice in the store
+   * @param {string} invoiceId - Invoice ID to update
+   * @param {Object} changes - Changes to apply
    */
-  clearCache() {
-    this._invoiceCache = [];
+  updateInvoice(invoiceId, changes) {
+    if (window.taprootStore && window.taprootStore.actions) {
+      window.taprootStore.actions.updateInvoice(invoiceId, changes);
+    }
+  },
+  
+  /**
+   * Process WebSocket invoice update
+   * @param {Object} data - Invoice data from WebSocket
+   */
+  processWebSocketUpdate(data) {
+    if (data && data.type === 'invoice_update' && data.data) {
+      // Map the invoice
+      const invoice = this._mapInvoice(data.data);
+      
+      // Add to store (safely)
+      if (window.taprootStore && window.taprootStore.actions) {
+        window.taprootStore.actions.addInvoice(invoice);
+      }
+      
+      // Return the processed invoice
+      return invoice;
+    }
+    return null;
   }
 };
 

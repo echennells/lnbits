@@ -3,17 +3,27 @@
 
 {% block scripts %}
 {{ window_vars(user) }}
-<!-- Load service files first -->
-<script src="{{ static_url_for('taproot_assets/static', path='js/services/api.service.js') }}"></script>
+<!-- Load CSS first -->
+<link rel="stylesheet" href="{{ static_url_for('taproot_assets/static', path='css/taproot_assets.css') }}" />
+
+<!-- Load utility services first -->
 <script src="{{ static_url_for('taproot_assets/static', path='js/services/data.utils.js') }}"></script>
+
+<!-- Load store before other services -->
+<script src="{{ static_url_for('taproot_assets/static', path='js/store.js') }}"></script>
+
+<!-- Load API services -->
+<script src="{{ static_url_for('taproot_assets/static', path='js/services/api.service.js') }}"></script>
+<script src="{{ static_url_for('taproot_assets/static', path='js/services/notification.service.js') }}"></script>
+
+<!-- Load domain services that use the store -->
 <script src="{{ static_url_for('taproot_assets/static', path='js/services/asset.service.js') }}"></script>
 <script src="{{ static_url_for('taproot_assets/static', path='js/services/invoice.service.js') }}"></script>
 <script src="{{ static_url_for('taproot_assets/static', path='js/services/payment.service.js') }}"></script>
-<script src="{{ static_url_for('taproot_assets/static', path='js/services/notification.service.js') }}"></script>
 <script src="{{ static_url_for('taproot_assets/static', path='js/services/websocket.manager.js') }}"></script>
+
 <!-- Load main app file last -->
 <script src="{{ static_url_for('taproot_assets/static', path='js/index.js') }}"></script>
-<link rel="stylesheet" href="{{ static_url_for('taproot_assets/static', path='css/taproot_assets.css') }}" />
 {% endblock %}
 
 {% block page %}

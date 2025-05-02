@@ -1,6 +1,7 @@
 /**
  * WebSocket Manager for Taproot Assets extension
  * Handles WebSocket connections, reconnection, and message processing
+ * Updated to use the centralized store
  */
 
 const WebSocketManager = {
@@ -27,13 +28,8 @@ const WebSocketManager = {
     userId: null
   },
   
-  // Message handlers
+  // Message handlers - can be overridden by the component
   handlers: {
-    // To be set by the component
-    onInvoiceMessage: null,
-    onPaymentMessage: null,
-    onBalanceMessage: null,
-    onConnectionChange: null,
     onPollingRequired: null
   },
   
@@ -51,19 +47,7 @@ const WebSocketManager = {
     // Set user ID
     this.state.userId = userId;
     
-    // Set handlers if provided
-    if (handlers.onInvoiceMessage) {
-      this.handlers.onInvoiceMessage = handlers.onInvoiceMessage;
-    }
-    if (handlers.onPaymentMessage) {
-      this.handlers.onPaymentMessage = handlers.onPaymentMessage;
-    }
-    if (handlers.onBalanceMessage) {
-      this.handlers.onBalanceMessage = handlers.onBalanceMessage;
-    }
-    if (handlers.onConnectionChange) {
-      this.handlers.onConnectionChange = handlers.onConnectionChange;
-    }
+    // Set custom polling handler if provided
     if (handlers.onPollingRequired) {
       this.handlers.onPollingRequired = handlers.onPollingRequired;
     }
@@ -90,8 +74,12 @@ const WebSocketManager = {
     // Set connected state
     this.state.connected = true;
     
-    // Notify connection change
-    this._notifyConnectionChange();
+    // Update store with connection status
+    taprootStore.actions.setWebsocketStatus({
+      connected: true,
+      reconnecting: false,
+      fallbackPolling: false
+    });
     
     console.log('WebSocket connections established');
   },
@@ -169,9 +157,9 @@ const WebSocketManager = {
       const data = JSON.parse(event.data);
       console.log('Invoice WebSocket message received:', data);
       
-      // Call handler if set
-      if (this.handlers.onInvoiceMessage) {
-        this.handlers.onInvoiceMessage(data);
+      // Process with InvoiceService and update store
+      if (window.InvoiceService) {
+        InvoiceService.processWebSocketUpdate(data);
       }
     } catch (error) {
       console.error('Error handling invoice WebSocket message:', error);
@@ -188,9 +176,9 @@ const WebSocketManager = {
       const data = JSON.parse(event.data);
       console.log('Payment WebSocket message received:', data);
       
-      // Call handler if set
-      if (this.handlers.onPaymentMessage) {
-        this.handlers.onPaymentMessage(data);
+      // Process with PaymentService and update store
+      if (window.PaymentService) {
+        PaymentService.processWebSocketUpdate(data);
       }
     } catch (error) {
       console.error('Error handling payment WebSocket message:', error);
@@ -207,9 +195,15 @@ const WebSocketManager = {
       const data = JSON.parse(event.data);
       console.log('Balance WebSocket message received:', data);
       
-      // Call handler if set
-      if (this.handlers.onBalanceMessage) {
-        this.handlers.onBalanceMessage(data);
+      // Update the assets in store
+      if (data.type === 'assets_update' && Array.isArray(data.data)) {
+        // Get current wallet from store
+        const wallet = taprootStore.getters.getCurrentWallet();
+        
+        // Refresh from API if we have a wallet
+        if (wallet) {
+          AssetService.getAssets(wallet);
+        }
       }
     } catch (error) {
       console.error('Error handling balance WebSocket message:', error);
@@ -228,7 +222,12 @@ const WebSocketManager = {
     // Check if all connections are closed
     if (Object.values(this.connections).every(conn => conn === null)) {
       this.state.connected = false;
-      this._notifyConnectionChange();
+      
+      // Update store
+      taprootStore.actions.setWebsocketStatus({
+        connected: false,
+        reconnecting: this.state.reconnectTimeout !== null
+      });
       
       // Attempt reconnection
       this._scheduleReconnect();
@@ -258,7 +257,12 @@ const WebSocketManager = {
     // Check if all connections failed
     if (Object.values(this.connections).every(conn => conn === null)) {
       this.state.connected = false;
-      this._notifyConnectionChange();
+      
+      // Update store
+      taprootStore.actions.setWebsocketStatus({
+        connected: false,
+        reconnecting: true
+      });
       
       // Attempt reconnection
       this._scheduleReconnect();
@@ -282,11 +286,24 @@ const WebSocketManager = {
     // Check if we've exceeded max attempts
     if (this.state.reconnectAttempts >= this.config.maxReconnectAttempts) {
       console.log('Maximum WebSocket reconnection attempts reached');
+      
+      // Update store
+      taprootStore.actions.setWebsocketStatus({
+        reconnecting: false,
+        fallbackPolling: true
+      });
+      
       return;
     }
     
     // Increment attempts
     this.state.reconnectAttempts++;
+    
+    // Update store
+    taprootStore.actions.setWebsocketStatus({
+      reconnecting: true,
+      reconnectAttempts: this.state.reconnectAttempts
+    });
     
     // Schedule reconnect
     this.state.reconnectTimeout = setTimeout(() => {
@@ -309,6 +326,11 @@ const WebSocketManager = {
     console.log('Starting fallback polling for data');
     this.state.fallbackPolling = true;
     
+    // Update store
+    taprootStore.actions.setWebsocketStatus({
+      fallbackPolling: true
+    });
+    
     // Set up polling interval (every 10 seconds)
     this.state.pollingInterval = setInterval(() => {
       // Trigger polling callbacks
@@ -328,21 +350,11 @@ const WebSocketManager = {
       this.state.pollingInterval = null;
     }
     this.state.fallbackPolling = false;
-  },
-  
-  /**
-   * Notify about connection state change
-   * @private
-   */
-  _notifyConnectionChange() {
-    if (this.handlers.onConnectionChange) {
-      this.handlers.onConnectionChange({
-        connected: this.state.connected,
-        reconnecting: this.state.reconnectTimeout !== null,
-        reconnectAttempts: this.state.reconnectAttempts,
-        fallbackPolling: this.state.fallbackPolling
-      });
-    }
+    
+    // Update store
+    taprootStore.actions.setWebsocketStatus({
+      fallbackPolling: false
+    });
   },
   
   /**
@@ -393,29 +405,13 @@ const WebSocketManager = {
     
     // Update state
     this.state.connected = false;
-    this._notifyConnectionChange();
-  },
-  
-  /**
-   * Set event handlers for WebSocket messages
-   * @param {Object} handlers - Event handlers object
-   */
-  setHandlers(handlers) {
-    if (handlers.onInvoiceMessage) {
-      this.handlers.onInvoiceMessage = handlers.onInvoiceMessage;
-    }
-    if (handlers.onPaymentMessage) {
-      this.handlers.onPaymentMessage = handlers.onPaymentMessage;
-    }
-    if (handlers.onBalanceMessage) {
-      this.handlers.onBalanceMessage = handlers.onBalanceMessage;
-    }
-    if (handlers.onConnectionChange) {
-      this.handlers.onConnectionChange = handlers.onConnectionChange;
-    }
-    if (handlers.onPollingRequired) {
-      this.handlers.onPollingRequired = handlers.onPollingRequired;
-    }
+    
+    // Update store
+    taprootStore.actions.setWebsocketStatus({
+      connected: false,
+      reconnecting: false,
+      fallbackPolling: false
+    });
   },
   
   /**
@@ -426,10 +422,6 @@ const WebSocketManager = {
     
     // Clear all handlers
     this.handlers = {
-      onInvoiceMessage: null,
-      onPaymentMessage: null,
-      onBalanceMessage: null,
-      onConnectionChange: null,
       onPollingRequired: null
     };
     

@@ -1,10 +1,11 @@
 /**
  * Asset Service for Taproot Assets extension
  * Handles all asset-related functionality
+ * Fixed version that maintains original behavior
  */
 
 const AssetService = {
-  // Local cache of assets
+  // Local cache of assets (important for backward compatibility)
   _assetCache: [],
   
   /**
@@ -18,7 +19,7 @@ const AssetService = {
         throw new Error('Valid wallet is required');
       }
       
-      // Request assets from the API
+      // Request assets from the API - using original direct approach
       const response = await LNbits.api.request(
         'GET', 
         '/taproot_assets/api/v1/taproot/listassets', 
@@ -29,8 +30,10 @@ const AssetService = {
         return [];
       }
       
-      // Process and cache the assets for later use
+      // Process the assets
       const assets = Array.isArray(response.data) ? [...response.data] : [];
+      
+      // Maintain the local cache for backward compatibility
       this._assetCache = assets;
       
       // Get balances for assets
@@ -67,10 +70,27 @@ const AssetService = {
         }
       }
       
+      // Update the store if available, but don't depend on it
+      if (window.taprootStore && window.taprootStore.actions) {
+        try {
+          window.taprootStore.actions.setAssets(assets);
+        } catch (e) {
+          console.error('Error updating store with assets:', e);
+        }
+      }
+      
       return assets;
     } catch (error) {
       console.error('Failed to fetch assets:', error);
-      throw error;
+      return []; // Return empty array instead of throwing to maintain original behavior
+    } finally {
+      if (window.taprootStore && window.taprootStore.actions) {
+        try {
+          window.taprootStore.actions.setAssetsLoading(false);
+        } catch (e) {
+          // Ignore errors in finally block
+        }
+      }
     }
   },
   
@@ -80,11 +100,18 @@ const AssetService = {
    * @returns {Object|null} - Asset object or null if not found
    */
   getAssetById(assetId) {
-    if (!assetId || this._assetCache.length === 0) {
-      return null;
+    if (!assetId) return null;
+    
+    // First try from the local cache for backward compatibility
+    const cachedAsset = this._assetCache.find(asset => asset.asset_id === assetId);
+    if (cachedAsset) return cachedAsset;
+    
+    // Fall back to the store if available
+    if (window.taprootStore && window.taprootStore.state && window.taprootStore.state.assets) {
+      return window.taprootStore.state.assets.find(asset => asset.asset_id === assetId) || null;
     }
     
-    return this._assetCache.find(asset => asset.asset_id === assetId) || null;
+    return null;
   },
   
   /**
@@ -131,89 +158,6 @@ const AssetService = {
     }
     
     return 0;
-  },
-  
-  /**
-   * Get asset transactions
-   * @param {Object} wallet - Wallet object with adminkey
-   * @param {string|null} assetId - Asset ID (null for all assets)
-   * @param {number} limit - Maximum transactions to return
-   * @returns {Promise<Array>} - Promise that resolves with transactions
-   */
-  async getAssetTransactions(wallet, assetId = null, limit = 100) {
-    try {
-      if (!wallet || !wallet.adminkey) {
-        throw new Error('Valid wallet is required');
-      }
-      
-      // Build the URL with optional parameters
-      let url = '/taproot_assets/api/v1/taproot/asset-transactions';
-      const params = [];
-      
-      if (assetId) {
-        params.push(`asset_id=${encodeURIComponent(assetId)}`);
-      }
-      
-      if (limit) {
-        params.push(`limit=${limit}`);
-      }
-      
-      if (params.length > 0) {
-        url += `?${params.join('&')}`;
-      }
-      
-      // Make the API request
-      const response = await LNbits.api.request('GET', url, wallet.adminkey);
-      
-      if (!response || !response.data) {
-        return [];
-      }
-      
-      return response.data;
-    } catch (error) {
-      console.error('Failed to fetch asset transactions:', error);
-      throw error;
-    }
-  },
-  
-  /**
-   * Get balance for a specific asset
-   * @param {Object} wallet - Wallet object with adminkey
-   * @param {string} assetId - Asset ID to get balance for
-   * @returns {Promise<Object>} - Promise with asset balance
-   */
-  async getAssetBalance(wallet, assetId) {
-    try {
-      if (!wallet || !wallet.adminkey) {
-        throw new Error('Valid wallet is required');
-      }
-      
-      if (!assetId) {
-        throw new Error('Asset ID is required');
-      }
-      
-      const response = await LNbits.api.request(
-        'GET', 
-        `/taproot_assets/api/v1/taproot/asset-balance/${encodeURIComponent(assetId)}`, 
-        wallet.adminkey
-      );
-      
-      if (!response || !response.data) {
-        throw new Error('Failed to get balance: No data returned');
-      }
-      
-      return response.data;
-    } catch (error) {
-      console.error(`Failed to fetch balance for asset ${assetId}:`, error);
-      throw error;
-    }
-  },
-  
-  /**
-   * Clear the asset cache (useful when needing fresh data)
-   */
-  clearCache() {
-    this._assetCache = [];
   }
 };
 

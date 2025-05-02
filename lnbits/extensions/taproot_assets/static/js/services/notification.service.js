@@ -1,6 +1,7 @@
 /**
  * Notification Service for Taproot Assets extension
  * Uses native LNbits notification methods
+ * Updated to use the centralized store
  */
 
 const NotificationService = {
@@ -11,6 +12,13 @@ const NotificationService = {
   showSuccess(message) {
     if (window.LNbits && window.LNbits.utils && window.LNbits.utils.notifySuccess) {
       window.LNbits.utils.notifySuccess(message);
+    } else if (window.Quasar) {
+      window.Quasar.notify({
+        message: message,
+        color: 'positive',
+        icon: 'check_circle',
+        timeout: 2000
+      });
     } else {
       console.log('Success:', message);
     }
@@ -30,6 +38,13 @@ const NotificationService = {
           }
         }
       });
+    } else if (window.Quasar) {
+      window.Quasar.notify({
+        message: message,
+        color: 'negative',
+        icon: 'error',
+        timeout: 3000
+      });
     } else {
       console.error('Error:', message);
     }
@@ -45,8 +60,37 @@ const NotificationService = {
         message: message,
         type: 'warning'
       });
+    } else if (window.Quasar) {
+      window.Quasar.notify({
+        message: message,
+        color: 'warning',
+        icon: 'warning',
+        timeout: 3000
+      });
     } else {
       console.warn('Warning:', message);
+    }
+  },
+  
+  /**
+   * Show an info notification
+   * @param {string} message - Message to display
+   */
+  showInfo(message) {
+    if (window.LNbits && window.LNbits.utils && window.LNbits.utils.notify) {
+      window.LNbits.utils.notify({
+        message: message,
+        type: 'info'
+      });
+    } else if (window.Quasar) {
+      window.Quasar.notify({
+        message: message,
+        color: 'info',
+        icon: 'info',
+        timeout: 3000
+      });
+    } else {
+      console.info('Info:', message);
     }
   },
   
@@ -78,6 +122,8 @@ const NotificationService = {
     const amount = invoice.asset_amount || 0;
     
     this.showSuccess(`${assetName} invoice created successfully for ${amount} units`);
+    
+    // No need to update store as the InvoiceService already did this
   },
   
   /**
@@ -85,10 +131,24 @@ const NotificationService = {
    * @param {Object} invoice - Paid invoice data
    */
   notifyInvoicePaid(invoice) {
-    const assetName = invoice.asset_name || 'Unknown Asset';
+    const assetName = invoice.asset_name || taprootStore.getters.getAssetName(invoice.asset_id) || 'Unknown Asset';
     const amount = invoice.asset_amount || 0;
     
     this.showSuccess(`Invoice Paid: ${amount} ${assetName}`);
+    
+    // Update the invoice in the store if we have an ID
+    if (invoice.id) {
+      taprootStore.actions.updateInvoice(invoice.id, { 
+        status: 'paid',
+        paid_at: new Date().toISOString()
+      });
+    }
+    
+    // Refresh assets to update balances
+    const wallet = taprootStore.getters.getCurrentWallet();
+    if (wallet) {
+      AssetService.getAssets(wallet);
+    }
   },
   
   /**
