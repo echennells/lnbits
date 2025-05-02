@@ -3,17 +3,9 @@
  * Refactored to use service-based architecture
  */
 
-// Create the Vue application with i18n compatibility
+// Create the Vue application
 window.app = Vue.createApp({
   mixins: [windowMixin],
-  
-  // Add a translation function to prevent $t errors
-  methods: {
-    $t(key) {
-      // Simple fallback translation function
-      return key;
-    }
-  },
   
   data() {
     return {
@@ -901,8 +893,3 @@ window.app = Vue.createApp({
     WebSocketManager.destroy();
   }
 });
-
-// Add a global $t function to help with i18n errors
-window.app.config.globalProperties.$t = function(key) {
-  return key;
-};
