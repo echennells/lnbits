@@ -911,39 +911,42 @@ window.app = Vue.createApp({
       }
     },
     
-    // Copy invoice to clipboard
+    // Simplified invoice copy function that just uses the payment_request property directly
     copyInvoice(invoice) {
-      // Make sure we're copying the payment_request property
+      // Simply use the payment_request property directly - same as what QR code uses
       const paymentRequest = invoice.payment_request;
       
       if (!paymentRequest) {
         console.error('Missing payment_request in invoice:', invoice);
-        NotificationService.showError('Error: No invoice data found');
+        this.$q.notify({
+          message: 'Error: No invoice data found',
+          color: 'negative',
+          icon: 'error',
+          timeout: 2000
+        });
         return;
       }
       
       console.log('Copying invoice payment request:', paymentRequest);
       
-      try {
-        // Use LNbits built-in copy if available
-        if (window.LNbits && window.LNbits.utils && window.LNbits.utils.copy) {
-          window.LNbits.utils.copy(paymentRequest);
-          NotificationService.notifyCopied('Invoice');
-        } else {
-          // Direct clipboard API
-          navigator.clipboard.writeText(paymentRequest)
-            .then(() => {
-              NotificationService.notifyCopied('Invoice');
-            })
-            .catch(err => {
-              console.error('Failed to copy to clipboard:', err);
-              NotificationService.showError('Failed to copy to clipboard');
-            });
-        }
-      } catch (error) {
-        console.error('Error copying invoice:', error);
-        NotificationService.showError('Failed to copy invoice');
-      }
+      Quasar.copyToClipboard(paymentRequest)
+        .then(() => {
+          this.$q.notify({
+            message: 'Invoice copied to clipboard!',
+            color: 'positive',
+            icon: 'check',
+            timeout: 2000
+          });
+        })
+        .catch(err => {
+          console.error('Failed to copy to clipboard:', err);
+          this.$q.notify({
+            message: 'Failed to copy to clipboard',
+            color: 'negative',
+            icon: 'error',
+            timeout: 2000
+          });
+        });
     },
     
     // Refresh methods
