@@ -30,9 +30,6 @@ window.app = Vue.createApp({
       },
       showSettings: false,
       
-      // Add localStorage availability flag
-      hasLocalStorage: true,
-      
       // Assets
       assets: [],
       
@@ -118,7 +115,6 @@ window.app = Vue.createApp({
       
       // Refresh state tracking
       refreshInterval: null,
-      refreshCount: 0,
       isRefreshing: false
     }
   },
@@ -143,8 +139,8 @@ window.app = Vue.createApp({
     maxInvoiceAmount() {
       if (!this.invoiceDialog.selectedAsset) return 0;
       
-      // Get maximum receivable amount using AssetService
-      return AssetService.getMaxReceivableAmount(this.invoiceDialog.selectedAsset);
+      // Get maximum receivable amount
+      return this.getMaxReceivableAmount(this.invoiceDialog.selectedAsset);
     },
     isInvoiceAmountValid() {
       if (!this.invoiceDialog.selectedAsset) return false;
@@ -155,7 +151,6 @@ window.app = Vue.createApp({
       const { page, rowsPerPage } = this.transactionsTable.pagination;
       const totalItems = this.filteredTransactions.length;
       
-      // Always show actual count when there are items
       if (totalItems > 0) {
         const startIndex = Math.min((page - 1) * rowsPerPage + 1, totalItems);
         const endIndex = Math.min(startIndex + rowsPerPage - 1, totalItems);
@@ -167,13 +162,8 @@ window.app = Vue.createApp({
   },
   methods: {
     // Helper method to find asset name by asset_id
-    findAssetName(assetId) {
-      return AssetService.getAssetName(assetId);
-    },
-
-    // Get just the asset name without "Taproot Asset Transfer:" prefix
     getAssetNameFromId(assetId) {
-      return this.findAssetName(assetId);
+      return AssetService.getAssetName(assetId);
     },
 
     // Check if a channel is active (used for styling)
@@ -185,8 +175,13 @@ window.app = Vue.createApp({
     canSendAsset(asset) {
       return AssetService.canSendAsset(asset);
     },
+    
+    // Get maximum receivable amount for an asset
+    getMaxReceivableAmount(asset) {
+      return AssetService.getMaxReceivableAmount(asset);
+    },
 
-    // Use shared DataUtils methods
+    // Utility methods needed by templates
     formatTransactionDate(date) {
       return DataUtils.formatDate(date);
     },
@@ -204,7 +199,7 @@ window.app = Vue.createApp({
     getStatusColor(status) {
       return DataUtils.getStatusColor(status);
     },
-    
+
     // Settings methods
     toggleSettings() {
       this.showSettings = !this.showSettings;
@@ -218,7 +213,6 @@ window.app = Vue.createApp({
         const response = await ApiService.getSettings(wallet.adminkey);
         this.settings = response.data;
       } catch (error) {
-        console.error('Failed to fetch settings:', error);
         NotificationService.processApiError(error, 'Failed to fetch settings');
       }
     },
@@ -233,26 +227,21 @@ window.app = Vue.createApp({
         this.showSettings = false;
         NotificationService.showSuccess('Settings saved successfully');
       } catch (error) {
-        console.error('Failed to save settings:', error);
         NotificationService.processApiError(error, 'Failed to save settings');
       }
     },
     
+    // Asset methods
     async getAssets() {
       if (!this.g.user.wallets.length || this.isRefreshing) return;
       
       this.isRefreshing = true;
-      const wallet = this.g.user.wallets[0];
-      
       try {
-        console.log('Fetching assets...');
-        const assets = await AssetService.getAssets(wallet);
-        
-        // Replace the assets array
-        this.assets = assets;
+        const wallet = this.g.user.wallets[0];
+        this.assets = await AssetService.getAssets(wallet);
         
         if (this.assets.length > 0) {
-          this.updateTransactionDescriptions();
+          this.combineTransactions();
         }
       } catch (error) {
         console.error('Failed to fetch assets:', error);
@@ -262,37 +251,25 @@ window.app = Vue.createApp({
       }
     },
     
-    updateTransactionDescriptions() {
-      // Refresh combined transactions
-      this.combineTransactions();
-    },
-    
+    // Transaction methods
     async getInvoices(isInitialLoad = false) {
       if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
 
-      // Only show loading indicator on initial load
       if (isInitialLoad || this.invoices.length === 0) {
         this.transactionsLoading = true;
       }
 
       try {
-        // Use InvoiceService to get invoices
         const invoices = await InvoiceService.getInvoices(wallet, true);
         
-        // Check for changes in invoices
         const changes = InvoiceService.findChanges(invoices, this.invoices);
         
-        // Apply changes if needed
         if (changes.new.length > 0 || changes.updated.length > 0) {
-          // Update invoices array
           this.invoices = invoices;
-          
-          // Combine transactions
           this.combineTransactions();
         }
         
-        // Enable transitions after initial load
         if (!this.transitionEnabled) {
           setTimeout(() => {
             this.transitionEnabled = true;
@@ -309,19 +286,12 @@ window.app = Vue.createApp({
       if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
 
-      // Only show loading indicator if needed
       if ((isInitialLoad || this.payments.length === 0) && !this.transactionsLoading) {
         this.transactionsLoading = true;
       }
 
       try {
-        // Use PaymentService to get payments
-        const payments = await PaymentService.getPayments(wallet, true);
-        
-        // Update payments array
-        this.payments = payments;
-        
-        // Combine transactions
+        this.payments = await PaymentService.getPayments(wallet, true);
         this.combineTransactions();
       } catch (error) {
         console.error('Failed to fetch payments:', error);
@@ -331,15 +301,11 @@ window.app = Vue.createApp({
     },
     
     combineTransactions() {
-      // Combine invoices and payments using DataUtils
       this.combinedTransactions = DataUtils.combineTransactions(this.invoices, this.payments);
-      
-      // Apply filters and search
       this.applyFilters();
     },
     
     applyFilters() {
-      // Use DataUtils to filter transactions
       this.filteredTransactions = DataUtils.filterTransactions(
         this.combinedTransactions,
         this.filter,
@@ -384,34 +350,22 @@ window.app = Vue.createApp({
       this.applyFilters();
     },
 
-    // WebSocket handling methods
+    // WebSocket handling
     initializeWebSockets() {
       if (!this.g.user || !this.g.user.id) return;
       
-      // Initialize WebSocket manager with handlers
       WebSocketManager.initialize(this.g.user.id, {
-        // Handler for invoice messages
         onInvoiceMessage: this.handleInvoiceWebSocketMessage,
-        
-        // Handler for payment messages
         onPaymentMessage: this.handlePaymentWebSocketMessage,
-        
-        // Handler for balance messages
         onBalanceMessage: this.handleBalancesWebSocketMessage,
-        
-        // Handler for connection state changes
         onConnectionChange: this.handleWebSocketConnectionChange,
-        
-        // Handler for fallback polling
         onPollingRequired: this.refreshData
       });
     },
     
     handleWebSocketConnectionChange(status) {
-      // Update websocket status
       this.websocketStatus = status;
       
-      // If we just connected, refresh data
       if (status.connected && !status.reconnecting) {
         this.refreshData();
       }
@@ -420,31 +374,9 @@ window.app = Vue.createApp({
     handleInvoiceWebSocketMessage(data) {
       try {
         if (data.type === 'invoice_update' && data.data) {
-          // Debug the current state
-          console.log('Current dialog state:', {
-            dialogShowing: this.createdInvoiceDialog.show,
-            hasCreatedInvoice: !!this.createdInvoice
-          });
-          
-          if (this.createdInvoice) {
-            console.log('Current displayed invoice:', {
-              payment_hash: this.createdInvoice.payment_hash,
-              id: this.createdInvoice.id,
-              payment_request: this.createdInvoice.payment_request?.substring(0, 30) + '...'
-            });
-          }
-          
-          console.log('Received invoice update:', {
-            id: data.data.id,
-            payment_hash: data.data.payment_hash,
-            status: data.data.status
-          });
-          
           // Check if this invoice was paid
           if (data.data.status === 'paid') {
-            console.log('PAID INVOICE DETECTED');
-            
-            const assetName = this.findAssetName(data.data.asset_id) || 'Unknown Asset';
+            const assetName = AssetService.getAssetName(data.data.asset_id);
             const amount = data.data.asset_amount || 0;
             
             // Notify user about paid invoice
@@ -455,38 +387,23 @@ window.app = Vue.createApp({
             });
             
             // Force an immediate refresh of assets
-            console.log('Invoice paid - refreshing assets immediately');
             this.getAssets();
             
             // Check if we should close the invoice dialog
             if (this.createdInvoiceDialog.show && this.createdInvoice) {
-              console.log('Checking if we should close the invoice dialog...');
-              
               // Try multiple ways to match the invoice
               let matchFound = false;
               
-              // Match by ID
-              if (this.createdInvoice.id === data.data.id) {
-                console.log('Match found by invoice ID');
-                matchFound = true;
-              }
-              
-              // Match by payment hash
-              else if (this.createdInvoice.payment_hash === data.data.payment_hash) {
-                console.log('Match found by payment hash');
+              // Match by ID or payment hash
+              if (this.createdInvoice.id === data.data.id ||
+                  this.createdInvoice.payment_hash === data.data.payment_hash) {
                 matchFound = true;
               }
               
               // If the displayed invoice is the one that was paid, close the dialog
               if (matchFound) {
-                console.log('CLOSING INVOICE DIALOG - Match found between displayed invoice and paid invoice');
-                // Close the dialog
                 this.createdInvoiceDialog.show = false;
-                
-                // Show a notification
                 NotificationService.showSuccess('Invoice has been paid');
-              } else {
-                console.log('Not closing dialog - displayed invoice does not match the paid one');
               }
             }
           }
@@ -495,18 +412,15 @@ window.app = Vue.createApp({
           this.getInvoices();
         }
       } catch (e) {
-        console.error('Error handling invoice WebSocket message:', e, e.stack);
+        console.error('Error handling invoice WebSocket message:', e);
       }
     },
     
     handlePaymentWebSocketMessage(data) {
       try {
         if (data.type === 'payment_update' && data.data) {
-          console.log('Payment WebSocket message:', data);
-          
           // Check if this is a completed payment
           if (data.data.status === 'completed') {
-            console.log('Payment completed - refreshing assets immediately');
             this.getAssets();
           }
           
@@ -523,7 +437,6 @@ window.app = Vue.createApp({
         if (data.type === 'assets_update' && Array.isArray(data.data)) {
           // Refresh from API when balance updates received
           if (!this.isRefreshing) {
-            console.log('Balance WebSocket received - refreshing assets from API');
             this.getAssets();
           }
         }
@@ -535,32 +448,29 @@ window.app = Vue.createApp({
     // CSV export functions
     exportTransactionsCSV() {
       const rows = this.filteredTransactions.map(tx => {
-        // Format data for CSV
         return {
-          date: this.formatTransactionDate(tx.created_at),
+          date: DataUtils.formatDate(tx.created_at),
           type: tx.direction === 'incoming' ? 'RECEIVED' : 'SENT',
           description: tx.memo || '',
           amount: tx.asset_amount || tx.extra?.asset_amount || '',
-          asset: this.findAssetName(tx.asset_id) || tx.asset_id || '',
+          asset: AssetService.getAssetName(tx.asset_id) || tx.asset_id || '',
           memo: tx.memo || '',
           status: tx.status || ''
         };
       });
       
-      // Generate CSV using DataUtils
       DataUtils.downloadCSV(rows, 'taproot-asset-transactions.csv', 
         notification => this.$q.notify(notification));
     },
     
     exportTransactionsCSVWithDetails() {
       const rows = this.filteredTransactions.map(tx => {
-        // Format data for detailed CSV
         const baseData = {
-          date: this.formatTransactionDate(tx.created_at),
+          date: DataUtils.formatDate(tx.created_at),
           type: tx.direction === 'incoming' ? 'RECEIVED' : 'SENT',
           description: tx.memo || '',
           amount: tx.asset_amount || tx.extra?.asset_amount || '',
-          asset: this.findAssetName(tx.asset_id) || tx.asset_id || '',
+          asset: AssetService.getAssetName(tx.asset_id) || tx.asset_id || '',
           memo: tx.memo || '',
           status: tx.status || '',
           id: tx.id || '',
@@ -576,14 +486,13 @@ window.app = Vue.createApp({
         // Add invoice-specific fields
         if (tx.direction === 'incoming') {
           baseData.satoshi_amount = tx.satoshi_amount || '';
-          baseData.expires_at = tx.expires_at ? this.formatTransactionDate(tx.expires_at) : '';
-          baseData.paid_at = tx.paid_at ? this.formatTransactionDate(tx.paid_at) : '';
+          baseData.expires_at = tx.expires_at ? DataUtils.formatDate(tx.expires_at) : '';
+          baseData.paid_at = tx.paid_at ? DataUtils.formatDate(tx.paid_at) : '';
         }
         
         return baseData;
       });
       
-      // Generate CSV with more details
       DataUtils.downloadCSV(rows, 'taproot-asset-transactions-details.csv', 
         notification => this.$q.notify(notification));
     },
@@ -626,27 +535,21 @@ window.app = Vue.createApp({
       this.isSubmitting = true;
 
       try {
-        // Use InvoiceService to create invoice
-        const createdInvoice = await InvoiceService.createInvoice(
+        this.createdInvoice = await InvoiceService.createInvoice(
           wallet,
           this.invoiceDialog.selectedAsset,
           this.invoiceDialog.form
         );
-        
-        // Store the created invoice data
-        this.createdInvoice = createdInvoice;
 
         // Set a more descriptive title that includes the asset name
         this.createdInvoiceDialog.title = `${this.createdInvoice.asset_name || 'Asset'} Invoice`;
 
-        // Close the invoice creation dialog
+        // Close the invoice creation dialog and show the created invoice dialog
         this.invoiceDialog.show = false;
-        
-        // Show the created invoice dialog with QR code
         this.createdInvoiceDialog.show = true;
         
         // Show notification
-        NotificationService.notifyInvoiceCreated(createdInvoice);
+        NotificationService.notifyInvoiceCreated(this.createdInvoice);
         
         // Refresh transactions
         this.refreshTransactions();
@@ -705,7 +608,6 @@ window.app = Vue.createApp({
       this.resetPaymentForm();
     },
     
-    // Use service for invoice parsing
     async parseInvoice(paymentRequest) {
       if (!paymentRequest || paymentRequest.trim() === '') {
         this.paymentDialog.invoiceDecodeError = false;
@@ -778,7 +680,6 @@ window.app = Vue.createApp({
         this.successDialog.show = true;
         
         // Immediately refresh assets to get updated balances
-        console.log('Payment completed - refreshing assets immediately');
         this.getAssets();
         
         // Also refresh transactions
@@ -823,7 +724,7 @@ window.app = Vue.createApp({
       }
     },
     
-    // Process an internal payment - between different users on the same node
+    // Process an internal payment
     async processInternalPayment(paymentRequest, feeLimit) {
       try {
         if (!this.g.user.wallets.length) return false;
@@ -831,7 +732,6 @@ window.app = Vue.createApp({
         this.paymentDialog.inProgress = true;
         const wallet = this.g.user.wallets[0];
         
-        // Use PaymentService to process internal payment
         const paymentResult = await PaymentService.processInternalPayment(
           wallet,
           {
@@ -852,7 +752,6 @@ window.app = Vue.createApp({
         this.successDialog.show = true;
         
         // Immediately refresh assets to show updated balances
-        console.log('Internal payment completed - refreshing assets immediately');
         this.getAssets();
         
         // Also refresh transactions
@@ -867,51 +766,7 @@ window.app = Vue.createApp({
       }
     },
     
-    // Process a self-payment (backward compatibility)
-    async processSelfPayment(paymentRequest, feeLimit) {
-      try {
-        if (!this.g.user.wallets.length) return false;
-        
-        this.paymentDialog.inProgress = true;
-        const wallet = this.g.user.wallets[0];
-        
-        // Use PaymentService to process self-payment
-        const paymentResult = await PaymentService.processSelfPayment(
-          wallet,
-          {
-            paymentRequest: paymentRequest,
-            feeLimit: feeLimit || 10
-          }
-        );
-        
-        // Close payment dialog
-        this.paymentDialog.show = false;
-        
-        // Get notification message and title
-        const {title, message} = NotificationService.notifyPaymentSent(paymentResult);
-        
-        // Set success dialog content
-        this.successDialog.title = title;
-        this.successDialog.message = message;
-        this.successDialog.show = true;
-        
-        // Immediately refresh assets to show updated balances 
-        console.log('Self/Internal payment completed - refreshing assets immediately');
-        this.getAssets();
-        
-        // Also refresh transactions
-        this.refreshTransactions();
-        
-        return true;
-      } catch (error) {
-        NotificationService.processApiError(error, 'Self-payment failed');
-        return false;
-      } finally {
-        this.paymentDialog.inProgress = false;
-      }
-    },
-    
-    // Simplified invoice copy function that just uses the payment_request property directly
+    // Copy invoice to clipboard
     copyInvoice(invoice) {
       // Simply use the payment_request property directly - same as what QR code uses
       const paymentRequest = invoice.payment_request;
@@ -927,26 +782,31 @@ window.app = Vue.createApp({
         return;
       }
       
-      console.log('Copying invoice payment request:', paymentRequest);
-      
-      Quasar.copyToClipboard(paymentRequest)
-        .then(() => {
-          this.$q.notify({
-            message: 'Invoice copied to clipboard!',
-            color: 'positive',
-            icon: 'check',
-            timeout: 2000
+      if (Quasar && Quasar.copyToClipboard) {
+        Quasar.copyToClipboard(paymentRequest)
+          .then(() => {
+            this.$q.notify({
+              message: 'Invoice copied to clipboard!',
+              color: 'positive',
+              icon: 'check',
+              timeout: 2000
+            });
+          })
+          .catch(err => {
+            console.error('Failed to copy to clipboard:', err);
+            this.$q.notify({
+              message: 'Failed to copy to clipboard',
+              color: 'negative',
+              icon: 'error',
+              timeout: 2000
+            });
           });
-        })
-        .catch(err => {
-          console.error('Failed to copy to clipboard:', err);
-          this.$q.notify({
-            message: 'Failed to copy to clipboard',
-            color: 'negative',
-            icon: 'error',
-            timeout: 2000
-          });
+      } else {
+        // Fallback to DataUtils
+        DataUtils.copyText(paymentRequest, notification => {
+          this.$q.notify(notification);
         });
+      }
     },
     
     // Refresh methods
