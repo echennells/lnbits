@@ -1,5 +1,6 @@
 /**
  * Main JavaScript for Taproot Assets extension
+ * Refactored to use service-based architecture
  */
 
 // Create the Vue application with i18n compatibility
@@ -53,7 +54,7 @@ window.app = Vue.createApp({
         status: 'all'
       },
 
-      // Form dialog for creating invoices - EXPLICITLY INITIALIZED
+      // Form dialog for creating invoices
       invoiceDialog: {
         show: false,
         selectedAsset: null,
@@ -64,7 +65,7 @@ window.app = Vue.createApp({
         }
       },
 
-      // Created invoice popup dialog with QR code - NEW
+      // Created invoice popup dialog with QR code
       createdInvoiceDialog: {
         show: false,
         title: 'Invoice Created'
@@ -73,7 +74,7 @@ window.app = Vue.createApp({
       // Created invoice data
       createdInvoice: null,
 
-      // For sending payments - EXPLICITLY INITIALIZED
+      // For sending payments
       paymentDialog: {
         show: false,
         selectedAsset: null,
@@ -86,7 +87,7 @@ window.app = Vue.createApp({
         invoiceDecodeError: false
       },
 
-      // Success dialog - EXPLICITLY INITIALIZED
+      // Success dialog
       successDialog: {
         show: false,
         message: 'Payment has been sent successfully.',
@@ -108,14 +109,12 @@ window.app = Vue.createApp({
         }
       },
 
-      // WebSocket connection
-      websockets: {
-        invoices: null,
-        payments: null,
-        balances: null
+      // WebSocket connection status
+      websocketStatus: {
+        connected: false,
+        reconnecting: false,
+        fallbackPolling: false
       },
-      websocketConnected: false,
-      websocketReconnectTimeout: null,
       
       // Refresh state tracking
       refreshInterval: null,
@@ -143,14 +142,9 @@ window.app = Vue.createApp({
     },
     maxInvoiceAmount() {
       if (!this.invoiceDialog.selectedAsset) return 0;
-
-      const asset = this.invoiceDialog.selectedAsset;
-      if (asset.channel_info) {
-        const totalCapacity = parseFloat(asset.channel_info.capacity);
-        const localBalance = parseFloat(asset.channel_info.local_balance);
-        return totalCapacity - localBalance;
-      }
-      return parseFloat(asset.amount);
+      
+      // Get maximum receivable amount using AssetService
+      return AssetService.getMaxReceivableAmount(this.invoiceDialog.selectedAsset);
     },
     isInvoiceAmountValid() {
       if (!this.invoiceDialog.selectedAsset) return false;
@@ -174,9 +168,7 @@ window.app = Vue.createApp({
   methods: {
     // Helper method to find asset name by asset_id
     findAssetName(assetId) {
-      if (!assetId || !this.assets || this.assets.length === 0) return null;
-      const asset = this.assets.find(a => a.asset_id === assetId);
-      return asset ? asset.name : null;
+      return AssetService.getAssetName(assetId);
     },
 
     // Get just the asset name without "Taproot Asset Transfer:" prefix
@@ -191,102 +183,83 @@ window.app = Vue.createApp({
     
     // Check if user can send this asset (has balance)
     canSendAsset(asset) {
-      // First check if asset is active
-      if (asset.channel_info && asset.channel_info.active === false) {
-        return false;
-      }
-      
-      // Then check if user has balance
-      const userBalance = asset.user_balance || 0;
-      return userBalance > 0;
+      return AssetService.canSendAsset(asset);
     },
 
-    // Format transaction date consistently
-    formatTransactionDate,
-    // Shortify long text (like payment hash)
-    shortify,
-    // Copy text to clipboard
+    // Use shared DataUtils methods
+    formatTransactionDate(date) {
+      return DataUtils.formatDate(date);
+    },
+    
+    shortify(text, maxLength) {
+      return DataUtils.shortify(text, maxLength);
+    },
+    
     copyText(text) {
-      copyText(text, notification => {
-        this.$q.notify(notification);
+      DataUtils.copyText(text, notification => {
+        NotificationService.showSuccess(notification.message);
       });
     },
-    // Get status color
-    getStatusColor,
+    
+    getStatusColor(status) {
+      return DataUtils.getStatusColor(status);
+    },
     
     // Settings methods
     toggleSettings() {
-      this.showSettings = !this.showSettings
+      this.showSettings = !this.showSettings;
     },
     
-    getSettings() {
-      if (!this.g.user.wallets.length) return;
-      const wallet = this.g.user.wallets[0];
-
-      getSettings(wallet.adminkey)
-        .then(response => {
-          this.settings = response.data;
-        })
-        .catch(err => {
-          console.error('Failed to fetch settings:', err);
-        });
+    async getSettings() {
+      try {
+        if (!this.g.user.wallets.length) return;
+        const wallet = this.g.user.wallets[0];
+        
+        const response = await ApiService.getSettings(wallet.adminkey);
+        this.settings = response.data;
+      } catch (error) {
+        console.error('Failed to fetch settings:', error);
+        NotificationService.processApiError(error, 'Failed to fetch settings');
+      }
     },
     
-    saveSettings() {
-      if (!this.g.user.wallets.length) return;
-      const wallet = this.g.user.wallets[0];
-
-      saveSettings(wallet.adminkey, this.settings)
-        .then(response => {
-          this.settings = response.data;
-          this.showSettings = false;
-        })
-        .catch(err => {
-          console.error('Failed to save settings:', err);
-        });
+    async saveSettings() {
+      try {
+        if (!this.g.user.wallets.length) return;
+        const wallet = this.g.user.wallets[0];
+        
+        const response = await ApiService.saveSettings(wallet.adminkey, this.settings);
+        this.settings = response.data;
+        this.showSettings = false;
+        NotificationService.showSuccess('Settings saved successfully');
+      } catch (error) {
+        console.error('Failed to save settings:', error);
+        NotificationService.processApiError(error, 'Failed to save settings');
+      }
     },
     
-    getAssets() {
+    async getAssets() {
       if (!this.g.user.wallets.length || this.isRefreshing) return;
       
       this.isRefreshing = true;
       const wallet = this.g.user.wallets[0];
-
-      console.log('Fetching assets...');
       
-      getAssets(wallet.adminkey)
-        .then(response => {
-          console.log('Assets received:', response.data);
-          
-          // Create a new array instead of modifying the existing one
-          const newAssets = Array.isArray(response.data) ? JSON.parse(JSON.stringify(response.data)) : [];
-          
-          // Log asset balances for debugging
-          if (newAssets.length > 0) {
-            const balances = newAssets
-              .filter(asset => asset.channel_info)
-              .map(asset => ({
-                name: asset.name,
-                channel_balance: asset.channel_info.local_balance,
-                user_balance: asset.user_balance || 0
-              }));
-            console.log('Current asset balances:', balances);
-          }
-          
-          // Replace the assets array
-          this.assets = newAssets;
-          
-          if (this.assets.length > 0) {
-            this.updateTransactionDescriptions();
-          }
-        })
-        .catch(err => {
-          console.error('Failed to fetch assets:', err);
-          this.assets = [];
-        })
-        .finally(() => {
-          this.isRefreshing = false;
-        });
+      try {
+        console.log('Fetching assets...');
+        const assets = await AssetService.getAssets(wallet);
+        
+        // Replace the assets array
+        this.assets = assets;
+        
+        if (this.assets.length > 0) {
+          this.updateTransactionDescriptions();
+        }
+      } catch (error) {
+        console.error('Failed to fetch assets:', error);
+        this.assets = [];
+      } finally {
+        this.isRefreshing = false;
+      }
     },
     
     updateTransactionDescriptions() {
@@ -294,7 +267,7 @@ window.app = Vue.createApp({
       this.combineTransactions();
     },
     
-      getInvoices(isInitialLoad = false) {
+    async getInvoices(isInitialLoad = false) {
       if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
 
@@ -303,42 +276,36 @@ window.app = Vue.createApp({
         this.transactionsLoading = true;
       }
 
-      const timestamp = new Date().getTime();
-      this.refreshCount++;
-
-      getInvoices(wallet.adminkey)
-        .then(response => {
-          // Process invoices
-          const processedInvoices = Array.isArray(response.data)
-            ? response.data.map(invoice => mapInvoice(invoice))
-            : [];
-
-          // Update or set invoices based on changes
-          if (this.invoices.length === 0 || isInitialLoad) {
-            this.invoices = processedInvoices;
-          } else if (this.checkForChanges(processedInvoices, this.invoices)) {
-            this.invoices = processedInvoices;
-          }
-
-          // Combine transactions and enable transitions
-          this.combineTransactions();
-          this.applyFilters();
+      try {
+        // Use InvoiceService to get invoices
+        const invoices = await InvoiceService.getInvoices(wallet, true);
+        
+        // Check for changes in invoices
+        const changes = InvoiceService.findChanges(invoices, this.invoices);
+        
+        // Apply changes if needed
+        if (changes.new.length > 0 || changes.updated.length > 0) {
+          // Update invoices array
+          this.invoices = invoices;
           
-          if (!this.transitionEnabled) {
-            setTimeout(() => {
-              this.transitionEnabled = true;
-            }, 500);
-          }
-        })
-        .catch(err => {
-          console.error('Failed to fetch invoices:', err);
-        })
-        .finally(() => {
-          this.transactionsLoading = false;
-        });
+          // Combine transactions
+          this.combineTransactions();
+        }
+        
+        // Enable transitions after initial load
+        if (!this.transitionEnabled) {
+          setTimeout(() => {
+            this.transitionEnabled = true;
+          }, 500);
+        }
+      } catch (error) {
+        console.error('Failed to fetch invoices:', error);
+      } finally {
+        this.transactionsLoading = false;
+      }
     },
     
-    getPayments(isInitialLoad = false) {
+    async getPayments(isInitialLoad = false) {
       if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
 
@@ -347,91 +314,38 @@ window.app = Vue.createApp({
         this.transactionsLoading = true;
       }
 
-      getPayments(wallet.adminkey)
-        .then(response => {
-          // Process payments
-          const processedPayments = Array.isArray(response.data)
-            ? response.data.map(payment => mapPayment(payment))
-            : [];
-
-          this.payments = processedPayments;
-          this.combineTransactions();
-          this.applyFilters();
-        })
-        .catch(err => {
-          console.error('Failed to fetch payments:', err);
-        })
-        .finally(() => {
-          this.transactionsLoading = false;
-        });
+      try {
+        // Use PaymentService to get payments
+        const payments = await PaymentService.getPayments(wallet, true);
+        
+        // Update payments array
+        this.payments = payments;
+        
+        // Combine transactions
+        this.combineTransactions();
+      } catch (error) {
+        console.error('Failed to fetch payments:', error);
+      } finally {
+        this.transactionsLoading = false;
+      }
     },
     
     combineTransactions() {
-      // Combine invoices and payments, sort by date
-      this.combinedTransactions = [
-        ...this.invoices,
-        ...this.payments
-      ].sort((a, b) => {
-        return new Date(b.created_at) - new Date(a.created_at);
-      });
+      // Combine invoices and payments using DataUtils
+      this.combinedTransactions = DataUtils.combineTransactions(this.invoices, this.payments);
       
       // Apply filters and search
       this.applyFilters();
     },
     
     applyFilters() {
-      let result = [...this.combinedTransactions];
-      
-      // Apply direction filter
-      if (this.filter.direction !== 'all') {
-        result = result.filter(tx => tx.direction === this.filter.direction);
-      }
-      
-      // Apply status filter
-      if (this.filter.status !== 'all') {
-        result = result.filter(tx => tx.status === this.filter.status);
-      }
-      
-      // Apply memo search
-      if (this.searchData.memo) {
-        const searchLower = this.searchData.memo.toLowerCase();
-        result = result.filter(tx => 
-          tx.memo && tx.memo.toLowerCase().includes(searchLower)
-        );
-      }
-      
-      // Apply payment hash search
-      if (this.searchData.payment_hash) {
-        const searchLower = this.searchData.payment_hash.toLowerCase();
-        result = result.filter(tx =>
-          tx.payment_hash && tx.payment_hash.toLowerCase().includes(searchLower)
-        );
-      }
-      
-      // Apply date range filter
-      if (this.searchDate.from || this.searchDate.to) {
-        result = result.filter(tx => {
-          const txDate = new Date(tx.created_at);
-          let matches = true;
-          
-          if (this.searchDate.from) {
-            const fromDate = new Date(this.searchDate.from);
-            fromDate.setHours(0, 0, 0, 0);
-            if (txDate < fromDate) matches = false;
-          }
-          
-          if (matches && this.searchDate.to) {
-            const toDate = new Date(this.searchDate.to);
-            toDate.setHours(23, 59, 59, 999);
-            if (txDate > toDate) matches = false;
-          }
-          
-          return matches;
-        });
-      }
-      
-      // Update filtered transactions
-      this.filteredTransactions = result;
+      // Use DataUtils to filter transactions
+      this.filteredTransactions = DataUtils.filterTransactions(
+        this.combinedTransactions,
+        this.filter,
+        this.searchData,
+        this.searchDate
+      );
       
       // Reset to first page when filtering
       if (this.transactionsTable.pagination.page > 1) {
@@ -470,114 +384,41 @@ window.app = Vue.createApp({
       this.applyFilters();
     },
 
-    // Check if transactions have changed
-    checkForChanges(newItems, existingItems) {
-      // Quick length check
-      if (newItems.length !== existingItems.length) {
-        return true;
-      }
-
-      // Create lookup map
-      const existingMap = {};
-      existingItems.forEach(item => {
-        existingMap[item.id] = item;
-      });
-
-      let hasChanges = false;
-
-      // Compare items
-      for (const newItem of newItems) {
-        const existingItem = existingMap[newItem.id];
-        
-        // New item
-        if (!existingItem) {
-          newItem._isNew = true;
-          hasChanges = true;
-          continue;
-        }
-        
-        // Status changed
-        if (existingItem.status !== newItem.status) {
-          newItem._previousStatus = existingItem.status;
-          newItem._statusChanged = true;
-          hasChanges = true;
-        }
-      }
-
-      return hasChanges;
-    },
-    
     // WebSocket handling methods
-    closeWebSockets() {
-      // Close all WebSocket connections
-      Object.keys(this.websockets).forEach(key => {
-        if (this.websockets[key]) {
-          try {
-            this.websockets[key].close();
-          } catch (e) {
-            console.error(`Error closing ${key} WebSocket:`, e);
-          }
-          this.websockets[key] = null;
-        }
+    initializeWebSockets() {
+      if (!this.g.user || !this.g.user.id) return;
+      
+      // Initialize WebSocket manager with handlers
+      WebSocketManager.initialize(this.g.user.id, {
+        // Handler for invoice messages
+        onInvoiceMessage: this.handleInvoiceWebSocketMessage,
+        
+        // Handler for payment messages
+        onPaymentMessage: this.handlePaymentWebSocketMessage,
+        
+        // Handler for balance messages
+        onBalanceMessage: this.handleBalancesWebSocketMessage,
+        
+        // Handler for connection state changes
+        onConnectionChange: this.handleWebSocketConnectionChange,
+        
+        // Handler for fallback polling
+        onPollingRequired: this.refreshData
       });
-      
-      // Clear reconnect timeout if exists
-      if (this.websocketReconnectTimeout) {
-        clearTimeout(this.websocketReconnectTimeout);
-        this.websocketReconnectTimeout = null;
-      }
-      
-      this.websocketConnected = false;
     },
     
-    // Setup WebSocket connections
-    setupWebSockets() {
-      if (!this.g.user.wallets.length) return;
+    handleWebSocketConnectionChange(status) {
+      // Update websocket status
+      this.websocketStatus = status;
       
-      const wallet = this.g.user.wallets[0];
-      const userId = this.g.user.id;
-      
-      // Close any existing connections
-      this.closeWebSockets();
-      
-      // Create WebSocket connections
-      try {
-        // Connect to invoice updates
-        const invoicesWsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/v1/ws/taproot-assets-invoices-${userId}`;
-        this.websockets.invoices = new WebSocket(invoicesWsUrl);
-        this.websockets.invoices.onmessage = this.handleInvoiceWebSocketMessage;
-        this.websockets.invoices.onclose = () => this.handleWebSocketClose('invoices');
-        this.websockets.invoices.onerror = (err) => console.error('Invoice WebSocket error:', err);
-        
-        // Connect to payment updates
-        const paymentsWsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/v1/ws/taproot-assets-payments-${userId}`;
-        this.websockets.payments = new WebSocket(paymentsWsUrl);
-        this.websockets.payments.onmessage = this.handlePaymentWebSocketMessage;
-        this.websockets.payments.onclose = () => this.handleWebSocketClose('payments');
-        this.websockets.payments.onerror = (err) => console.error('Payment WebSocket error:', err);
-        
-        // Connect to balances updates
-        const balancesWsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/v1/ws/taproot-assets-balances-${userId}`;
-        this.websockets.balances = new WebSocket(balancesWsUrl);
-        this.websockets.balances.onmessage = this.handleBalancesWebSocketMessage;
-        this.websockets.balances.onclose = () => this.handleWebSocketClose('balances');
-        this.websockets.balances.onerror = (err) => console.error('Balances WebSocket error:', err);
-        
-        this.websocketConnected = true;
-        console.log('WebSocket connections established');
-      } catch (e) {
-        console.error('Failed to setup WebSockets:', e);
-        this.websocketConnected = false;
-        // Fallback to polling
-        this.startAutoRefresh();
+      // If we just connected, refresh data
+      if (status.connected && !status.reconnecting) {
+        this.refreshData();
       }
     },
     
-    handleInvoiceWebSocketMessage(event) {
+    handleInvoiceWebSocketMessage(data) {
       try {
-        const data = JSON.parse(event.data);
-        console.log('Invoice WebSocket message received:', data);
-        
         if (data.type === 'invoice_update' && data.data) {
           // Debug the current state
           console.log('Current dialog state:', {
@@ -599,145 +440,88 @@ window.app = Vue.createApp({
             status: data.data.status
           });
           
-          // Find existing invoice
-          const index = this.invoices.findIndex(invoice => invoice.id === data.data.id);
-          
-          if (index !== -1) {
-            // Update existing invoice - using Vue 3 reactive approach
-            const updatedInvoice = mapInvoice({
-              ...this.invoices[index],
-              ...data.data
+          // Check if this invoice was paid
+          if (data.data.status === 'paid') {
+            console.log('PAID INVOICE DETECTED');
+            
+            const assetName = this.findAssetName(data.data.asset_id) || 'Unknown Asset';
+            const amount = data.data.asset_amount || 0;
+            
+            // Notify user about paid invoice
+            NotificationService.notifyInvoicePaid({
+              asset_name: assetName,
+              asset_amount: amount,
+              asset_id: data.data.asset_id
             });
             
-            // Mark as updated for animation
-            updatedInvoice._statusChanged = true;
+            // Force an immediate refresh of assets
+            console.log('Invoice paid - refreshing assets immediately');
+            this.getAssets();
             
-            // Update in array (Vue 3 way)
-            this.invoices[index] = updatedInvoice;
-            
-            // Check if this invoice was paid
-            if (data.data.status === 'paid') {
-              console.log('PAID INVOICE DETECTED');
+            // Check if we should close the invoice dialog
+            if (this.createdInvoiceDialog.show && this.createdInvoice) {
+              console.log('Checking if we should close the invoice dialog...');
               
-              const assetName = this.findAssetName(data.data.asset_id) || 'Unknown Asset';
-              const amount = data.data.asset_amount || this.invoices[index].asset_amount;
+              // Try multiple ways to match the invoice
+              let matchFound = false;
               
-              // Notify user about paid invoice
-              this.$q.notify({
-                message: `Invoice Paid: ${amount} ${assetName}`,
-                color: 'positive',
-                icon: 'check_circle',
-                timeout: 2000
-              });
+              // Match by ID
+              if (this.createdInvoice.id === data.data.id) {
+                console.log('Match found by invoice ID');
+                matchFound = true;
+              }
               
-              // Force an immediate refresh of assets
-              console.log('Invoice paid - refreshing assets immediately');
-              this.getAssets();
+              // Match by payment hash
+              else if (this.createdInvoice.payment_hash === data.data.payment_hash) {
+                console.log('Match found by payment hash');
+                matchFound = true;
+              }
               
-              // Check if we should close the invoice dialog
-              if (this.createdInvoiceDialog.show && this.createdInvoice) {
-                console.log('Checking if we should close the invoice dialog...');
+              // If the displayed invoice is the one that was paid, close the dialog
+              if (matchFound) {
+                console.log('CLOSING INVOICE DIALOG - Match found between displayed invoice and paid invoice');
+                // Close the dialog
+                this.createdInvoiceDialog.show = false;
                 
-                // Try multiple ways to match the invoice
-                let matchFound = false;
-                
-                // Match by ID
-                if (this.createdInvoice.id === data.data.id) {
-                  console.log('Match found by invoice ID');
-                  matchFound = true;
-                }
-                
-                // Match by payment hash
-                else if (this.createdInvoice.payment_hash === data.data.payment_hash) {
-                  console.log('Match found by payment hash');
-                  matchFound = true;
-                }
-                
-                // If the displayed invoice is the one that was paid, close the dialog
-                if (matchFound) {
-                  console.log('CLOSING INVOICE DIALOG - Match found between displayed invoice and paid invoice');
-                  // Close the dialog
-                  this.createdInvoiceDialog.show = false;
-                  
-                  // Show a notification
-                  this.$q.notify({
-                    message: 'Invoice has been paid',
-                    color: 'positive',
-                    icon: 'check_circle',
-                    timeout: 2000
-                  });
-                } else {
-                  console.log('Not closing dialog - displayed invoice does not match the paid one');
-                }
+                // Show a notification
+                NotificationService.showSuccess('Invoice has been paid');
               } else {
-                console.log('Invoice dialog not showing or no created invoice to check');
+                console.log('Not closing dialog - displayed invoice does not match the paid one');
               }
             }
-          } else {
-            // Add new invoice
-            const newInvoice = mapInvoice(data.data);
-            newInvoice._isNew = true;
-            this.invoices.push(newInvoice);
           }
           
-          // Update combined transactions
-          this.combineTransactions();
+          // Force refresh of invoices
+          this.getInvoices();
         }
       } catch (e) {
         console.error('Error handling invoice WebSocket message:', e, e.stack);
       }
     },
     
-    handlePaymentWebSocketMessage(event) {
+    handlePaymentWebSocketMessage(data) {
       try {
-        const data = JSON.parse(event.data);
-        console.log('Payment WebSocket message:', data);
-        
         if (data.type === 'payment_update' && data.data) {
-          // Find existing payment
-          const index = this.payments.findIndex(payment => payment.id === data.data.id);
+          console.log('Payment WebSocket message:', data);
           
-          if (index !== -1) {
-            // Update existing payment - using Vue 3 reactive approach
-            const updatedPayment = mapPayment({
-              ...this.payments[index],
-              ...data.data
-            });
-            
-            // Mark as updated for animation
-            updatedPayment._statusChanged = true;
-            
-            // Update in array (Vue 3 way)
-            this.payments[index] = updatedPayment;
-          } else {
-            // Add new payment
-            const newPayment = mapPayment(data.data);
-            newPayment._isNew = true;
-            this.payments.push(newPayment);
-            
-            // Immediately refresh assets for newly completed payments
-            if (newPayment.status === 'completed') {
-              console.log('Payment completed - refreshing assets immediately');
-              this.getAssets();
-            }
+          // Check if this is a completed payment
+          if (data.data.status === 'completed') {
+            console.log('Payment completed - refreshing assets immediately');
+            this.getAssets();
           }
           
-          // Update combined transactions
-          this.combineTransactions();
+          // Force refresh of payments
+          this.getPayments();
         }
       } catch (e) {
         console.error('Error handling payment WebSocket message:', e);
       }
     },
     
-    // SIMPLIFIED: Just use WebSocket message as a trigger to refresh assets
-    handleBalancesWebSocketMessage(event) {
+    handleBalancesWebSocketMessage(data) {
       try {
-        const data = JSON.parse(event.data);
-        console.log('Balances WebSocket message received');
-        
         if (data.type === 'assets_update' && Array.isArray(data.data)) {
-          // Instead of processing WebSocket data, just refresh from API
+          // Refresh from API when balance updates received
           if (!this.isRefreshing) {
             console.log('Balance WebSocket received - refreshing assets from API');
             this.getAssets();
@@ -745,27 +529,6 @@ window.app = Vue.createApp({
         }
       } catch (e) {
         console.error('Error handling balances WebSocket message:', e);
-      }
-    },
-    
-    handleWebSocketClose(type) {
-      console.log(`WebSocket ${type} connection closed`);
-      this.websockets[type] = null;
-      
-      // Check if all connections are closed
-      if (Object.values(this.websockets).every(ws => ws === null)) {
-        this.websocketConnected = false;
-        
-        // Try to reconnect after delay
-        if (!this.websocketReconnectTimeout) {
-          this.websocketReconnectTimeout = setTimeout(() => {
-            this.setupWebSockets();
-            this.websocketReconnectTimeout = null;
-          }, 5000);
-        }
-        
-        // Fallback to polling while disconnected
-        this.startAutoRefresh();
       }
     },
     
@@ -784,8 +547,9 @@ window.app = Vue.createApp({
         };
       });
       
-      // Generate CSV
-      downloadCSV(rows, 'taproot-asset-transactions.csv', this.$q.notify);
+      // Generate CSV using DataUtils
+      DataUtils.downloadCSV(rows, 'taproot-asset-transactions.csv', 
+        notification => this.$q.notify(notification));
     },
     
     exportTransactionsCSVWithDetails() {
@@ -820,7 +584,8 @@ window.app = Vue.createApp({
       });
       
       // Generate CSV with more details
-      downloadCSV(rows, 'taproot-asset-transactions-details.csv', this.$q.notify);
+      DataUtils.downloadCSV(rows, 'taproot-asset-transactions-details.csv', 
+        notification => this.$q.notify(notification));
     },
     
     // Invoice dialog methods
@@ -830,12 +595,7 @@ window.app = Vue.createApp({
       
       // Don't allow creating invoices for inactive channels
       if (asset.channel_info && asset.channel_info.active === false) {
-        this.$q.notify({
-          message: 'Cannot create invoice for inactive channel',
-          color: 'negative',
-          icon: 'warning',
-          timeout: 2000
-        });
+        NotificationService.showError('Cannot create invoice for inactive channel');
         return;
       }
       
@@ -859,115 +619,53 @@ window.app = Vue.createApp({
       this.resetInvoiceForm();
     },
     
-    submitInvoiceForm() {
+    async submitInvoiceForm() {
       if (this.isSubmitting || !this.g.user.wallets.length) return;
       
       const wallet = this.g.user.wallets[0];
       this.isSubmitting = true;
 
-      // Build request payload
-      const payload = {
-        asset_id: this.invoiceDialog.selectedAsset.asset_id || '',
-        amount: parseFloat(this.invoiceDialog.form.amount),
-        memo: this.invoiceDialog.form.memo,
-        expiry: this.invoiceDialog.form.expiry
-      };
+      try {
+        // Use InvoiceService to create invoice
+        const createdInvoice = await InvoiceService.createInvoice(
+          wallet,
+          this.invoiceDialog.selectedAsset,
+          this.invoiceDialog.form
+        );
+        
+        // Store the created invoice data
+        this.createdInvoice = createdInvoice;
 
-      // Add peer_pubkey if available
-      if (this.invoiceDialog.selectedAsset.channel_info?.peer_pubkey) {
-        payload.peer_pubkey = this.invoiceDialog.selectedAsset.channel_info.peer_pubkey;
+        // Set a more descriptive title that includes the asset name
+        this.createdInvoiceDialog.title = `${this.createdInvoice.asset_name || 'Asset'} Invoice`;
+
+        // Close the invoice creation dialog
+        this.invoiceDialog.show = false;
+        
+        // Show the created invoice dialog with QR code
+        this.createdInvoiceDialog.show = true;
+        
+        // Show notification
+        NotificationService.notifyInvoiceCreated(createdInvoice);
+        
+        // Refresh transactions
+        this.refreshTransactions();
+      } catch (error) {
+        // Special handling for channel offline errors
+        const errorMessage = NotificationService.processApiError(error, 'Failed to create invoice');
+        
+        if (errorMessage.toLowerCase().includes('channel') && 
+            (errorMessage.toLowerCase().includes('offline') || 
+             errorMessage.toLowerCase().includes('unavailable'))) {
+          // Automatically refresh assets to get updated channel status
+          this.getAssets();
+          
+          // Close the dialog
+          this.closeInvoiceDialog();
+        }
+      } finally {
+        this.isSubmitting = false;
       }
-
-      createInvoice(wallet.adminkey, payload)
-        .then(response => {
-          console.log('Raw invoice API response:', response.data);
-          
-          // Store the created invoice data with complete details
-          this.createdInvoice = {
-            ...response.data,
-            id: response.data.id || response.data.checking_id || '',  // Make sure ID is stored
-            asset_name: this.invoiceDialog.selectedAsset?.name || 'Unknown'
-          };
-
-          // Log the full invoice data for debugging
-          console.log('Full invoice data stored:', this.createdInvoice);
-
-          // Ensure there's a payment_request property
-          if (!this.createdInvoice.payment_request) {
-            console.error('No payment_request in the response:', response.data);
-            this.$q.notify({
-              message: 'Invoice created but payment request is missing',
-              color: 'warning',
-              icon: 'warning',
-              timeout: 2000
-            });
-            return;
-          }
-
-          // Log the payment request for debugging
-          console.log('Created invoice with payment request:', this.createdInvoice.payment_request);
-          
-          // Set a more descriptive title that includes the asset name
-          this.createdInvoiceDialog.title = `${this.createdInvoice.asset_name || 'Asset'} Invoice`;
-
-          // Close the invoice creation dialog
-          this.invoiceDialog.show = false;
-          
-          // Show the created invoice dialog with QR code
-          this.createdInvoiceDialog.show = true;
-          
-          // Notify user that invoice was created successfully
-          this.$q.notify({
-            message: 'Invoice created successfully',
-            color: 'positive',
-            icon: 'check_circle',
-            timeout: 2000
-          });
-          
-          // WebSockets will handle UI updates, but refresh just in case
-          this.refreshTransactions();
-        })
-        .catch(err => {
-          console.error('Failed to create invoice:', err);
-          
-          // Check for specific error patterns
-          let errorMessage = 'Failed to create invoice';
-          
-          if (err.response && err.response.data && err.response.data.detail) {
-            const errorDetail = err.response.data.detail.toLowerCase();
-            
-            // Check for offline channel or no channel found errors
-            if (errorDetail.includes('no asset channel found') || 
-                errorDetail.includes('no channel balance') ||
-                errorDetail.includes('channel not found') ||
-                errorDetail.includes('peer channel') ||
-                errorDetail.includes('offline') ||
-                errorDetail.includes('unavailable')) {
-              
-              errorMessage = 'Channel appears to be offline or unavailable. Refreshing assets...';
-              
-              // Automatically refresh assets to get updated channel status
-              this.getAssets();
-              
-              // Close the dialog
-              this.closeInvoiceDialog();
-            } else {
-              // Use the server-provided error message
-              errorMessage = err.response.data.detail;
-            }
-          }
-          
-          // Show error notification
-          this.$q.notify({
-            message: errorMessage,
-            color: 'negative',
-            icon: 'warning',
-            timeout: 2000
-          });
-        })
-        .finally(() => {
-          this.isSubmitting = false;
-        });
     },
     
     // Payment dialog methods
@@ -977,23 +675,13 @@ window.app = Vue.createApp({
       
       // Don't allow payments from inactive channels
       if (asset.channel_info && asset.channel_info.active === false) {
-        this.$q.notify({
-          message: 'Cannot send payment from inactive channel',
-          color: 'negative',
-          icon: 'warning',
-          timeout: 2000
-        });
+        NotificationService.showError('Cannot send payment from inactive channel');
         return;
       }
       
       // Check if user has balance
       if (!asset.user_balance || asset.user_balance <= 0) {
-        this.$q.notify({
-          message: 'You have zero balance for this asset',
-          color: 'negative',
-          icon: 'warning',
-          timeout: 2000
-        });
+        NotificationService.showError('You have zero balance for this asset');
         return;
       }
       
@@ -1017,8 +705,8 @@ window.app = Vue.createApp({
       this.resetPaymentForm();
     },
     
-    // Use server-side parsing for invoices
-    parseInvoice(paymentRequest) {
+    // Use service for invoice parsing
+    async parseInvoice(paymentRequest) {
       if (!paymentRequest || paymentRequest.trim() === '') {
         this.paymentDialog.invoiceDecodeError = false;
         this.paymentDialog.form.amount = 0;
@@ -1028,68 +716,37 @@ window.app = Vue.createApp({
       if (!this.g.user.wallets.length) return;
       const wallet = this.g.user.wallets[0];
       
-      // Show loading indicator
-      this.$q.loading.show({
-        message: 'Parsing invoice...'
-      });
-      
-      // Use the API to parse the invoice
-      parseInvoice(wallet.adminkey, paymentRequest)
-        .then(response => {
-          console.log('Invoice parsed:', response.data);
-          
-          // Update form with parsed data
-          this.paymentDialog.form.amount = response.data.amount || 0;
-          this.paymentDialog.invoiceDecodeError = false;
-          
-          // If amount is 0, warn the user
-          if (response.data.amount === 0) {
-            this.$q.notify({
-              message: 'Warning: Invoice has no specified amount.',
-              color: 'warning',
-              icon: 'warning',
-              timeout: 2000
-            });
-          }
-        })
-        .catch(error => {
-          console.error('Failed to parse invoice:', error);
-          this.paymentDialog.invoiceDecodeError = true;
-          this.paymentDialog.form.amount = 0;
-          
-          // Show error notification
-          this.$q.notify({
-            message: 'Invalid invoice format',
-            color: 'negative',
-            icon: 'warning',
-            timeout: 2000
-          });
-        })
-        .finally(() => {
-          this.$q.loading.hide();
-        });
+      try {
+        // Use PaymentService to parse invoice
+        const parsedInvoice = await PaymentService.parseInvoice(wallet, paymentRequest);
+        
+        // Update form with parsed data
+        this.paymentDialog.form.amount = parsedInvoice.amount || 0;
+        this.paymentDialog.invoiceDecodeError = false;
+        
+        // If amount is 0, warn the user
+        if (parsedInvoice.amount === 0) {
+          NotificationService.showWarning('Warning: Invoice has no specified amount');
+        }
+      } catch (error) {
+        console.error('Failed to parse invoice:', error);
+        this.paymentDialog.invoiceDecodeError = true;
+        this.paymentDialog.form.amount = 0;
+        NotificationService.showError('Invalid invoice format');
+      }
     },
     
     async submitPaymentForm() {
       if (this.paymentDialog.inProgress || !this.g.user.wallets.length) return;
+      
       if (!this.paymentDialog.form.paymentRequest) {
-        this.$q.notify({
-          message: 'Please enter an invoice to pay',
-          color: 'negative',
-          icon: 'warning',
-          timeout: 2000
-        });
+        NotificationService.showError('Please enter an invoice to pay');
         return;
       }
       
       // Don't proceed if invoice is invalid
       if (this.paymentDialog.invoiceDecodeError) {
-        this.$q.notify({
-          message: 'Cannot pay an invalid invoice',
-          color: 'negative',
-          icon: 'warning',
-          timeout: 2000
-        });
+        NotificationService.showError('Cannot pay an invalid invoice');
         return;
       }
 
@@ -1097,34 +754,25 @@ window.app = Vue.createApp({
         this.paymentDialog.inProgress = true;
         const wallet = this.g.user.wallets[0];
 
-        // Create payload
-        const payload = {
-          payment_request: this.paymentDialog.form.paymentRequest,
-          fee_limit_sats: this.paymentDialog.form.feeLimit
-        };
-
-        // Add peer_pubkey if available
-        if (this.paymentDialog.selectedAsset?.channel_info?.peer_pubkey) {
-          payload.peer_pubkey = this.paymentDialog.selectedAsset.channel_info.peer_pubkey;
-        }
-
-        // Make the payment request - the backend will determine if it's an internal payment
-        const response = await payInvoice(wallet.adminkey, payload);
+        // Use PaymentService to pay invoice
+        const paymentResult = await PaymentService.payInvoice(
+          wallet,
+          this.paymentDialog.selectedAsset,
+          {
+            paymentRequest: this.paymentDialog.form.paymentRequest,
+            feeLimit: this.paymentDialog.form.feeLimit
+          }
+        );
         
         // Close payment dialog
         this.paymentDialog.show = false;
         
-        // Customize success message based on response
-        if (response.data.internal_payment) {
-          this.successDialog.title = 'Internal Payment Processed';
-          this.successDialog.message = 'Payment to another user on this node has been processed successfully.';
-        } else if (response.data.self_payment) {
-          this.successDialog.title = 'Self-Payment Processed';
-          this.successDialog.message = 'Self-payment has been processed successfully.';
-        } else {
-          this.successDialog.title = 'Payment Successful!';
-          this.successDialog.message = 'Payment has been sent successfully.';
-        }
+        // Get notification message and title
+        const {title, message} = NotificationService.notifyPaymentSent(paymentResult);
+        
+        // Set success dialog content
+        this.successDialog.title = title;
+        this.successDialog.message = message;
         
         // Show success dialog
         this.successDialog.show = true;
@@ -1135,57 +783,41 @@ window.app = Vue.createApp({
         
         // Also refresh transactions
         this.refreshTransactions();
-
       } catch (error) {
-        console.error('Payment failed:', error);
-        
-        // Check for specific error patterns
-        let errorMessage = 'Payment failed';
-        
-        if (error.response && error.response.data && error.response.data.detail) {
-          const errorDetail = error.response.data.detail.toLowerCase();
-          
-          // Check for internal payment hint
-          if (errorDetail.includes('internal payment') || errorDetail.includes('own invoice')) {
-            errorMessage = 'This invoice belongs to another user on this node. System will process it as an internal payment.';
-            
-            // Try to process as internal payment automatically
-            try {
-              const success = await this.processInternalPayment(this.paymentDialog.form.paymentRequest, this.paymentDialog.form.feeLimit);
-              if (success) return; // Exit early as we're handling it
-            } catch (internalPayError) {
-              console.error('Error in automatic internal payment handling:', internalPayError);
-              errorMessage = 'Failed to process internal payment. Please try again.';
-            }
+        // Check for special internal payment case
+        if (error.isInternalPayment) {
+          // Try to process as internal payment automatically
+          try {
+            NotificationService.showInfo(error.message);
+            const success = await this.processInternalPayment(
+              this.paymentDialog.form.paymentRequest, 
+              this.paymentDialog.form.feeLimit
+            );
+            if (success) return; // Exit early as we're handling it
+          } catch (internalPayError) {
+            NotificationService.processApiError(
+              internalPayError, 
+              'Failed to process internal payment. Please try again.'
+            );
           }
-          // Check for offline channel or channel-related errors
-          else if (errorDetail.includes('no asset channel') || 
-              errorDetail.includes('insufficient channel balance') ||
-              errorDetail.includes('channel not found') ||
-              errorDetail.includes('peer') ||
-              errorDetail.includes('offline') ||
-              errorDetail.includes('unavailable')) {
-            
-            errorMessage = 'Channel appears to be offline or unavailable. Refreshing assets...';
-            
+        } else {
+          // Process standard error
+          const errorMessage = NotificationService.processApiError(
+            error,
+            'Payment failed'
+          );
+          
+          // Special handling for channel-related errors
+          if (errorMessage.toLowerCase().includes('channel') && 
+              (errorMessage.toLowerCase().includes('offline') || 
+               errorMessage.toLowerCase().includes('unavailable'))) {
             // Automatically refresh assets to get updated channel status
             await this.getAssets();
             
             // Close the dialog
             this.paymentDialog.show = false;
-          } else {
-            // Use the server-provided error message
-            errorMessage = error.response.data.detail;
           }
         }
-        
-        // Show error notification
-        this.$q.notify({
-          message: errorMessage,
-          color: 'negative',
-          icon: 'warning',
-          timeout: 2000
-        });
       } finally {
         this.paymentDialog.inProgress = false;
       }
@@ -1199,21 +831,24 @@ window.app = Vue.createApp({
         this.paymentDialog.inProgress = true;
         const wallet = this.g.user.wallets[0];
         
-        // Create payload
-        const payload = {
-          payment_request: paymentRequest,
-          fee_limit_sats: feeLimit || 10
-        };
-        
-        // Call the internal payment endpoint
-        const response = await processInternalPayment(wallet.adminkey, payload);
+        // Use PaymentService to process internal payment
+        const paymentResult = await PaymentService.processInternalPayment(
+          wallet,
+          {
+            paymentRequest: paymentRequest,
+            feeLimit: feeLimit || 10
+          }
+        );
         
         // Close payment dialog
         this.paymentDialog.show = false;
         
-        // Show internal payment success dialog
-        this.successDialog.title = 'Internal Payment Processed';
-        this.successDialog.message = 'Payment to another user on this node has been processed successfully.';
+        // Get notification message and title
+        const {title, message} = NotificationService.notifyPaymentSent(paymentResult);
+        
+        // Set success dialog content
+        this.successDialog.title = title || 'Internal Payment Processed';
+        this.successDialog.message = message || 'Payment to another user on this node has been processed successfully.';
         this.successDialog.show = true;
         
         // Immediately refresh assets to show updated balances
@@ -1225,21 +860,7 @@ window.app = Vue.createApp({
         
         return true;
       } catch (error) {
-        console.error('Internal payment failed:', error);
-        
-        let errorMessage = 'Internal payment failed';
-        if (error.response && error.response.data && error.response.data.detail) {
-          errorMessage = error.response.data.detail;
-        }
-        
-        // Show error notification
-        this.$q.notify({
-          message: errorMessage,
-          color: 'negative',
-          icon: 'warning',
-          timeout: 2000
-        });
-        
+        NotificationService.processApiError(error, 'Internal payment failed');
         return false;
       } finally {
         this.paymentDialog.inProgress = false;
@@ -1254,26 +875,24 @@ window.app = Vue.createApp({
         this.paymentDialog.inProgress = true;
         const wallet = this.g.user.wallets[0];
         
-        // Create payload
-        const payload = {
-          payment_request: paymentRequest,
-          fee_limit_sats: feeLimit || 10
-        };
-        
-        // Call the self-payment endpoint (now redirects to internal payment if needed)
-        const response = await processSelfPayment(wallet.adminkey, payload);
+        // Use PaymentService to process self-payment
+        const paymentResult = await PaymentService.processSelfPayment(
+          wallet,
+          {
+            paymentRequest: paymentRequest,
+            feeLimit: feeLimit || 10
+          }
+        );
         
         // Close payment dialog
         this.paymentDialog.show = false;
         
-        // Show success dialog with appropriate title based on response
-        if (response.data.internal_payment) {
-          this.successDialog.title = 'Internal Payment Processed';
-          this.successDialog.message = 'Payment to another user on this node has been processed successfully.';
-        } else {
-          this.successDialog.title = 'Self-Payment Processed';
-          this.successDialog.message = 'Self-payment has been processed successfully.';
-        }
+        // Get notification message and title
+        const {title, message} = NotificationService.notifyPaymentSent(paymentResult);
+        
+        // Set success dialog content
+        this.successDialog.title = title;
+        this.successDialog.message = message;
         this.successDialog.show = true;
         
         // Immediately refresh assets to show updated balances 
@@ -1285,63 +904,46 @@ window.app = Vue.createApp({
         
         return true;
       } catch (error) {
-        console.error('Self-payment failed:', error);
-        
-        let errorMessage = 'Self-payment failed';
-        if (error.response && error.response.data && error.response.data.detail) {
-          errorMessage = error.response.data.detail;
-        }
-        
-        // Show error notification
-        this.$q.notify({
-          message: errorMessage,
-          color: 'negative',
-          icon: 'warning',
-          timeout: 2000
-        });
-        
+        NotificationService.processApiError(error, 'Self-payment failed');
         return false;
       } finally {
         this.paymentDialog.inProgress = false;
       }
     },
     
-    // Simplified invoice copy function that just uses the payment_request property directly
+    // Copy invoice to clipboard
     copyInvoice(invoice) {
-      // Simply use the payment_request property directly - same as what QR code uses
+      // Make sure we're copying the payment_request property
       const paymentRequest = invoice.payment_request;
       
       if (!paymentRequest) {
         console.error('Missing payment_request in invoice:', invoice);
-        this.$q.notify({
-          message: 'Error: No invoice data found',
-          color: 'negative',
-          icon: 'error',
-          timeout: 2000
-        });
+        NotificationService.showError('Error: No invoice data found');
         return;
       }
       
       console.log('Copying invoice payment request:', paymentRequest);
       
-      Quasar.copyToClipboard(paymentRequest)
-        .then(() => {
-          this.$q.notify({
-            message: 'Invoice copied to clipboard!',
-            color: 'positive',
-            icon: 'check',
-            timeout: 2000
-          });
-        })
-        .catch(err => {
-          console.error('Failed to copy to clipboard:', err);
-          this.$q.notify({
-            message: 'Failed to copy to clipboard',
-            color: 'negative',
-            icon: 'error',
-            timeout: 2000
-          });
-        });
+      try {
+        // Use LNbits built-in copy if available
+        if (window.LNbits && window.LNbits.utils && window.LNbits.utils.copy) {
+          window.LNbits.utils.copy(paymentRequest);
+          NotificationService.notifyCopied('Invoice');
+        } else {
+          // Direct clipboard API
+          navigator.clipboard.writeText(paymentRequest)
+            .then(() => {
+              NotificationService.notifyCopied('Invoice');
+            })
+            .catch(err => {
+              console.error('Failed to copy to clipboard:', err);
+              NotificationService.showError('Failed to copy to clipboard');
+            });
+        }
+      } catch (error) {
+        console.error('Error copying invoice:', error);
+        NotificationService.showError('Failed to copy invoice');
+      }
     },
     
     // Refresh methods
@@ -1350,15 +952,19 @@ window.app = Vue.createApp({
       this.getPayments(true);
     },
     
+    refreshData() {
+      this.getAssets();
+      this.getInvoices();
+      this.getPayments();
+    },
+    
     startAutoRefresh() {
-      // Only start polling if WebSockets are not connected
-      if (this.websocketConnected) return;
+      // Only start if not already polling and WebSockets not connected
+      if (this.refreshInterval || this.websocketStatus.connected) return;
       
       this.stopAutoRefresh();
       this.refreshInterval = setInterval(() => {
-        this.getAssets();
-        this.getInvoices();
-        this.getPayments();
+        this.refreshData();
       }, 10000); // 10 seconds
     },
     
@@ -1379,8 +985,8 @@ window.app = Vue.createApp({
       this.getInvoices(true);
       this.getPayments(true);
       
-      // Try to setup WebSockets first
-      this.setupWebSockets();
+      // Initialize WebSockets
+      this.initializeWebSockets();
     }
   },
   
@@ -1409,9 +1015,14 @@ window.app = Vue.createApp({
       this.refreshTransactions();
       this.getAssets();
       
-      // Try to reconnect WebSockets if disconnected
-      if (!this.websocketConnected) {
-        this.setupWebSockets();
+      // Reconnect WebSockets if disconnected
+      if (!this.websocketStatus.connected) {
+        this.initializeWebSockets();
+      }
+      
+      // Start polling if WebSockets are not connected
+      if (!this.websocketStatus.connected) {
+        this.startAutoRefresh();
       }
     }
   },
@@ -1422,7 +1033,9 @@ window.app = Vue.createApp({
   
   beforeUnmount() {
     this.stopAutoRefresh();
-    this.closeWebSockets();
+    
+    // Clean up WebSocket manager
+    WebSocketManager.destroy();
   }
 });
 

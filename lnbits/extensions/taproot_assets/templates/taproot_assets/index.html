@@ -9,9 +9,14 @@
     window.$t = function(key) { return key; };
   }
 </script>
-<!-- Load utility files first -->
-<script src="{{ static_url_for('taproot_assets/static', path='js/utils.js') }}"></script>
-<script src="{{ static_url_for('taproot_assets/static', path='js/api.js') }}"></script>
+<!-- Load service files first -->
+<script src="{{ static_url_for('taproot_assets/static', path='js/services/api.service.js') }}"></script>
+<script src="{{ static_url_for('taproot_assets/static', path='js/services/data.utils.js') }}"></script>
+<script src="{{ static_url_for('taproot_assets/static', path='js/services/asset.service.js') }}"></script>
+<script src="{{ static_url_for('taproot_assets/static', path='js/services/invoice.service.js') }}"></script>
+<script src="{{ static_url_for('taproot_assets/static', path='js/services/payment.service.js') }}"></script>
+<script src="{{ static_url_for('taproot_assets/static', path='js/services/notification.service.js') }}"></script>
+<script src="{{ static_url_for('taproot_assets/static', path='js/services/websocket.manager.js') }}"></script>
 <!-- Load main app file last -->
 <script src="{{ static_url_for('taproot_assets/static', path='js/index.js') }}"></script>
 <link rel="stylesheet" href="{{ static_url_for('taproot_assets/static', path='css/taproot_assets.css') }}" />
