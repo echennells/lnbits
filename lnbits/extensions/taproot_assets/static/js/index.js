@@ -783,18 +783,14 @@ window.app = Vue.createApp({
       // Update the invoice in our local array
       const index = this.invoices.findIndex(inv => inv.id === invoice.id || inv.payment_hash === invoice.payment_hash);
       if (index !== -1) {
-        console.log('Found invoice to update at index:', index);
         // Update the invoice status
         this.invoices[index].status = 'paid';
         this.invoices[index].paid_at = new Date().toISOString();
         // Mark as updated for animation
         this.invoices[index]._statusChanged = true;
-      } else {
-        console.log('Invoice not found in local array, will be updated on next refresh');
       }
       
       // Force an immediate refresh of assets to update balances
-      console.log('Refreshing assets immediately');
       this.getAssets();
       
       // Combine transactions to update the UI
@@ -802,25 +798,20 @@ window.app = Vue.createApp({
       
       // Check if we should close the invoice dialog
       if (this.createdInvoiceDialog.show && this.createdInvoice) {
-        console.log('Checking if we should close the invoice dialog...');
-        
         // Try multiple ways to match the invoice
         let matchFound = false;
         
         // Match by ID
         if (this.createdInvoice.id === invoice.id) {
-          console.log('Match found by invoice ID');
           matchFound = true;
         }
         // Match by payment hash
         else if (this.createdInvoice.payment_hash === invoice.payment_hash) {
-          console.log('Match found by payment hash');
           matchFound = true;
         }
         
         // If the displayed invoice is the one that was paid, close the dialog
         if (matchFound) {
-          console.log('CLOSING INVOICE DIALOG - Match found between displayed invoice and paid invoice');
           // Close the dialog
           this.createdInvoiceDialog.show = false;
           
@@ -833,8 +824,6 @@ window.app = Vue.createApp({
               timeout: 2000
             });
           }
-        } else {
-          console.log('Not closing dialog - displayed invoice does not match the paid one');
         }
       }
     },
@@ -872,6 +861,12 @@ window.app = Vue.createApp({
   created() {
     console.log("Vue app created");
     
+    // Initialize global updatePayments flag if it doesn't exist
+    if (window.g && window.g.updatePayments === undefined) {
+      window.g.updatePayments = false;
+      window.g.updatePaymentsHash = null;
+    }
+    
     // Initialize only after app is created
     if (this.g.user && this.g.user.wallets && this.g.user.wallets.length) {
       this.getSettings();
@@ -905,6 +900,33 @@ window.app = Vue.createApp({
         this.paymentDialog.invoiceDecodeError = false;
       }
     });
+    
+    // Add watcher for global updatePayments flag (similar to core LNbits implementation)
+    if (window.g) {
+      this.$watch(() => window.g.updatePayments, (newVal, oldVal) => {
+        console.log('updatePayments changed:', {newVal, oldVal});
+        
+        // Check if we should close the invoice dialog
+        if (this.createdInvoiceDialog.show && this.createdInvoice) {
+          if (window.g.updatePaymentsHash && this.createdInvoice.payment_hash === window.g.updatePaymentsHash) {
+            this.createdInvoiceDialog.show = false;
+            
+            // Show a notification
+            if (window.Quasar) {
+              window.Quasar.Notify.create({
+                message: 'Invoice has been paid',
+                color: 'positive',
+                icon: 'check_circle',
+                timeout: 2000
+              });
+            }
+          }
+        }
+        
+        // Force an immediate refresh of assets to update balances
+        this.getAssets();
+      });
+    }
   },
   
   activated() {

@@ -165,14 +165,18 @@ const WebSocketManager = {
         if (processedInvoice && processedInvoice.status === 'paid') {
           console.log('Paid invoice detected, triggering notification and UI update');
           
+          // Set global update flag similar to core LNbits implementation
+          if (window.g) {
+            window.g.updatePayments = !window.g.updatePayments;
+            window.g.updatePaymentsHash = processedInvoice.payment_hash;
+          }
+          
           // Call the Vue app's handlePaidInvoice method directly
           if (window.app && typeof window.app.handlePaidInvoice === 'function') {
-            console.log('Calling app.handlePaidInvoice directly');
             window.app.handlePaidInvoice(processedInvoice);
           } 
           // Fallback to notification service if app method not available
           else if (window.NotificationService) {
-            console.log('Fallback: using NotificationService.notifyInvoicePaid');
             NotificationService.notifyInvoicePaid(processedInvoice);
           }
         }
