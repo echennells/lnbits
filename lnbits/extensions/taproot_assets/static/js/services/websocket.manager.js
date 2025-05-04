@@ -157,9 +157,25 @@ const WebSocketManager = {
       const data = JSON.parse(event.data);
       console.log('Invoice WebSocket message received:', data);
       
-      // Process with InvoiceService and update store
+      // Process with InvoiceService to update store
       if (window.InvoiceService) {
-        InvoiceService.processWebSocketUpdate(data);
+        const processedInvoice = InvoiceService.processWebSocketUpdate(data);
+        
+        // Check if this is a paid invoice notification
+        if (processedInvoice && processedInvoice.status === 'paid') {
+          console.log('Paid invoice detected, triggering notification and UI update');
+          
+          // Call the Vue app's handlePaidInvoice method directly
+          if (window.app && typeof window.app.handlePaidInvoice === 'function') {
+            console.log('Calling app.handlePaidInvoice directly');
+            window.app.handlePaidInvoice(processedInvoice);
+          } 
+          // Fallback to notification service if app method not available
+          else if (window.NotificationService) {
+            console.log('Fallback: using NotificationService.notifyInvoicePaid');
+            NotificationService.notifyInvoicePaid(processedInvoice);
+          }
+        }
       }
     } catch (error) {
       console.error('Error handling invoice WebSocket message:', error);
@@ -178,7 +194,26 @@ const WebSocketManager = {
       
       // Process with PaymentService and update store
       if (window.PaymentService) {
-        PaymentService.processWebSocketUpdate(data);
+        const processedPayment = PaymentService.processWebSocketUpdate(data);
+        
+        // Check if this is a completed payment notification
+        if (processedPayment && processedPayment.status === 'completed') {
+          console.log('Completed payment detected, triggering UI update');
+          
+          // Call the Vue app's getAssets method directly to refresh assets
+          if (window.app && typeof window.app.getAssets === 'function') {
+            console.log('Calling app.getAssets directly to refresh balances');
+            window.app.getAssets();
+          }
+          // Fallback to using the store
+          else {
+            console.log('Fallback: using store to refresh assets');
+            const wallet = taprootStore.getters.getCurrentWallet();
+            if (wallet && window.AssetService) {
+              AssetService.getAssets(wallet);
+            }
+          }
+        }
       }
     } catch (error) {
       console.error('Error handling payment WebSocket message:', error);
@@ -195,14 +230,20 @@ const WebSocketManager = {
       const data = JSON.parse(event.data);
       console.log('Balance WebSocket message received:', data);
       
-      // Update the assets in store
+      // Update the assets when we receive a balance update
       if (data.type === 'assets_update' && Array.isArray(data.data)) {
-        // Get current wallet from store
-        const wallet = taprootStore.getters.getCurrentWallet();
-        
-        // Refresh from API if we have a wallet
-        if (wallet) {
-          AssetService.getAssets(wallet);
+        // Call the Vue app's getAssets method directly
+        if (window.app && typeof window.app.getAssets === 'function') {
+          console.log('Calling app.getAssets directly to refresh balances from balance update');
+          window.app.getAssets();
+        }
+        // Fallback to using the store
+        else {
+          console.log('Fallback: using store to refresh assets from balance update');
+          const wallet = taprootStore.getters.getCurrentWallet();
+          if (wallet) {
+            AssetService.getAssets(wallet);
+          }
         }
       }
     } catch (error) {

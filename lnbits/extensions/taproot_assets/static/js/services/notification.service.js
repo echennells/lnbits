@@ -13,7 +13,7 @@ const NotificationService = {
     if (window.LNbits && window.LNbits.utils && window.LNbits.utils.notifySuccess) {
       window.LNbits.utils.notifySuccess(message);
     } else if (window.Quasar) {
-      window.Quasar.notify({
+      window.Quasar.Notify.create({
         message: message,
         color: 'positive',
         icon: 'check_circle',
@@ -39,7 +39,7 @@ const NotificationService = {
         }
       });
     } else if (window.Quasar) {
-      window.Quasar.notify({
+      window.Quasar.Notify.create({
         message: message,
         color: 'negative',
         icon: 'error',
@@ -61,7 +61,7 @@ const NotificationService = {
         type: 'warning'
       });
     } else if (window.Quasar) {
-      window.Quasar.notify({
+      window.Quasar.Notify.create({
         message: message,
         color: 'warning',
         icon: 'warning',
@@ -83,7 +83,7 @@ const NotificationService = {
         type: 'info'
       });
     } else if (window.Quasar) {
-      window.Quasar.notify({
+      window.Quasar.Notify.create({
         message: message,
         color: 'info',
         icon: 'info',
@@ -148,6 +148,37 @@ const NotificationService = {
     const wallet = taprootStore.getters.getCurrentWallet();
     if (wallet) {
       AssetService.getAssets(wallet);
+    }
+    
+    // Check if we should close the invoice dialog
+    if (window.app && window.app.createdInvoiceDialog && window.app.createdInvoiceDialog.show && window.app.createdInvoice) {
+      console.log('Checking if we should close the invoice dialog...');
+      
+      // Try multiple ways to match the invoice
+      let matchFound = false;
+      
+      // Match by ID
+      if (window.app.createdInvoice.id === invoice.id) {
+        console.log('Match found by invoice ID');
+        matchFound = true;
+      }
+      // Match by payment hash
+      else if (window.app.createdInvoice.payment_hash === invoice.payment_hash) {
+        console.log('Match found by payment hash');
+        matchFound = true;
+      }
+      
+      // If the displayed invoice is the one that was paid, close the dialog
+      if (matchFound) {
+        console.log('CLOSING INVOICE DIALOG - Match found between displayed invoice and paid invoice');
+        // Close the dialog
+        window.app.createdInvoiceDialog.show = false;
+        
+        // Show a notification
+        this.showSuccess('Invoice has been paid');
+      } else {
+        console.log('Not closing dialog - displayed invoice does not match the paid one');
+      }
     }
   },
   

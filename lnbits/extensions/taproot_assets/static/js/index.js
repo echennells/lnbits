@@ -428,7 +428,7 @@ window.app = Vue.createApp({
       });
       
       DataUtils.downloadCSV(rows, 'taproot-asset-transactions.csv', 
-        notification => this.$q.notify(notification));
+        notification => NotificationService.showSuccess(notification.message));
     },
     
     exportTransactionsCSVWithDetails() {
@@ -462,7 +462,7 @@ window.app = Vue.createApp({
       });
       
       DataUtils.downloadCSV(rows, 'taproot-asset-transactions-details.csv', 
-        notification => this.$q.notify(notification));
+        notification => NotificationService.showSuccess(notification.message));
     },
     
     // Invoice dialog methods
@@ -741,39 +741,101 @@ window.app = Vue.createApp({
       
       if (!paymentRequest) {
         console.error('Missing payment_request in invoice:', invoice);
-        this.$q.notify({
-          message: 'Error: No invoice data found',
-          color: 'negative',
-          icon: 'error',
-          timeout: 2000
-        });
+        NotificationService.showError('Error: No invoice data found');
         return;
       }
       
       if (window.Quasar && window.Quasar.copyToClipboard) {
         window.Quasar.copyToClipboard(paymentRequest)
           .then(() => {
-            this.$q.notify({
-              message: 'Invoice copied to clipboard!',
-              color: 'positive',
-              icon: 'check',
-              timeout: 2000
-            });
+            NotificationService.showSuccess('Invoice copied to clipboard!');
           })
           .catch(err => {
             console.error('Failed to copy to clipboard:', err);
-            this.$q.notify({
-              message: 'Failed to copy to clipboard',
-              color: 'negative',
-              icon: 'error',
-              timeout: 2000
-            });
+            NotificationService.showError('Failed to copy to clipboard');
           });
       } else {
         // Fallback to DataUtils
         DataUtils.copyText(paymentRequest, notification => {
-          this.$q.notify(notification);
+          NotificationService.showSuccess(notification.message);
         });
+      }
+    },
+    
+    // Handle paid invoice from WebSocket notification
+    handlePaidInvoice(invoice) {
+      console.log('handlePaidInvoice called with invoice:', invoice);
+      
+      // Show notification
+      const assetName = this.getAssetNameFromId(invoice.asset_id) || 'Unknown Asset';
+      const amount = invoice.asset_amount || 0;
+      
+      // Use Quasar notification directly to ensure it shows
+      if (window.Quasar) {
+        window.Quasar.Notify.create({
+          message: `Invoice Paid: ${amount} ${assetName}`,
+          color: 'positive',
+          icon: 'check_circle',
+          timeout: 2000
+        });
+      }
+      
+      // Update the invoice in our local array
+      const index = this.invoices.findIndex(inv => inv.id === invoice.id || inv.payment_hash === invoice.payment_hash);
+      if (index !== -1) {
+        console.log('Found invoice to update at index:', index);
+        // Update the invoice status
+        this.invoices[index].status = 'paid';
+        this.invoices[index].paid_at = new Date().toISOString();
+        // Mark as updated for animation
+        this.invoices[index]._statusChanged = true;
+      } else {
+        console.log('Invoice not found in local array, will be updated on next refresh');
+      }
+      
+      // Force an immediate refresh of assets to update balances
+      console.log('Refreshing assets immediately');
+      this.getAssets();
+      
+      // Combine transactions to update the UI
+      this.combineTransactions();
+      
+      // Check if we should close the invoice dialog
+      if (this.createdInvoiceDialog.show && this.createdInvoice) {
+        console.log('Checking if we should close the invoice dialog...');
+        
+        // Try multiple ways to match the invoice
+        let matchFound = false;
+        
+        // Match by ID
+        if (this.createdInvoice.id === invoice.id) {
+          console.log('Match found by invoice ID');
+          matchFound = true;
+        }
+        // Match by payment hash
+        else if (this.createdInvoice.payment_hash === invoice.payment_hash) {
+          console.log('Match found by payment hash');
+          matchFound = true;
+        }
+        
+        // If the displayed invoice is the one that was paid, close the dialog
+        if (matchFound) {
+          console.log('CLOSING INVOICE DIALOG - Match found between displayed invoice and paid invoice');
+          // Close the dialog
+          this.createdInvoiceDialog.show = false;
+          
+          // Show a notification
+          if (window.Quasar) {
+            window.Quasar.Notify.create({
+              message: 'Invoice has been paid',
+              color: 'positive',
+              icon: 'check_circle',
+              timeout: 2000
+            });
+          }
+        } else {
+          console.log('Not closing dialog - displayed invoice does not match the paid one');
+        }
       }
     },
     
