@@ -788,13 +788,22 @@ window.app = Vue.createApp({
         this.invoices[index].paid_at = new Date().toISOString();
         // Mark as updated for animation
         this.invoices[index]._statusChanged = true;
+      } else {
+        // If not found in our array, fetch the invoices again
+        this.getInvoices();
       }
       
       // Force an immediate refresh of assets to update balances
       this.getAssets();
       
+      // Explicitly refresh transactions
+      this.refreshTransactions();
+      
       // Combine transactions to update the UI
       this.combineTransactions();
+      
+      // Apply filters after updating
+      this.applyFilters();
       
       // Check if we should close the invoice dialog
       if (this.createdInvoiceDialog.show && this.createdInvoice) {
@@ -836,8 +845,7 @@ window.app = Vue.createApp({
     
     refreshData() {
       this.getAssets();
-      this.getInvoices();
-      this.getPayments();
+      this.refreshTransactions();
     },
     
     startAutoRefresh() {
@@ -901,6 +909,18 @@ window.app = Vue.createApp({
       }
     });
     
+    // Watch invoices array for changes
+    this.$watch('invoices', () => {
+      this.combineTransactions();
+      this.applyFilters();
+    }, { deep: true });
+    
+    // Watch payments array for changes
+    this.$watch('payments', () => {
+      this.combineTransactions();
+      this.applyFilters();
+    }, { deep: true });
+    
     // Add watcher for global updatePayments flag (similar to core LNbits implementation)
     if (window.g) {
       this.$watch(() => window.g.updatePayments, (newVal, oldVal) => {
@@ -922,6 +942,9 @@ window.app = Vue.createApp({
             }
           }
         }
+        
+        // Force a refresh of transactions when updatePayments changes
+        this.refreshTransactions();
         
         // Force an immediate refresh of assets to update balances
         this.getAssets();

@@ -175,6 +175,10 @@ const WebSocketManager = {
           if (window.app && typeof window.app.handlePaidInvoice === 'function') {
             window.app.handlePaidInvoice(processedInvoice);
           } 
+          // Also explicitly refresh transactions
+          if (window.app && typeof window.app.refreshTransactions === 'function') {
+            window.app.refreshTransactions();
+          }
           // Fallback to notification service if app method not available
           else if (window.NotificationService) {
             NotificationService.notifyInvoicePaid(processedInvoice);
@@ -209,6 +213,11 @@ const WebSocketManager = {
             console.log('Calling app.getAssets directly to refresh balances');
             window.app.getAssets();
           }
+          // Call refreshTransactions to update transaction list
+          if (window.app && typeof window.app.refreshTransactions === 'function') {
+            console.log('Calling app.refreshTransactions directly to refresh transaction list');
+            window.app.refreshTransactions();
+          }
           // Fallback to using the store
           else {
             console.log('Fallback: using store to refresh assets');
@@ -240,6 +249,11 @@ const WebSocketManager = {
         if (window.app && typeof window.app.getAssets === 'function') {
           console.log('Calling app.getAssets directly to refresh balances from balance update');
           window.app.getAssets();
+        }
+        // Also refresh transactions to ensure consistency
+        if (window.app && typeof window.app.refreshTransactions === 'function') {
+          console.log('Calling app.refreshTransactions directly from balance update');
+          window.app.refreshTransactions();
         }
         // Fallback to using the store
         else {
