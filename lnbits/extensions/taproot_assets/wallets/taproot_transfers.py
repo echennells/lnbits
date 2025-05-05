@@ -27,180 +27,6 @@ from ..websocket import ws_manager
 # Singleton tracking for monitoring instances
 _monitoring_instances = set()
 
-# Module-level direct settlement function for actual Lightning payments
-async def direct_settle_invoice(node, payment_hash: str) -> bool:
-    """
-    Settle an invoice directly using the stored preimage.
-    This is for actual Lightning Network payments.
-    
-    Args:
-        node: The node instance
-        payment_hash: The payment hash of the invoice to settle
-        
-    Returns:
-        bool: True if settled successfully, False otherwise
-    """
-    try:
-        # First check if invoice is already settled in the database
-        invoice = await get_invoice_by_payment_hash(payment_hash)
-        if invoice and invoice.status == "paid":
-            logger.debug(f"Invoice {payment_hash} is already marked as paid in the database, skipping settlement")
-            return True
-
-        logger.info(f"Settling Lightning invoice for payment hash {payment_hash}")
-
-        # Get the preimage for this payment hash
-        preimage_hex = node._get_preimage(payment_hash)
-
-        if not preimage_hex:
-            logger.error(f"No preimage found for payment hash {payment_hash}")
-            return False
-
-        # Convert the preimage to bytes
-        preimage_bytes = bytes.fromhex(preimage_hex)
-
-        # Create settlement request
-        settle_request = invoices_pb2.SettleInvoiceMsg(
-            preimage=preimage_bytes
-        )
-
-        # Settle the invoice
-        await node.invoices_stub.SettleInvoice(settle_request)
-        logger.info(f"Invoice {payment_hash} successfully settled")
-
-        # Update the invoice status in the database
-        if invoice:
-            updated_invoice = await update_invoice_status(invoice.id, "paid")
-            if updated_invoice and updated_invoice.status == "paid":
-                logger.info(f"Database updated: Invoice {invoice.id} status set to paid")
-                
-                # Record asset transaction and update balance
-                try:
-                    await record_asset_transaction(
-                        wallet_id=invoice.wallet_id,
-                        asset_id=invoice.asset_id,
-                        amount=invoice.asset_amount,
-                        tx_type="credit",  # Incoming payment
-                        payment_hash=payment_hash,
-                        memo=invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
-                    )
-                    logger.info(f"Asset balance updated for asset_id={invoice.asset_id}, amount={invoice.asset_amount}")
-                except Exception as balance_err:
-                    logger.error(f"Failed to update asset balance: {str(balance_err)}")
-                
-                # ADDED LOGGING: Get current asset balances for debugging
-                logger.info(f"BALANCE UPDATE: Invoice {invoice.id} paid, trying to find asset: {invoice.asset_id}")
-                assets = await node.list_assets()
-                if assets:
-                    for asset in assets:
-                        if asset.get('channel_info'):
-                            logger.info(f"BALANCE UPDATE: Asset {asset.get('name')} (ID: {asset.get('asset_id')[:10]}...) Balance: {asset.get('channel_info', {}).get('local_balance')}")
-                
-                # Send WebSocket notification of the invoice update
-                await ws_manager.notify_invoice_update(
-                    invoice.user_id, 
-                    {
-                        "id": invoice.id,
-                        "payment_hash": payment_hash,
-                        "status": "paid",
-                        "asset_id": invoice.asset_id,
-                        "asset_amount": invoice.asset_amount,
-                        "paid_at": updated_invoice.paid_at.isoformat() if updated_invoice.paid_at else None
-                    }
-                )
-                
-                # Fetch assets to update balances
-                try:
-                    assets = await node.list_assets()
-                    # Only send the channel assets which have balances
-                    filtered_assets = [asset for asset in assets if asset.get("channel_info")]
-                    if filtered_assets:
-                        # ADDED LOGGING: Show what we're sending via WebSocket
-                        logger.info(f"BALANCE UPDATE: Sending {len(filtered_assets)} assets via WebSocket")
-                        for asset in filtered_assets:
-                            if asset.get('channel_info'):
-                                logger.info(f"BALANCE UPDATE: Sending asset {asset.get('name')} with balance {asset.get('channel_info').get('local_balance')}")
-                        
-                        await ws_manager.notify_assets_update(invoice.user_id, filtered_assets)
-                except Exception as asset_err:
-                    logger.error(f"Failed to fetch assets for WebSocket update: {str(asset_err)}")
-            else:
-                logger.error(f"Failed to update invoice status in database")
-        else:
-            logger.warning(f"No invoice found with payment_hash: {payment_hash}")
-
-        return True
-
-    except grpc.aio.AioRpcError as e:
-        # If invoice is already settled, consider it success
-        if "invoice is already settled" in e.details().lower():
-            logger.info(f"Invoice {payment_hash} was already settled on the node")
-            
-            # Still update the database if needed
-            if invoice and invoice.status != "paid":
-                updated_invoice = await update_invoice_status(invoice.id, "paid")
-                logger.info(f"Updated previously settled invoice {invoice.id} status in database")
-                
-                # Record asset transaction and update balance for already settled invoice
-                try:
-                    await record_asset_transaction(
-                        wallet_id=invoice.wallet_id,
-                        asset_id=invoice.asset_id,
-                        amount=invoice.asset_amount,
-                        tx_type="credit",  # Incoming payment
-                        payment_hash=payment_hash,
-                        memo=invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
-                    )
-                    logger.info(f"Asset balance updated for previously settled invoice, asset_id={invoice.asset_id}, amount={invoice.asset_amount}")
-                except Exception as balance_err:
-                    logger.error(f"Failed to update asset balance for settled invoice: {str(balance_err)}")
-                
-                # ADDED LOGGING: Get current asset balances for already settled invoices
-                logger.info(f"BALANCE UPDATE (already settled): Invoice {invoice.id} paid, trying to find asset: {invoice.asset_id}")
-                assets = await node.list_assets()
-                if assets:
-                    for asset in assets:
-                        if asset.get('channel_info'):
-                            logger.info(f"BALANCE UPDATE (already settled): Asset {asset.get('name')} (ID: {asset.get('asset_id')[:10]}...) Balance: {asset.get('channel_info', {}).get('local_balance')}")
-                
-                # Send WebSocket notification for this case too
-                if updated_invoice:
-                    await ws_manager.notify_invoice_update(
-                        invoice.user_id, 
-                        {
-                            "id": invoice.id,
-                            "payment_hash": payment_hash,
-                            "status": "paid",
-                            "asset_id": invoice.asset_id,
-                            "asset_amount": invoice.asset_amount,
-                            "paid_at": updated_invoice.paid_at.isoformat() if updated_invoice.paid_at else None
-                        }
-                    )
-                    
-                    # Also update assets for balance changes
-                    try:
-                        assets = await node.list_assets()
-                        filtered_assets = [asset for asset in assets if asset.get("channel_info")]
-                        if filtered_assets:
-                            # ADDED LOGGING: Show what we're sending
-                            logger.info(f"BALANCE UPDATE (already settled): Sending {len(filtered_assets)} assets via WebSocket")
-                            for asset in filtered_assets:
-                                if asset.get('channel_info'):
-                                    logger.info(f"BALANCE UPDATE (already settled): Sending asset {asset.get('name')} with balance {asset.get('channel_info').get('local_balance')}")
-                            
-                            await ws_manager.notify_assets_update(invoice.user_id, filtered_assets)
-                    except Exception as asset_err:
-                        logger.error(f"Failed to fetch assets for WebSocket update: {str(asset_err)}")
-            
-            return True
-            
-        logger.error(f"gRPC error in settle_invoice: {e.code()}: {e.details()}")
-        return False
-    except Exception as e:
-        logger.error(f"Failed to settle invoice: {str(e)}")
-        return False
-
-
 class TaprootTransferManager:
     """
     Handles Taproot Asset transfer monitoring.
@@ -223,95 +49,144 @@ class TaprootTransferManager:
         _monitoring_instances.add(self)
         logger.info("TaprootTransferManager initialized")
 
-    # MOVED INSIDE CLASS: settle_internal_payment function is now a class method
-    async def settle_internal_payment(self, node, payment_hash: str) -> bool:
+    async def settle_invoice(self, payment_hash: str, is_internal: bool = False) -> bool:
         """
-        Settle an internal payment by directly updating database records.
-        This is for transfers between users on the same LNbits node (no Lightning Network payment).
+        Settle an invoice using the stored preimage.
         
         Args:
-            node: The node instance
             payment_hash: The payment hash of the invoice to settle
+            is_internal: Whether this is an internal payment (between users on this node)
             
         Returns:
             bool: True if settled successfully, False otherwise
         """
         try:
-            # Check if invoice exists and get details
+            # First check if invoice is already settled in the database
             invoice = await get_invoice_by_payment_hash(payment_hash)
-            if not invoice:
-                logger.error(f"No invoice found for payment hash: {payment_hash}")
-                return False
-                
-            # Check if invoice is already paid
-            if invoice.status == "paid":
-                logger.debug(f"Invoice {payment_hash} is already marked as paid in the database")
+            if invoice and invoice.status == "paid":
+                logger.debug(f"Invoice {payment_hash} is already marked as paid in the database, skipping settlement")
                 return True
+
+            # Handle differently based on payment type
+            if is_internal:
+                # For internal payments, we just update the database
+                logger.info(f"Processing internal payment for {payment_hash}")
+                # Get or generate a preimage
+                preimage_hex = self.node._get_preimage(payment_hash)
+                if not preimage_hex:
+                    logger.warning(f"No preimage found for payment hash {payment_hash}, generating one")
+                    # Generate a preimage if one doesn't exist
+                    preimage = hashlib.sha256(f"{payment_hash}_{time.time()}".encode()).digest()
+                    preimage_hex = preimage.hex()
+                    # Store it
+                    self.node._store_preimage(payment_hash, preimage_hex)
                 
-            # Get the preimage (for record keeping)
-            preimage_hex = node._get_preimage(payment_hash)
-            if not preimage_hex:
-                logger.warning(f"No preimage found for payment hash {payment_hash}, generating one")
-                # Generate a preimage if one doesn't exist
-                preimage = hashlib.sha256(f"{payment_hash}_{time.time()}".encode()).digest()
-                preimage_hex = preimage.hex()
-                # Store it
-                node._store_preimage(payment_hash, preimage_hex)
-            
-            # For internal payments, we don't need to call the gRPC SettleInvoice
-            # Just update the database records directly
-            
-            # Update invoice status to paid
-            updated_invoice = await update_invoice_status(invoice.id, "paid")
-            if not updated_invoice or updated_invoice.status != "paid":
-                logger.error(f"Failed to update invoice status in database")
-                return False
-                
-            logger.info(f"Database updated: Invoice {invoice.id} status set to paid (internal payment)")
-            
-            # Only record the credit transaction for the recipient here
-            # The debit transaction for the sender will be handled in taproot_payments.py
-            try:
-                await record_asset_transaction(
-                    wallet_id=invoice.wallet_id,
-                    asset_id=invoice.asset_id,
-                    amount=invoice.asset_amount,
-                    tx_type="credit",  # Incoming payment (recipient)
-                    payment_hash=payment_hash,
-                    memo=invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
+                # Update invoice status to paid
+                updated_invoice = await update_invoice_status(invoice.id, "paid")
+                if not updated_invoice or updated_invoice.status != "paid":
+                    logger.error(f"Failed to update invoice status in database")
+                    return False
+                    
+                logger.info(f"Database updated: Invoice {invoice.id} status set to paid (internal payment)")
+            else:
+                # For Lightning payments, settle the invoice on the node
+                logger.info(f"Settling Lightning invoice for payment hash {payment_hash}")
+
+                # Get the preimage for this payment hash
+                preimage_hex = self.node._get_preimage(payment_hash)
+
+                if not preimage_hex:
+                    logger.error(f"No preimage found for payment hash {payment_hash}")
+                    return False
+
+                # Convert the preimage to bytes
+                preimage_bytes = bytes.fromhex(preimage_hex)
+
+                # Create settlement request
+                settle_request = invoices_pb2.SettleInvoiceMsg(
+                    preimage=preimage_bytes
                 )
-                logger.info(f"Recipient balance updated for asset_id={invoice.asset_id}, amount={invoice.asset_amount}")
-            except Exception as balance_err:
-                logger.error(f"Failed to update recipient balance: {str(balance_err)}")
-                # Continue even if balance update fails
+
+                try:
+                    # Settle the invoice
+                    await self.node.invoices_stub.SettleInvoice(settle_request)
+                    logger.info(f"Invoice {payment_hash} successfully settled")
+                except grpc.aio.AioRpcError as e:
+                    # If invoice is already settled, consider it success
+                    if "invoice is already settled" in e.details().lower():
+                        logger.info(f"Invoice {payment_hash} was already settled on the node")
+                    else:
+                        logger.error(f"gRPC error in settle_invoice: {e.code()}: {e.details()}")
+                        return False
                 
-            # Send WebSocket notification of the invoice update
-            await ws_manager.notify_invoice_update(
-                invoice.user_id, 
-                {
-                    "id": invoice.id,
-                    "payment_hash": payment_hash,
-                    "status": "paid",
-                    "asset_id": invoice.asset_id,
-                    "asset_amount": invoice.asset_amount,
-                    "paid_at": updated_invoice.paid_at.isoformat() if updated_invoice.paid_at else None
-                }
-            )
+                # Update the invoice status in the database
+                if invoice:
+                    updated_invoice = await update_invoice_status(invoice.id, "paid")
+                    if not updated_invoice or updated_invoice.status != "paid":
+                        logger.error(f"Failed to update invoice status in database")
+                        return False
+                    logger.info(f"Database updated: Invoice {invoice.id} status set to paid")
+                else:
+                    logger.warning(f"No invoice found with payment_hash: {payment_hash}")
+                    return True  # Still consider success if settled on node
+
+            # Record asset transaction and update balance
+            if invoice:
+                try:
+                    await record_asset_transaction(
+                        wallet_id=invoice.wallet_id,
+                        asset_id=invoice.asset_id,
+                        amount=invoice.asset_amount,
+                        tx_type="credit",  # Incoming payment
+                        payment_hash=payment_hash,
+                        memo=invoice.memo or f"Received {invoice.asset_amount} of asset {invoice.asset_id}"
+                    )
+                    logger.info(f"Asset balance updated for asset_id={invoice.asset_id}, amount={invoice.asset_amount}")
+                except Exception as balance_err:
+                    logger.error(f"Failed to update asset balance: {str(balance_err)}")
+                
+                # ADDED LOGGING: Get current asset balances for debugging
+                logger.info(f"BALANCE UPDATE: Invoice {invoice.id} paid, trying to find asset: {invoice.asset_id}")
+                assets = await self.node.list_assets()
+                if assets:
+                    for asset in assets:
+                        if asset.get('channel_info'):
+                            logger.info(f"BALANCE UPDATE: Asset {asset.get('name')} (ID: {asset.get('asset_id')[:10]}...) Balance: {asset.get('channel_info', {}).get('local_balance')}")
+                
+                # Send WebSocket notification of the invoice update
+                if updated_invoice:
+                    await ws_manager.notify_invoice_update(
+                        invoice.user_id, 
+                        {
+                            "id": invoice.id,
+                            "payment_hash": payment_hash,
+                            "status": "paid",
+                            "asset_id": invoice.asset_id,
+                            "asset_amount": invoice.asset_amount,
+                            "paid_at": updated_invoice.paid_at.isoformat() if updated_invoice.paid_at else None
+                        }
+                    )
+                    
+                    # Fetch assets to update balances
+                    try:
+                        assets = await self.node.list_assets()
+                        # Only send the channel assets which have balances
+                        filtered_assets = [asset for asset in assets if asset.get("channel_info")]
+                        if filtered_assets:
+                            # ADDED LOGGING: Show what we're sending via WebSocket
+                            logger.info(f"BALANCE UPDATE: Sending {len(filtered_assets)} assets via WebSocket")
+                            for asset in filtered_assets:
+                                if asset.get('channel_info'):
+                                    logger.info(f"BALANCE UPDATE: Sending asset {asset.get('name')} with balance {asset.get('channel_info').get('local_balance')}")
+                            
+                            await ws_manager.notify_assets_update(invoice.user_id, filtered_assets)
+                    except Exception as asset_err:
+                        logger.error(f"Failed to fetch assets for WebSocket update: {str(asset_err)}")
             
-            # Try to update the asset displays via WebSocket
-            try:
-                assets = await node.list_assets()
-                filtered_assets = [asset for asset in assets if asset.get("channel_info")]
-                if filtered_assets:
-                    logger.info(f"Sending {len(filtered_assets)} assets via WebSocket after internal payment")
-                    await ws_manager.notify_assets_update(invoice.user_id, filtered_assets)
-            except Exception as asset_err:
-                logger.error(f"Failed to update assets display: {str(asset_err)}")
-                
             return True
-            
+
         except Exception as e:
-            logger.error(f"Failed to settle internal payment: {str(e)}")
+            logger.error(f"Failed to settle invoice: {str(e)}")
             return False
 
     async def monitor_asset_transfers(self):
@@ -368,12 +243,7 @@ class TaprootTransferManager:
                     # Attempt settlement with appropriate method
                     logger.info(f"Found unprocessed payment, attempting settlement")
                     
-                    if is_internal:
-                        # Use database-only settlement for internal payments
-                        success = await self.settle_internal_payment(self.node, payment_hash)
-                    else:
-                        # Use Lightning Network settlement for external payments
-                        success = await direct_settle_invoice(self.node, payment_hash)
+                    success = await self.settle_invoice(payment_hash, is_internal)
                     
                     # Track settlement status
                     if success:
@@ -525,8 +395,8 @@ class TaprootTransferManager:
                     else:
                         logger.info(f"Internal payment detected for {payment_hash}, using database settlement")
                     
-                    # Just use database settlement for internal payments
-                    success = await self.settle_internal_payment(self.node, payment_hash)
+                    # Use database settlement for internal payments
+                    success = await self.settle_invoice(payment_hash, is_internal=True)
                     if success:
                         TaprootTransferManager._settled_payment_hashes.add(payment_hash)
                         logger.info(f"Internal payment successfully settled: {payment_hash}")
@@ -556,7 +426,7 @@ class TaprootTransferManager:
                         self.node.invoice_manager._store_script_key_mapping(script_key_hex, payment_hash)
                     
                     # Attempt settlement with Lightning Network
-                    success = await direct_settle_invoice(self.node, payment_hash)
+                    success = await self.settle_invoice(payment_hash, is_internal=False)
                     
                     # Track settlement status
                     if success:
@@ -627,30 +497,24 @@ class TaprootTransferManager:
             # Check if this is an internal payment
             is_internal = await is_internal_payment(payment_hash)
             
-            if is_internal:
-                # Use database settlement for internal payments
-                success = await self.settle_internal_payment(self.node, payment_hash)
-            else:
-                # Try to get the preimage directly from the payment hash
-                preimage_hex = self.node._get_preimage(payment_hash)
-                
-                # If not found and script key is provided, try to look up the payment hash
-                if not preimage_hex and script_key:
-                    mapped_payment_hash = self.node.invoice_manager._get_payment_hash_from_script_key(script_key)
-                    if mapped_payment_hash:
-                        preimage_hex = self.node._get_preimage(mapped_payment_hash)
-                
-                # Use direct settle for external payments
-                if preimage_hex:
-                    success = await direct_settle_invoice(self.node, payment_hash)
-                else:
-                    logger.error(f"No preimage found for {payment_hash}")
-                    return False
-                    
-            if success:
-                TaprootTransferManager._settled_payment_hashes.add(payment_hash)
+            # Try to get the preimage directly from the payment hash
+            preimage_hex = self.node._get_preimage(payment_hash)
             
-            return success
+            # If not found and script key is provided, try to look up the payment hash
+            if not preimage_hex and script_key:
+                mapped_payment_hash = self.node.invoice_manager._get_payment_hash_from_script_key(script_key)
+                if mapped_payment_hash:
+                    preimage_hex = self.node._get_preimage(mapped_payment_hash)
+            
+            # If we found a preimage or this is an internal payment
+            if preimage_hex or is_internal:
+                success = await self.settle_invoice(payment_hash, is_internal)
+                if success:
+                    TaprootTransferManager._settled_payment_hashes.add(payment_hash)
+                return success
+            else:
+                logger.error(f"No preimage found for {payment_hash}")
+                return False
                 
         except Exception as e:
             logger.error(f"Failed to manually settle invoice: {str(e)}")

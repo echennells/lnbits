@@ -152,36 +152,6 @@ async def api_internal_payment(
     return await PaymentService.process_payment(data, wallet, force_payment_type="internal")
 
 
-# Keep self-payment endpoint for backward compatibility
-@taproot_assets_api_router.post("/self-payment", status_code=HTTPStatus.OK)
-@handle_api_error
-async def api_self_payment(
-    data: TaprootPaymentRequest,
-    wallet: WalletTypeInfo = Depends(require_admin_key),
-):
-    """Process a self-payment for a Taproot Asset (deprecated, use internal-payment instead)."""
-    log_info(API, f"Processing self-payment request for wallet {wallet.wallet.id} (deprecated endpoint)")
-    
-    # Parse the invoice to get payment details
-    parsed_invoice = await PaymentService.parse_invoice(data.payment_request)
-    
-    # Determine the payment type
-    payment_type = await PaymentService.determine_payment_type(parsed_invoice.payment_hash, wallet.wallet.user)
-    
-    # Verify this is an internal payment
-    if payment_type not in ["internal", "self"]:
-        log_warning(API, f"Not an internal payment. Invoice was not created on this node. Payment hash: {parsed_invoice.payment_hash}")
-        raise_http_exception(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail="Not an internal payment. Invoice was not created on this node."
-        )
-    
-    # If it's a self-payment, process it as such, otherwise as internal
-    force_type = "self" if payment_type == "self" else "internal"
-    log_info(API, f"Processing as {force_type} payment")
-    return await PaymentService.process_payment(data, wallet, force_payment_type=force_type)
-
-
 @taproot_assets_api_router.get("/payments", status_code=HTTPStatus.OK)
 @handle_api_error
 async def api_list_payments(

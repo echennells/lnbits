@@ -56,12 +56,6 @@ function processInternalPayment(adminkey, payload) {
     .request('POST', '/taproot_assets/api/v1/taproot/internal-payment', adminkey, payload);
 }
 
-// Process a self-payment (deprecated - use processInternalPayment instead)
-function processSelfPayment(adminkey, payload) {
-  return LNbits.api
-    .request('POST', '/taproot_assets/api/v1/taproot/self-payment', adminkey, payload);
-}
-
 // Parse an invoice using the server-side endpoint
 function parseInvoice(adminkey, paymentRequest) {
   return LNbits.api

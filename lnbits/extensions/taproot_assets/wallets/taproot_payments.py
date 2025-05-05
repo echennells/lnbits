@@ -308,9 +308,9 @@ class TaprootPaymentManager:
             # Check if this is a self-payment (same user) or an internal payment (different user)
             is_self_pay = invoice.user_id == self.node.wallet.user
             
-            # CRITICAL FIX: Call settle_internal_payment to handle the receiver's credit transaction
-            # Use the transfer_manager's settle_internal_payment method
-            success = await self.node.transfer_manager.settle_internal_payment(self.node, payment_hash)
+            # Call settle_invoice to handle the receiver's credit transaction
+            # Use the transfer_manager's settle_invoice method
+            success = await self.node.transfer_manager.settle_invoice(payment_hash, is_internal=True)
             if not success:
                 logger.error(f"Failed to process receiver's transaction")
                 raise Exception("Failed to update receiver's balance")
