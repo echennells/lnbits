@@ -1,6 +1,6 @@
 /**
  * Data Utilities for Taproot Assets extension
- * Shared functions for data transformation and formatting
+ * Simplified version with streamlined code paths
  */
 
 const DataUtils = {
@@ -12,12 +12,8 @@ const DataUtils = {
   formatDate(dateStr) {
     try {
       const date = dateStr instanceof Date ? dateStr : new Date(dateStr);
-      if (window.Quasar && window.Quasar.date && window.Quasar.date.formatDate) {
-        return window.Quasar.date.formatDate(date, 'YYYY-MM-DD HH:mm:ss');
-      } else {
-        // Fallback date formatter
-        return date.toISOString().replace('T', ' ').substring(0, 19);
-      }
+      // Quasar is always available in the LNbits environment, so we can just use it directly
+      return window.Quasar.date.formatDate(date, 'YYYY-MM-DD HH:mm:ss');
     } catch (e) {
       console.error('Error formatting date:', e);
       return dateStr || 'Unknown date';
@@ -46,10 +42,10 @@ const DataUtils = {
       } else if (diffMs < 604800000) { // less than a week
         const days = Math.floor(diffMs / 86400000);
         return `${days} day${days > 1 ? 's' : ''} ago`;
-      } else {
-        // Just use formatted date for older items
-        return this.formatDate(date);
       }
+      
+      // Just use formatted date for older items
+      return this.formatDate(date);
     } catch (e) {
       console.error('Error calculating relative time:', e);
       return 'Unknown time';
@@ -84,7 +80,6 @@ const DataUtils = {
         return 'warning';
       case 'expired':
         return 'negative';
-      case 'cancelled':
       default:
         return 'grey';
     }
@@ -99,14 +94,8 @@ const DataUtils = {
   formatAssetBalance(balance, decimals = 0) {
     if (balance === undefined || balance === null) return '0';
     
-    // Convert to number if it's a string
     const amount = typeof balance === 'string' ? parseFloat(balance) : balance;
-    
-    // Handle NaN or non-numeric values
-    if (isNaN(amount)) return '0';
-    
-    // Format with the specified number of decimal places
-    return amount.toFixed(decimals);
+    return isNaN(amount) ? '0' : amount.toFixed(decimals);
   },
   
   /**
@@ -117,19 +106,12 @@ const DataUtils = {
   parseAssetValue(value) {
     if (!value) return 0;
     
-    // Handle string values
     if (typeof value === 'string') {
-      // Remove any non-numeric characters except decimal point
       const cleanValue = value.replace(/[^0-9.]/g, '');
       return parseFloat(cleanValue) || 0;
     }
     
-    // Handle numeric values
-    if (typeof value === 'number') {
-      return isNaN(value) ? 0 : value;
-    }
-    
-    return 0;
+    return typeof value === 'number' ? (isNaN(value) ? 0 : value) : 0;
   },
   
   /**
@@ -152,86 +134,33 @@ const DataUtils = {
     }
     
     try {
-      // Use the Quasar copy utility if available
-      if (window.Quasar && window.Quasar.copyToClipboard) {
-        window.Quasar.copyToClipboard(text)
-          .then(() => {
-            if (notifyCallback) {
-              notifyCallback({
-                message: 'Copied to clipboard',
-                color: 'positive',
-                icon: 'check',
-                timeout: 1000
-              });
-            }
-          })
-          .catch(err => {
-            console.error('Failed to copy using Quasar:', err);
-            this._fallbackCopyText(text, notifyCallback);
-          });
-        return true;
-      }
+      // LNbits environment always has Quasar available, so use it directly
+      window.Quasar.copyToClipboard(text)
+        .then(() => {
+          if (notifyCallback) {
+            notifyCallback({
+              message: 'Copied to clipboard',
+              color: 'positive',
+              icon: 'check',
+              timeout: 1000
+            });
+          }
+        })
+        .catch(err => {
+          console.error('Failed to copy text:', err);
+          if (notifyCallback) {
+            notifyCallback({
+              message: 'Failed to copy to clipboard',
+              color: 'negative',
+              icon: 'error',
+              timeout: 1000
+            });
+          }
+        });
       
-      // Or use the LNbits utility if available
-      if (window.LNbits && window.LNbits.utils && window.LNbits.utils.copy) {
-        window.LNbits.utils.copy(text);
-        
-        if (notifyCallback) {
-          notifyCallback({
-            message: 'Copied to clipboard',
-            color: 'positive',
-            icon: 'check',
-            timeout: 1000
-          });
-        }
-        
-        return true;
-      }
-      
-      // Fallback to document.execCommand
-      return this._fallbackCopyText(text, notifyCallback);
-      
+      return true;
     } catch (error) {
       console.error('Failed to copy text:', error);
-      
-      if (notifyCallback) {
-        notifyCallback({
-          message: 'Failed to copy to clipboard',
-          color: 'negative',
-          icon: 'error',
-          timeout: 1000
-        });
-      }
-      
-      return false;
-    }
-  },
-  
-  /**
-   * Fallback copy method using the legacy execCommand
-   * @private
-   */
-  _fallbackCopyText(text, notifyCallback) {
-    try {
-      const textArea = document.createElement('textarea');
-      textArea.value = text;
-      document.body.appendChild(textArea);
-      textArea.select();
-      const successful = document.execCommand('copy');
-      document.body.removeChild(textArea);
-      
-      if (notifyCallback) {
-        notifyCallback({
-          message: successful ? 'Copied to clipboard' : 'Failed to copy',
-          color: successful ? 'positive' : 'negative',
-          icon: successful ? 'check' : 'error',
-          timeout: 1000
-        });
-      }
-      
-      return successful;
-    } catch (e) {
-      console.error('Failed to copy text using fallback method:', e);
       
       if (notifyCallback) {
         notifyCallback({
@@ -253,7 +182,7 @@ const DataUtils = {
    * @returns {Array} - Combined and sorted transactions
    */
   combineTransactions(invoices, payments) {
-    // Ensure we have arrays to work with
+    // Using the array constructor directly to create empty arrays is cleaner
     const safeInvoices = Array.isArray(invoices) ? invoices : [];
     const safePayments = Array.isArray(payments) ? payments : [];
     
@@ -279,17 +208,17 @@ const DataUtils = {
     let result = [...transactions];
     
     // Apply direction filter
-    if (filters && filters.direction && filters.direction !== 'all') {
+    if (filters?.direction && filters.direction !== 'all') {
       result = result.filter(tx => tx.direction === filters.direction);
     }
     
     // Apply status filter
-    if (filters && filters.status && filters.status !== 'all') {
+    if (filters?.status && filters.status !== 'all') {
       result = result.filter(tx => tx.status === filters.status);
     }
     
     // Apply search text filter
-    if (searchData && searchData.searchText) {
+    if (searchData?.searchText) {
       const searchLower = searchData.searchText.toLowerCase();
       result = result.filter(tx => 
         (tx.memo && tx.memo.toLowerCase().includes(searchLower)) ||
