@@ -1,6 +1,6 @@
 /**
  * Invoice Service for Taproot Assets extension
- * Simplified and optimized to work with the WebSocket manager
+ * Updated to use consolidated DataUtils
  */
 
 const InvoiceService = {
@@ -85,7 +85,7 @@ const InvoiceService = {
       // Add asset name to the created invoice for better UX
       createdInvoice.asset_name = assetData.name || 'Unknown';
       
-      // Process invoice for store
+      // Process invoice for store - use DataUtils for mapping
       const mappedInvoice = this._mapInvoice(createdInvoice);
       
       // Add to store
@@ -99,7 +99,7 @@ const InvoiceService = {
   },
   
   /**
-   * Process and transform an invoice object
+   * Process and transform an invoice object using DataUtils
    * @param {Object} invoice - Raw invoice data
    * @returns {Object} - Processed invoice
    * @private
@@ -107,35 +107,11 @@ const InvoiceService = {
   _mapInvoice(invoice) {
     if (!invoice) return null;
     
-    // Create a clean copy
-    const mapped = {...invoice};
+    // Use DataUtils for mapping transaction data
+    const mapped = DataUtils.mapTransaction(invoice, 'invoice');
     
-    // Set type and direction
-    mapped.type = 'invoice';
-    mapped.direction = 'incoming';
-    
-    // Format date using DataUtils
-    if (mapped.created_at) {
-      try {
-        mapped.date = DataUtils.formatDate(mapped.created_at);
-        mapped.timeFrom = DataUtils.getRelativeTime(mapped.created_at);
-      } catch (e) {
-        console.error('Error formatting date:', e);
-        mapped.date = 'Unknown';
-        mapped.timeFrom = 'Unknown';
-      }
-    }
-    
-    // Ensure extra exists and contains asset info
-    mapped.extra = mapped.extra || {};
-    
-    if (!mapped.extra.asset_amount && mapped.asset_amount) {
-      mapped.extra.asset_amount = mapped.asset_amount;
-    }
-    
-    if (!mapped.extra.asset_id && mapped.asset_id) {
-      mapped.extra.asset_id = mapped.asset_id;
-    }
+    // Add any invoice-specific fields not handled by DataUtils
+    // (none needed at the moment as DataUtils handles all required fields)
     
     return mapped;
   },
@@ -150,7 +126,7 @@ const InvoiceService = {
       return null;
     }
     
-    // Map the invoice
+    // Map the invoice using DataUtils
     const invoice = this._mapInvoice(data.data);
     
     // Add to store

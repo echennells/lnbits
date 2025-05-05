@@ -1,6 +1,6 @@
 /**
- * Data Utilities for Taproot Assets extension
- * Simplified version with streamlined code paths
+ * Consolidated Data Utilities for Taproot Assets extension
+ * Combines all common utility functions in one place
  */
 
 const DataUtils = {
@@ -117,17 +117,22 @@ const DataUtils = {
   /**
    * Copy text to clipboard
    * @param {string} text - Text to copy
-   * @param {Function} notifyCallback - Optional callback for notification
+   * @param {Function|string} notifyCallback - Callback for notification or message string
    * @returns {boolean} - Whether copy was successful
    */
   copyText(text, notifyCallback) {
     if (!text) {
-      if (notifyCallback) {
+      if (typeof notifyCallback === 'function') {
         notifyCallback({
           message: 'Nothing to copy',
           color: 'warning',
           icon: 'warning',
           timeout: 1000
+        });
+      } else if (typeof notifyCallback === 'string' && window.LNbits?.utils?.notify) {
+        window.LNbits.utils.notify({ 
+          message: 'Nothing to copy',
+          type: 'warning'
         });
       }
       return false;
@@ -137,24 +142,30 @@ const DataUtils = {
       // LNbits environment always has Quasar available, so use it directly
       window.Quasar.copyToClipboard(text)
         .then(() => {
-          if (notifyCallback) {
+          if (typeof notifyCallback === 'function') {
             notifyCallback({
               message: 'Copied to clipboard',
               color: 'positive',
               icon: 'check',
               timeout: 1000
             });
+          } else if (typeof notifyCallback === 'string' && window.LNbits?.utils?.notifySuccess) {
+            window.LNbits.utils.notifySuccess(notifyCallback);
+          } else if (window.LNbits?.utils?.notifySuccess) {
+            window.LNbits.utils.notifySuccess('Copied to clipboard');
           }
         })
         .catch(err => {
           console.error('Failed to copy text:', err);
-          if (notifyCallback) {
+          if (typeof notifyCallback === 'function') {
             notifyCallback({
               message: 'Failed to copy to clipboard',
               color: 'negative',
               icon: 'error',
               timeout: 1000
             });
+          } else if (window.LNbits?.utils?.notifyApiError) {
+            window.LNbits.utils.notifyApiError('Failed to copy to clipboard');
           }
         });
       
@@ -162,13 +173,15 @@ const DataUtils = {
     } catch (error) {
       console.error('Failed to copy text:', error);
       
-      if (notifyCallback) {
+      if (typeof notifyCallback === 'function') {
         notifyCallback({
           message: 'Failed to copy to clipboard',
           color: 'negative',
           icon: 'error',
           timeout: 1000
         });
+      } else if (window.LNbits?.utils?.notifyApiError) {
+        window.LNbits.utils.notifyApiError('Failed to copy to clipboard');
       }
       
       return false;
@@ -186,10 +199,66 @@ const DataUtils = {
     const safeInvoices = Array.isArray(invoices) ? invoices : [];
     const safePayments = Array.isArray(payments) ? payments : [];
     
+    // Map each transaction to ensure proper formatting
+    const mappedInvoices = safeInvoices.map(invoice => this.mapTransaction(invoice, 'invoice'));
+    const mappedPayments = safePayments.map(payment => this.mapTransaction(payment, 'payment'));
+    
     // Combine and sort by date (most recent first)
-    return [...safeInvoices, ...safePayments].sort((a, b) => {
+    return [...mappedInvoices, ...mappedPayments].sort((a, b) => {
       return new Date(b.created_at) - new Date(a.created_at);
     });
+  },
+  
+  /**
+   * Map a transaction (invoice or payment) to a standardized format
+   * @param {Object} transaction - Transaction to map
+   * @param {string} type - Transaction type ('invoice' or 'payment')
+   * @returns {Object} - Mapped transaction
+   */
+  mapTransaction(transaction, type) {
+    if (!transaction) return null;
+    
+    // Create a clean copy
+    const mapped = {...transaction};
+    
+    // Set type and direction
+    mapped.type = type || (transaction.payment_hash ? 'invoice' : 'payment');
+    mapped.direction = mapped.type === 'invoice' ? 'incoming' : 'outgoing';
+    
+    // Format date consistently 
+    if (mapped.created_at) {
+      try {
+        mapped.date = this.formatDate(mapped.created_at);
+        mapped.timeFrom = this.getRelativeTime(mapped.created_at);
+      } catch (e) {
+        console.error('Error formatting date:', e);
+        mapped.date = 'Unknown';
+        mapped.timeFrom = 'Unknown';
+      }
+    }
+    
+    // Ensure extra exists and contains asset info
+    mapped.extra = mapped.extra || {};
+    
+    if (mapped.type === 'invoice') {
+      // For invoices
+      if (!mapped.extra.asset_amount && mapped.asset_amount) {
+        mapped.extra.asset_amount = mapped.asset_amount;
+      }
+      
+      if (!mapped.extra.asset_id && mapped.asset_id) {
+        mapped.extra.asset_id = mapped.asset_id;
+      }
+    } else {
+      // For payments
+      mapped.extra = {
+        asset_amount: mapped.asset_amount,
+        asset_id: mapped.asset_id,
+        fee_sats: mapped.fee_sats
+      };
+    }
+    
+    return mapped;
   },
   
   /**
@@ -265,6 +334,11 @@ const DataUtils = {
           color: 'warning',
           timeout: 2000
         });
+      } else if (window.LNbits?.utils?.notify) {
+        window.LNbits.utils.notify({
+          message: 'No data to export',
+          type: 'warning'
+        });
       }
       return false;
     }
@@ -308,6 +382,8 @@ const DataUtils = {
           icon: 'check_circle',
           timeout: 2000
         });
+      } else if (window.LNbits?.utils?.notifySuccess) {
+        window.LNbits.utils.notifySuccess('Data exported successfully');
       }
       
       return true;
@@ -321,6 +397,8 @@ const DataUtils = {
           icon: 'error',
           timeout: 2000
         });
+      } else if (window.LNbits?.utils?.notifyApiError) {
+        window.LNbits.utils.notifyApiError('Failed to export data');
       }
       
       return false;

@@ -1,6 +1,6 @@
 /**
  * Asset Service for Taproot Assets extension
- * Fixed to ensure asset names are properly available to transactions
+ * Updated to use consolidated DataUtils
  */
 
 const AssetService = {
@@ -182,6 +182,25 @@ const AssetService = {
     }
     
     return 0;
+  },
+  
+  /**
+   * Format asset balance using DataUtils
+   * @param {number|string} balance - Balance to format 
+   * @param {number} decimals - Number of decimal places
+   * @returns {string} - Formatted balance
+   */
+  formatBalance(balance, decimals = 0) {
+    return DataUtils.formatAssetBalance(balance, decimals);
+  },
+  
+  /**
+   * Parse asset value using DataUtils
+   * @param {number|string} value - Value to parse
+   * @returns {number} - Parsed numeric value
+   */
+  parseValue(value) {
+    return DataUtils.parseAssetValue(value);
   },
   
   /**

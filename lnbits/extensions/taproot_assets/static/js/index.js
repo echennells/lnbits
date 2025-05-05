@@ -1,6 +1,6 @@
 /**
  * Main JavaScript for Taproot Assets extension
- * Updated to move business logic to services
+ * Updated to use consolidated DataUtils
  */
 
 // Create the Vue application
@@ -170,7 +170,7 @@ window.app = Vue.createApp({
       return AssetService.canSendAsset(asset);
     },
     
-    // Utility methods needed by templates
+    // Utility methods needed by templates - now using DataUtils
     formatTransactionDate(date) {
       return DataUtils.formatDate(date);
     },
@@ -219,7 +219,7 @@ window.app = Vue.createApp({
       }
     },
     
-    // Transaction methods - UPDATED TO USE SERVICES
+    // Transaction methods
     async getInvoices() {
       if (!this.g.user.wallets || !this.g.user.wallets.length) return;
       
@@ -270,7 +270,7 @@ window.app = Vue.createApp({
       }
     },
     
-    // UPDATED: Use DataUtils service to combine transactions
+    // Use DataUtils service to combine transactions
     combineTransactions() {
       this.combinedTransactions = DataUtils.combineTransactions(
         this.invoices, 
@@ -281,7 +281,7 @@ window.app = Vue.createApp({
       this.applyFilters();
     },
     
-    // UPDATED: Use DataUtils service to filter transactions
+    // Use DataUtils service to filter transactions
     applyFilters() {
       this.filteredTransactions = DataUtils.filterTransactions(
         this.combinedTransactions,
@@ -330,7 +330,7 @@ window.app = Vue.createApp({
       });
     },
     
-    // CSV export functions - UPDATED to use DataUtils
+    // CSV export functions - Using DataUtils
     exportTransactionsCSV() {
       const rows = this.filteredTransactions.map(tx => {
         return {
@@ -413,7 +413,7 @@ window.app = Vue.createApp({
       this.resetInvoiceForm();
     },
     
-    // UPDATED: Use InvoiceService to create invoice
+    // Use InvoiceService to create invoice
     async submitInvoiceForm() {
       if (this.isSubmitting || !this.g.user.wallets || !this.g.user.wallets.length) return;
       
@@ -494,7 +494,7 @@ window.app = Vue.createApp({
       this.resetPaymentForm();
     },
     
-    // UPDATED: Use PaymentService to parse invoice
+    // Use PaymentService to parse invoice
     async parseInvoice(paymentRequest) {
       if (!paymentRequest || paymentRequest.trim() === '') {
         this.paymentDialog.invoiceDecodeError = false;
@@ -525,7 +525,7 @@ window.app = Vue.createApp({
       }
     },
     
-    // UPDATED: Use PaymentService to pay invoice
+    // Use PaymentService to pay invoice
     async submitPaymentForm() {
       if (this.paymentDialog.inProgress || !this.g.user.wallets || !this.g.user.wallets.length) return;
       
@@ -612,7 +612,7 @@ window.app = Vue.createApp({
       }
     },
     
-    // UPDATED: Use PaymentService to process internal payment
+    // Use PaymentService to process internal payment
     async processInternalPayment(paymentRequest, feeLimit) {
       try {
         if (!this.g.user.wallets || !this.g.user.wallets.length) return false;
@@ -654,7 +654,7 @@ window.app = Vue.createApp({
       }
     },
     
-    // UPDATED: Maintain clipboard functionality while using DataUtils
+    // Use DataUtils to copy invoice to clipboard
     copyInvoice(invoice) {
       // Simply use the payment_request property directly
       const paymentRequest = invoice.payment_request;
@@ -665,25 +665,11 @@ window.app = Vue.createApp({
         return;
       }
       
-      // Use Quasar's copy method directly to ensure it works
-      if (window.Quasar && window.Quasar.copyToClipboard) {
-        window.Quasar.copyToClipboard(paymentRequest)
-          .then(() => {
-            NotificationService.showSuccess('Invoice copied to clipboard!');
-          })
-          .catch(err => {
-            console.error('Failed to copy to clipboard:', err);
-            NotificationService.showError('Failed to copy to clipboard');
-          });
-      } else {
-        // Fallback to DataUtils
-        DataUtils.copyText(paymentRequest, notification => {
-          NotificationService.showSuccess(notification.message);
-        });
-      }
+      // Use DataUtils for copying
+      DataUtils.copyText(paymentRequest, 'Invoice copied to clipboard!');
     },
     
-    // UPDATED: Use InvoiceService to process paid invoice
+    // Use InvoiceService to process paid invoice
     handlePaidInvoice(invoice) {
       console.log('handlePaidInvoice called with invoice:', invoice);
       

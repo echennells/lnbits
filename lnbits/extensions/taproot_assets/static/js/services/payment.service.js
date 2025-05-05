@@ -1,6 +1,6 @@
 /**
  * Payments Service for Taproot Assets extension
- * Fixed to ensure asset names are properly displayed in transactions
+ * Updated to use consolidated DataUtils
  */
 
 const PaymentService = {
@@ -28,7 +28,7 @@ const PaymentService = {
         return [];
       }
       
-      // Process the payments
+      // Process the payments using DataUtils
       const payments = Array.isArray(response.data)
         ? response.data.map(payment => this._mapPayment(payment))
         : [];
@@ -286,7 +286,7 @@ const PaymentService = {
         internal_payment: true
       };
       
-      // Add mapped payment to store
+      // Add mapped payment to store using DataUtils
       const mappedPayment = this._mapPayment(payment);
       window.taprootStore.actions.addPayment(mappedPayment);
       
@@ -298,31 +298,16 @@ const PaymentService = {
   },
   
   /**
-   * Process and transform a payment object
+   * Process and transform a payment object using DataUtils
    * @param {Object} payment - Raw payment data
    * @returns {Object} - Processed payment
+   * @private
    */
   _mapPayment(payment) {
     if (!payment) return null;
     
-    // Create a clean copy
-    const mapped = {...payment};
-    
-    // Set type and direction
-    mapped.type = 'payment';
-    mapped.direction = 'outgoing';
-    
-    // Format date using DataUtils
-    if (mapped.created_at) {
-      try {
-        mapped.date = DataUtils.formatDate(mapped.created_at);
-        mapped.timeFrom = DataUtils.getRelativeTime(mapped.created_at);
-      } catch (e) {
-        console.error('Error formatting date:', e);
-        mapped.date = 'Unknown';
-        mapped.timeFrom = 'Unknown';
-      }
-    }
+    // Use DataUtils for mapping the transaction
+    const mapped = DataUtils.mapTransaction(payment, 'payment');
     
     // Get asset name if not in memo
     if (mapped.asset_id && !mapped.asset_name) {
@@ -334,15 +319,10 @@ const PaymentService = {
       }
     }
     
-    // Ensure extra exists and contains asset info
+    // Add additional payment-specific data to extra
     mapped.extra = mapped.extra || {};
     
-    mapped.extra = {
-      asset_amount: mapped.asset_amount,
-      asset_id: mapped.asset_id,
-      fee_sats: mapped.fee_sats,
-      asset_name: mapped.asset_name || this._getAssetName(mapped.asset_id)
-    };
+    mapped.extra.asset_name = mapped.asset_name || this._getAssetName(mapped.asset_id);
     
     return mapped;
   },
@@ -379,6 +359,7 @@ const PaymentService = {
   /**
    * Process WebSocket payment update
    * @param {Object} data - Payment data from WebSocket
+   * @returns {Object|null} - Processed payment or null
    */
   processWebSocketUpdate(data) {
     if (!data?.type || data.type !== 'payment_update' || !data.data) {
@@ -390,7 +371,7 @@ const PaymentService = {
       this._ensureAssetNames([data.data]);
     }
     
-    // Map the payment
+    // Map the payment using DataUtils
     const payment = this._mapPayment(data.data);
     
     // Add to store
