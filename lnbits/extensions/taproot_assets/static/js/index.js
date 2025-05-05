@@ -1,6 +1,6 @@
 /**
  * Main JavaScript for Taproot Assets extension
- * Fixed version with original data handling approach
+ * Updated to move business logic to services
  */
 
 // Create the Vue application
@@ -109,12 +109,6 @@ window.app = Vue.createApp({
     }
   },
   computed: {
-    // Access the centralized store
-    store() {
-      // Check if the store is available globally
-      return window.taprootStore || null;
-    },
-    
     // Filtered assets from local state
     filteredAssets() {
       if (!this.assets || this.assets.length === 0) return [];
@@ -176,11 +170,6 @@ window.app = Vue.createApp({
       return AssetService.canSendAsset(asset);
     },
     
-    // Get maximum receivable amount for an asset
-    getMaxReceivableAmount(asset) {
-      return AssetService.getMaxReceivableAmount(asset);
-    },
-
     // Utility methods needed by templates
     formatTransactionDate(date) {
       return DataUtils.formatDate(date);
@@ -190,16 +179,6 @@ window.app = Vue.createApp({
       return DataUtils.shortify(text, maxLength);
     },
     
-    copyText(text) {
-      DataUtils.copyText(text, notification => {
-        NotificationService.showSuccess(notification.message);
-      });
-    },
-    
-    getStatusColor(status) {
-      return DataUtils.getStatusColor(status);
-    },
-
     // Settings methods
     async getSettings() {
       try {
@@ -212,32 +191,11 @@ window.app = Vue.createApp({
         this.settings = response.data;
         
         // Also update store if available
-        if (this.store && this.store.actions) {
-          this.store.actions.setSettings(response.data);
+        if (window.taprootStore && window.taprootStore.actions) {
+          window.taprootStore.actions.setSettings(response.data);
         }
       } catch (error) {
         NotificationService.processApiError(error, 'Failed to fetch settings');
-      }
-    },
-    
-    async saveSettings() {
-      try {
-        if (!this.g.user.wallets || !this.g.user.wallets.length) return;
-        const wallet = this.g.user.wallets[0];
-        
-        const response = await ApiService.saveSettings(wallet.adminkey, this.settings);
-        
-        // Update local settings
-        this.settings = response.data;
-        
-        // Also update store if available
-        if (this.store && this.store.actions) {
-          this.store.actions.setSettings(response.data);
-        }
-        
-        NotificationService.showSuccess('Settings saved successfully');
-      } catch (error) {
-        NotificationService.processApiError(error, 'Failed to save settings');
       }
     },
     
@@ -261,7 +219,7 @@ window.app = Vue.createApp({
       }
     },
     
-    // Transaction methods
+    // Transaction methods - UPDATED TO USE SERVICES
     async getInvoices() {
       if (!this.g.user.wallets || !this.g.user.wallets.length) return;
       
@@ -312,66 +270,25 @@ window.app = Vue.createApp({
       }
     },
     
+    // UPDATED: Use DataUtils service to combine transactions
     combineTransactions() {
-      // Ensure we have arrays to work with
-      const safeInvoices = Array.isArray(this.invoices) ? this.invoices : [];
-      const safePayments = Array.isArray(this.payments) ? this.payments : [];
-      
-      // Combine and sort by date (most recent first)
-      this.combinedTransactions = [...safeInvoices, ...safePayments].sort((a, b) => {
-        return new Date(b.created_at) - new Date(a.created_at);
-      });
+      this.combinedTransactions = DataUtils.combineTransactions(
+        this.invoices, 
+        this.payments
+      );
       
       // Apply filters to combined transactions
       this.applyFilters();
     },
     
+    // UPDATED: Use DataUtils service to filter transactions
     applyFilters() {
-      let result = [...this.combinedTransactions];
-      
-      // Apply direction filter
-      if (this.filters.direction && this.filters.direction !== 'all') {
-        result = result.filter(tx => tx.direction === this.filters.direction);
-      }
-      
-      // Apply status filter
-      if (this.filters.status && this.filters.status !== 'all') {
-        result = result.filter(tx => tx.status === this.filters.status);
-      }
-      
-      // Apply search text filter
-      if (this.filters.searchText) {
-        const searchLower = this.filters.searchText.toLowerCase();
-        result = result.filter(tx => 
-          (tx.memo && tx.memo.toLowerCase().includes(searchLower)) ||
-          (tx.payment_hash && tx.payment_hash.toLowerCase().includes(searchLower))
-        );
-      }
-      
-      // Apply date range filter
-      if (this.searchDate.from || this.searchDate.to) {
-        result = result.filter(tx => {
-          const txDate = new Date(tx.created_at);
-          let matches = true;
-          
-          if (this.searchDate.from) {
-            const fromDate = new Date(this.searchDate.from);
-            fromDate.setHours(0, 0, 0, 0);
-            if (txDate < fromDate) matches = false;
-          }
-          
-          if (matches && this.searchDate.to) {
-            const toDate = new Date(this.searchDate.to);
-            toDate.setHours(23, 59, 59, 999);
-            if (txDate > toDate) matches = false;
-          }
-          
-          return matches;
-        });
-      }
-      
-      // Set filtered transactions
-      this.filteredTransactions = result;
+      this.filteredTransactions = DataUtils.filterTransactions(
+        this.combinedTransactions,
+        this.filters,
+        { searchText: this.filters.searchText },
+        this.searchDate
+      );
       
       // Reset to first page when filtering
       if (this.transactionsTable.pagination.page > 1) {
@@ -413,7 +330,7 @@ window.app = Vue.createApp({
       });
     },
     
-    // CSV export functions
+    // CSV export functions - UPDATED to use DataUtils
     exportTransactionsCSV() {
       const rows = this.filteredTransactions.map(tx => {
         return {
@@ -496,6 +413,7 @@ window.app = Vue.createApp({
       this.resetInvoiceForm();
     },
     
+    // UPDATED: Use InvoiceService to create invoice
     async submitInvoiceForm() {
       if (this.isSubmitting || !this.g.user.wallets || !this.g.user.wallets.length) return;
       
@@ -576,6 +494,7 @@ window.app = Vue.createApp({
       this.resetPaymentForm();
     },
     
+    // UPDATED: Use PaymentService to parse invoice
     async parseInvoice(paymentRequest) {
       if (!paymentRequest || paymentRequest.trim() === '') {
         this.paymentDialog.invoiceDecodeError = false;
@@ -606,6 +525,7 @@ window.app = Vue.createApp({
       }
     },
     
+    // UPDATED: Use PaymentService to pay invoice
     async submitPaymentForm() {
       if (this.paymentDialog.inProgress || !this.g.user.wallets || !this.g.user.wallets.length) return;
       
@@ -692,7 +612,7 @@ window.app = Vue.createApp({
       }
     },
     
-    // Process an internal payment
+    // UPDATED: Use PaymentService to process internal payment
     async processInternalPayment(paymentRequest, feeLimit) {
       try {
         if (!this.g.user.wallets || !this.g.user.wallets.length) return false;
@@ -734,7 +654,7 @@ window.app = Vue.createApp({
       }
     },
     
-    // Copy invoice to clipboard
+    // UPDATED: Maintain clipboard functionality while using DataUtils
     copyInvoice(invoice) {
       // Simply use the payment_request property directly
       const paymentRequest = invoice.payment_request;
@@ -745,6 +665,7 @@ window.app = Vue.createApp({
         return;
       }
       
+      // Use Quasar's copy method directly to ensure it works
       if (window.Quasar && window.Quasar.copyToClipboard) {
         window.Quasar.copyToClipboard(paymentRequest)
           .then(() => {
@@ -762,36 +683,15 @@ window.app = Vue.createApp({
       }
     },
     
-    // Handle paid invoice from WebSocket notification
+    // UPDATED: Use InvoiceService to process paid invoice
     handlePaidInvoice(invoice) {
       console.log('handlePaidInvoice called with invoice:', invoice);
       
+      // Use InvoiceService to process the paid invoice
+      const invoiceInfo = InvoiceService.processPaidInvoice(invoice);
+      
       // Show notification
-      const assetName = this.getAssetNameFromId(invoice.asset_id) || 'Unknown Asset';
-      const amount = invoice.asset_amount || 0;
-      
-      // Use Quasar notification directly to ensure it shows
-      if (window.Quasar) {
-        window.Quasar.Notify.create({
-          message: `Invoice Paid: ${amount} ${assetName}`,
-          color: 'positive',
-          icon: 'check_circle',
-          timeout: 2000
-        });
-      }
-      
-      // Update the invoice in our local array
-      const index = this.invoices.findIndex(inv => inv.id === invoice.id || inv.payment_hash === invoice.payment_hash);
-      if (index !== -1) {
-        // Update the invoice status
-        this.invoices[index].status = 'paid';
-        this.invoices[index].paid_at = new Date().toISOString();
-        // Mark as updated for animation
-        this.invoices[index]._statusChanged = true;
-      } else {
-        // If not found in our array, fetch the invoices again
-        this.getInvoices();
-      }
+      NotificationService.showSuccess(`Invoice Paid: ${invoiceInfo.amount} ${invoiceInfo.assetName}`);
       
       // Force an immediate refresh of assets to update balances
       this.getAssets();
@@ -799,40 +699,16 @@ window.app = Vue.createApp({
       // Explicitly refresh transactions
       this.refreshTransactions();
       
-      // Combine transactions to update the UI
-      this.combineTransactions();
-      
-      // Apply filters after updating
-      this.applyFilters();
-      
       // Check if we should close the invoice dialog
       if (this.createdInvoiceDialog.show && this.createdInvoice) {
-        // Try multiple ways to match the invoice
-        let matchFound = false;
-        
-        // Match by ID
-        if (this.createdInvoice.id === invoice.id) {
-          matchFound = true;
-        }
-        // Match by payment hash
-        else if (this.createdInvoice.payment_hash === invoice.payment_hash) {
-          matchFound = true;
-        }
-        
-        // If the displayed invoice is the one that was paid, close the dialog
-        if (matchFound) {
+        // Check if the paid invoice matches the one being displayed
+        if (this.createdInvoice.id === invoice.id || 
+            this.createdInvoice.payment_hash === invoice.payment_hash) {
           // Close the dialog
           this.createdInvoiceDialog.show = false;
           
           // Show a notification
-          if (window.Quasar) {
-            window.Quasar.Notify.create({
-              message: 'Invoice has been paid',
-              color: 'positive',
-              icon: 'check_circle',
-              timeout: 2000
-            });
-          }
+          NotificationService.showSuccess('Invoice has been paid');
         }
       }
     },

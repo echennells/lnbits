@@ -1,14 +1,13 @@
 /**
  * Payments Service for Taproot Assets extension
  * Handles payment processing, fetching, and management
- * Updated to use the centralized store with error handling
  */
 
 const PaymentService = {
   /**
    * Get all payments for the current user
    * @param {Object} wallet - Wallet object with adminkey
-   * @param {boolean} forceFresh - Whether to force fresh data from server
+   * @param {boolean} cache - Whether to use cache-busting timestamp 
    * @returns {Promise<Array>} - Promise that resolves with payments
    */
   async getPayments(wallet, cache = true) {
@@ -17,12 +16,12 @@ const PaymentService = {
         throw new Error('Valid wallet is required');
       }
       
-      // Set loading state (safely)
+      // Set loading state in store if available
       if (window.taprootStore && window.taprootStore.actions) {
         window.taprootStore.actions.setTransactionsLoading(true);
       }
       
-      // Update current wallet in store (safely)
+      // Update current wallet in store if available
       if (window.taprootStore && window.taprootStore.actions) {
         window.taprootStore.actions.setCurrentWallet(wallet);
       }
@@ -31,7 +30,7 @@ const PaymentService = {
       const response = await ApiService.getPayments(wallet.adminkey, cache);
       
       if (!response || !response.data) {
-        // Update store safely
+        // Update store if available
         if (window.taprootStore && window.taprootStore.actions) {
           window.taprootStore.actions.setPayments([]);
         }
@@ -43,7 +42,7 @@ const PaymentService = {
         ? response.data.map(payment => this._mapPayment(payment))
         : [];
       
-      // Update the store (safely)
+      // Update the store if available
       if (window.taprootStore && window.taprootStore.actions) {
         window.taprootStore.actions.setPayments(payments);
       }
@@ -53,7 +52,7 @@ const PaymentService = {
       console.error('Failed to fetch payments:', error);
       throw error;
     } finally {
-      // Ensure loading state is reset (safely)
+      // Ensure loading state is reset
       if (window.taprootStore && window.taprootStore.actions) {
         window.taprootStore.actions.setTransactionsLoading(false);
       }
@@ -125,7 +124,7 @@ const PaymentService = {
         throw new Error('Failed to process payment: No data returned');
       }
       
-      // Update asset information in the store with new balance (safely)
+      // Update asset information in the store with new balance
       if (response.data.asset_id && assetData && window.taprootStore && window.taprootStore.actions) {
         // Deduct the asset amount from the user's balance
         const newBalance = (assetData.user_balance || 0) - response.data.asset_amount;
@@ -152,7 +151,7 @@ const PaymentService = {
         preimage: response.data.preimage
       };
       
-      // Add mapped payment to store (safely)
+      // Add mapped payment to store if available
       const mappedPayment = this._mapPayment(payment);
       if (window.taprootStore && window.taprootStore.actions) {
         window.taprootStore.actions.addPayment(mappedPayment);
@@ -208,13 +207,13 @@ const PaymentService = {
         throw new Error('Failed to process internal payment: No data returned');
       }
       
-      // Find the asset in the store (safely)
+      // Find the asset in the store
       let asset = null;
       if (window.taprootStore && window.taprootStore.state && window.taprootStore.state.assets) {
         asset = window.taprootStore.state.assets.find(a => a.asset_id === response.data.asset_id);
       }
       
-      // Update asset information in the store if found (safely)
+      // Update asset information in the store if found
       if (response.data.asset_id && asset && window.taprootStore && window.taprootStore.actions) {
         // Deduct the asset amount from the user's balance
         const newBalance = (asset.user_balance || 0) - response.data.asset_amount;
@@ -242,7 +241,7 @@ const PaymentService = {
         internal_payment: true
       };
       
-      // Add mapped payment to store (safely)
+      // Add mapped payment to store
       const mappedPayment = this._mapPayment(payment);
       if (window.taprootStore && window.taprootStore.actions) {
         window.taprootStore.actions.addPayment(mappedPayment);
@@ -251,67 +250,6 @@ const PaymentService = {
       return response.data;
     } catch (error) {
       console.error('Failed to process internal payment:', error);
-      throw error;
-    }
-  },
-  
-  /**
-   * Process a self-payment (deprecated but maintained for compatibility)
-   * @param {Object} wallet - Wallet object with adminkey
-   * @param {Object} paymentData - Payment data
-   * @returns {Promise<Object>} - Promise with payment result
-   */
-  async processSelfPayment(wallet, paymentData) {
-    try {
-      if (!wallet || !wallet.adminkey) {
-        throw new Error('Valid wallet is required');
-      }
-      
-      if (!paymentData || !paymentData.paymentRequest) {
-        throw new Error('Payment request is required');
-      }
-      
-      // Create payload
-      const payload = {
-        payment_request: paymentData.paymentRequest,
-        fee_limit_sats: paymentData.feeLimit || 10
-      };
-      
-      // Call the self-payment endpoint
-      const response = await ApiService.processSelfPayment(wallet.adminkey, payload);
-      
-      if (!response || !response.data) {
-        throw new Error('Failed to process self-payment: No data returned');
-      }
-      
-      // Self-payments don't affect balance, but we still add to payment history
-      
-      // Create payment record for store
-      const payment = {
-        id: response.data.payment_hash || Date.now().toString(),
-        payment_hash: response.data.payment_hash,
-        payment_request: paymentData.paymentRequest,
-        asset_id: response.data.asset_id,
-        asset_amount: response.data.asset_amount,
-        fee_sats: 0, // Self payments have zero fee
-        memo: `Self-transfer of ${response.data.asset_amount} units`,
-        status: 'completed',
-        user_id: wallet.user,
-        wallet_id: wallet.id,
-        created_at: new Date().toISOString(),
-        preimage: response.data.preimage,
-        self_payment: true
-      };
-      
-      // Add mapped payment to store (safely)
-      const mappedPayment = this._mapPayment(payment);
-      if (window.taprootStore && window.taprootStore.actions) {
-        window.taprootStore.actions.addPayment(mappedPayment);
-      }
-      
-      return response.data;
-    } catch (error) {
-      console.error('Failed to process self-payment:', error);
       throw error;
     }
   },
@@ -389,7 +327,7 @@ const PaymentService = {
       // Map the payment
       const payment = this._mapPayment(data.data);
       
-      // Add to store (safely)
+      // Add to store if available
       if (window.taprootStore && window.taprootStore.actions) {
         window.taprootStore.actions.addPayment(payment);
       }
@@ -398,17 +336,6 @@ const PaymentService = {
       return payment;
     }
     return null;
-  },
-  
-  /**
-   * Updates a payment in the store
-   * @param {string} paymentId - Payment ID to update
-   * @param {Object} changes - Changes to apply
-   */
-  updatePayment(paymentId, changes) {
-    if (window.taprootStore && window.taprootStore.actions) {
-      window.taprootStore.actions.updatePayment(paymentId, changes);
-    }
   }
 };
 

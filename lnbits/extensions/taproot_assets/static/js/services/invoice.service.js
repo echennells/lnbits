@@ -1,7 +1,6 @@
 /**
  * Invoice Service for Taproot Assets extension
  * Handles invoice creation, fetching, and management
- * Updated to use the centralized store with error handling
  */
 
 const InvoiceService = {
@@ -17,12 +16,12 @@ const InvoiceService = {
         throw new Error('Valid wallet is required');
       }
       
-      // Set loading state (safely)
+      // Set loading state in store if available
       if (window.taprootStore && window.taprootStore.actions) {
         window.taprootStore.actions.setTransactionsLoading(true);
       }
       
-      // Update current wallet in store (safely)
+      // Update current wallet in store if available
       if (window.taprootStore && window.taprootStore.actions) {
         window.taprootStore.actions.setCurrentWallet(wallet);
       }
@@ -32,7 +31,7 @@ const InvoiceService = {
       const response = await ApiService.getInvoices(wallet.adminkey, true);
       
       if (!response || !response.data) {
-        // Update store safely
+        // Update store if available
         if (window.taprootStore && window.taprootStore.actions) {
           window.taprootStore.actions.setInvoices([]);
         }
@@ -44,7 +43,7 @@ const InvoiceService = {
         ? response.data.map(invoice => this._mapInvoice(invoice))
         : [];
       
-      // Update the store (safely)
+      // Update the store if available
       if (window.taprootStore && window.taprootStore.actions) {
         window.taprootStore.actions.setInvoices(invoices);
       }
@@ -54,7 +53,7 @@ const InvoiceService = {
       console.error('Failed to fetch invoices:', error);
       throw error;
     } finally {
-      // Ensure loading state is reset (safely)
+      // Ensure loading state is reset
       if (window.taprootStore && window.taprootStore.actions) {
         window.taprootStore.actions.setTransactionsLoading(false);
       }
@@ -107,7 +106,7 @@ const InvoiceService = {
       // Process invoice for store
       const mappedInvoice = this._mapInvoice(createdInvoice);
       
-      // Add to store (safely)
+      // Add to store if available
       if (window.taprootStore && window.taprootStore.actions) {
         window.taprootStore.actions.addInvoice(mappedInvoice);
       }
@@ -115,43 +114,6 @@ const InvoiceService = {
       return createdInvoice;
     } catch (error) {
       console.error('Failed to create invoice:', error);
-      throw error;
-    }
-  },
-  
-  /**
-   * Get a specific invoice by ID
-   * @param {Object} wallet - Wallet object with adminkey
-   * @param {string} invoiceId - ID of the invoice to get
-   * @returns {Promise<Object|null>} - Promise with invoice or null
-   */
-  async getInvoice(wallet, invoiceId) {
-    try {
-      if (!wallet || !wallet.adminkey) {
-        throw new Error('Valid wallet is required');
-      }
-      
-      if (!invoiceId) {
-        throw new Error('Invoice ID is required');
-      }
-      
-      // Check store first (safely)
-      const storeInvoices = window.taprootStore && window.taprootStore.state ? 
-        window.taprootStore.state.invoices : [];
-      const cachedInvoice = storeInvoices.find(i => i.id === invoiceId);
-      if (cachedInvoice) {
-        return cachedInvoice;
-      }
-      
-      // If not in store, fetch all invoices (API doesn't have get-by-id endpoint)
-      await this.getInvoices(wallet, true);
-      
-      // Check store again (safely)
-      const updatedInvoices = window.taprootStore && window.taprootStore.state ? 
-        window.taprootStore.state.invoices : [];
-      return updatedInvoices.find(i => i.id === invoiceId) || null;
-    } catch (error) {
-      console.error(`Failed to fetch invoice ${invoiceId}:`, error);
       throw error;
     }
   },
@@ -224,60 +186,6 @@ const InvoiceService = {
   },
   
   /**
-   * Find changes between two sets of invoices
-   * Returns an object with 'new' and 'updated' arrays
-   * @param {Array} newInvoices - New invoices from API
-   * @param {Array} existingInvoices - Existing invoices in state
-   * @returns {Object} - Object with 'new' and 'updated' arrays
-   */
-  findChanges(newInvoices, existingInvoices) {
-    if (!newInvoices || !existingInvoices) {
-      return { new: [], updated: [] };
-    }
-    
-    // Create lookup map for existing invoices
-    const existingMap = {};
-    existingInvoices.forEach(item => {
-      existingMap[item.id] = item;
-    });
-    
-    const newItems = [];
-    const updatedItems = [];
-    
-    // Identify new and changed invoices
-    newInvoices.forEach(newItem => {
-      const existingItem = existingMap[newItem.id];
-      
-      if (!existingItem) {
-        // Mark as new
-        newItem._isNew = true;
-        newItems.push(newItem);
-      } else if (existingItem.status !== newItem.status) {
-        // Mark status change
-        newItem._previousStatus = existingItem.status;
-        newItem._statusChanged = true;
-        updatedItems.push(newItem);
-      }
-    });
-    
-    return {
-      new: newItems,
-      updated: updatedItems
-    };
-  },
-  
-  /**
-   * Updates an invoice in the store
-   * @param {string} invoiceId - Invoice ID to update
-   * @param {Object} changes - Changes to apply
-   */
-  updateInvoice(invoiceId, changes) {
-    if (window.taprootStore && window.taprootStore.actions) {
-      window.taprootStore.actions.updateInvoice(invoiceId, changes);
-    }
-  },
-  
-  /**
    * Process WebSocket invoice update
    * @param {Object} data - Invoice data from WebSocket
    */
@@ -286,7 +194,7 @@ const InvoiceService = {
       // Map the invoice
       const invoice = this._mapInvoice(data.data);
       
-      // Add to store (safely)
+      // Add to store if available
       if (window.taprootStore && window.taprootStore.actions) {
         window.taprootStore.actions.addInvoice(invoice);
       }
@@ -295,6 +203,31 @@ const InvoiceService = {
       return invoice;
     }
     return null;
+  },
+  
+  /**
+   * Process a paid invoice and update state
+   * @param {Object} invoice - The paid invoice
+   * @returns {Object} - Information about the processed invoice
+   */
+  processPaidInvoice(invoice) {
+    if (!invoice) return null;
+    
+    // Update the store if available
+    if (invoice.id && window.taprootStore && window.taprootStore.actions) {
+      window.taprootStore.actions.updateInvoice(invoice.id, { 
+        status: 'paid',
+        paid_at: new Date().toISOString()
+      });
+    }
+    
+    // Return information for UI notifications
+    return {
+      assetName: AssetService.getAssetName(invoice.asset_id),
+      amount: invoice.asset_amount || 0,
+      paymentHash: invoice.payment_hash,
+      invoiceId: invoice.id
+    };
   }
 };
 

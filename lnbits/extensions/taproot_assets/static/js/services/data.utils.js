@@ -152,7 +152,27 @@ const DataUtils = {
     }
     
     try {
-      // Use the built-in LNbits copy utility if available
+      // Use the Quasar copy utility if available
+      if (window.Quasar && window.Quasar.copyToClipboard) {
+        window.Quasar.copyToClipboard(text)
+          .then(() => {
+            if (notifyCallback) {
+              notifyCallback({
+                message: 'Copied to clipboard',
+                color: 'positive',
+                icon: 'check',
+                timeout: 1000
+              });
+            }
+          })
+          .catch(err => {
+            console.error('Failed to copy using Quasar:', err);
+            this._fallbackCopyText(text, notifyCallback);
+          });
+        return true;
+      }
+      
+      // Or use the LNbits utility if available
       if (window.LNbits && window.LNbits.utils && window.LNbits.utils.copy) {
         window.LNbits.utils.copy(text);
         
@@ -169,6 +189,30 @@ const DataUtils = {
       }
       
       // Fallback to document.execCommand
+      return this._fallbackCopyText(text, notifyCallback);
+      
+    } catch (error) {
+      console.error('Failed to copy text:', error);
+      
+      if (notifyCallback) {
+        notifyCallback({
+          message: 'Failed to copy to clipboard',
+          color: 'negative',
+          icon: 'error',
+          timeout: 1000
+        });
+      }
+      
+      return false;
+    }
+  },
+  
+  /**
+   * Fallback copy method using the legacy execCommand
+   * @private
+   */
+  _fallbackCopyText(text, notifyCallback) {
+    try {
       const textArea = document.createElement('textarea');
       textArea.value = text;
       document.body.appendChild(textArea);
@@ -186,8 +230,8 @@ const DataUtils = {
       }
       
       return successful;
-    } catch (error) {
-      console.error('Failed to copy text:', error);
+    } catch (e) {
+      console.error('Failed to copy text using fallback method:', e);
       
       if (notifyCallback) {
         notifyCallback({
@@ -244,19 +288,12 @@ const DataUtils = {
       result = result.filter(tx => tx.status === filters.status);
     }
     
-    // Apply memo search
-    if (searchData && searchData.memo) {
-      const searchLower = searchData.memo.toLowerCase();
+    // Apply search text filter
+    if (searchData && searchData.searchText) {
+      const searchLower = searchData.searchText.toLowerCase();
       result = result.filter(tx => 
-        tx.memo && tx.memo.toLowerCase().includes(searchLower)
-      );
-    }
-    
-    // Apply payment hash search
-    if (searchData && searchData.payment_hash) {
-      const searchLower = searchData.payment_hash.toLowerCase();
-      result = result.filter(tx =>
-        tx.payment_hash && tx.payment_hash.toLowerCase().includes(searchLower)
+        (tx.memo && tx.memo.toLowerCase().includes(searchLower)) ||
+        (tx.payment_hash && tx.payment_hash.toLowerCase().includes(searchLower))
       );
     }
     
