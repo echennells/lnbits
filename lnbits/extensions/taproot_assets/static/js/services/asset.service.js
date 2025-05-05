@@ -1,13 +1,9 @@
 /**
- * Asset Service for Taproot Assets extension
- * Handles all asset-related functionality
- * Fixed version that maintains original behavior
+ * Simplified Asset Service for Taproot Assets extension
+ * Further refactored to remove unnecessary conditionals
  */
 
 const AssetService = {
-  // Local cache of assets (important for backward compatibility)
-  _assetCache: [],
-  
   /**
    * Get all assets with information about channels and balances
    * @param {Object} wallet - Wallet object with adminkey
@@ -19,7 +15,7 @@ const AssetService = {
         throw new Error('Valid wallet is required');
       }
       
-      // Request assets from the API - using original direct approach
+      // Request assets from the API
       const response = await LNbits.api.request(
         'GET', 
         '/taproot_assets/api/v1/taproot/listassets', 
@@ -32,9 +28,6 @@ const AssetService = {
       
       // Process the assets
       const assets = Array.isArray(response.data) ? [...response.data] : [];
-      
-      // Maintain the local cache for backward compatibility
-      this._assetCache = assets;
       
       // Get balances for assets
       if (assets.length > 0) {
@@ -70,13 +63,11 @@ const AssetService = {
         }
       }
       
-      // Update the store if available, but don't depend on it
-      if (window.taprootStore && window.taprootStore.actions) {
-        try {
-          window.taprootStore.actions.setAssets(assets);
-        } catch (e) {
-          console.error('Error updating store with assets:', e);
-        }
+      // Update the store - we know it's always available
+      try {
+        window.taprootStore.actions.setAssets(assets);
+      } catch (e) {
+        console.error('Error updating store with assets:', e);
       }
       
       return assets;
@@ -84,12 +75,11 @@ const AssetService = {
       console.error('Failed to fetch assets:', error);
       return []; // Return empty array instead of throwing to maintain original behavior
     } finally {
-      if (window.taprootStore && window.taprootStore.actions) {
-        try {
-          window.taprootStore.actions.setAssetsLoading(false);
-        } catch (e) {
-          // Ignore errors in finally block
-        }
+      // Set loading state to false in store
+      try {
+        window.taprootStore.actions.setAssetsLoading(false);
+      } catch (e) {
+        // Ignore errors in finally block
       }
     }
   },
@@ -102,16 +92,8 @@ const AssetService = {
   getAssetById(assetId) {
     if (!assetId) return null;
     
-    // First try from the local cache for backward compatibility
-    const cachedAsset = this._assetCache.find(asset => asset.asset_id === assetId);
-    if (cachedAsset) return cachedAsset;
-    
-    // Fall back to the store if available
-    if (window.taprootStore && window.taprootStore.state && window.taprootStore.state.assets) {
-      return window.taprootStore.state.assets.find(asset => asset.asset_id === assetId) || null;
-    }
-    
-    return null;
+    // Use the store directly - it's always available
+    return window.taprootStore.state.assets.find(asset => asset.asset_id === assetId) || null;
   },
   
   /**
