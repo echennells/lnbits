@@ -10,7 +10,7 @@ from ..logging_utils import (
     log_exception, WALLET, LogContext
 )
 from ..error_utils import ErrorContext
-
+from ..settlement_service import SettlementService
 
 class InvoiceResponse:
     """Response from invoice creation."""

@@ -29,6 +29,9 @@ from .taproot_invoices import TaprootInvoiceManager
 from .taproot_payments import TaprootPaymentManager
 from .taproot_transfers import TaprootTransferManager
 
+# Import settlement service
+from ..settlement_service import SettlementService
+
 # Import logging utilities
 from ..logging_utils import (
     log_debug, log_info, log_warning, log_error, 
