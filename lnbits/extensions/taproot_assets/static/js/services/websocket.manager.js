@@ -1,7 +1,6 @@
 /**
  * WebSocket Manager for Taproot Assets extension
- * Handles WebSocket connections, reconnection, and message processing
- * Updated to use the centralized store
+ * Fixed to properly handle asset name updates
  */
 
 const WebSocketManager = {
@@ -28,17 +27,11 @@ const WebSocketManager = {
     userId: null
   },
   
-  // Message handlers - can be overridden by the component
-  handlers: {
-    onPollingRequired: null
-  },
-  
   /**
    * Initialize the WebSocket manager
    * @param {string} userId - User ID for WebSocket connections
-   * @param {Object} handlers - Event handlers for WebSocket messages
    */
-  initialize(userId, handlers = {}) {
+  initialize(userId) {
     if (!userId) {
       console.error('User ID is required for WebSocket initialization');
       return;
@@ -46,11 +39,6 @@ const WebSocketManager = {
     
     // Set user ID
     this.state.userId = userId;
-    
-    // Set custom polling handler if provided
-    if (handlers.onPollingRequired) {
-      this.handlers.onPollingRequired = handlers.onPollingRequired;
-    }
     
     // Connect to WebSockets
     this.connect();
@@ -75,7 +63,7 @@ const WebSocketManager = {
     this.state.connected = true;
     
     // Update store with connection status
-    taprootStore.actions.setWebsocketStatus({
+    this._updateStoreConnectionStatus({
       connected: true,
       reconnecting: false,
       fallbackPolling: false
@@ -157,6 +145,11 @@ const WebSocketManager = {
       const data = JSON.parse(event.data);
       console.log('Invoice WebSocket message received:', data);
       
+      // First, process balance data if available
+      if (data?.data?.asset_id) {
+        this._processAssetInfo(data.data);
+      }
+      
       // Process with InvoiceService to update store
       if (window.InvoiceService) {
         const processedInvoice = InvoiceService.processWebSocketUpdate(data);
@@ -171,18 +164,13 @@ const WebSocketManager = {
             window.g.updatePaymentsHash = processedInvoice.payment_hash;
           }
           
-          // Call the Vue app's handlePaidInvoice method directly
-          if (window.app && typeof window.app.handlePaidInvoice === 'function') {
-            window.app.handlePaidInvoice(processedInvoice);
-          } 
-          // Also explicitly refresh transactions
-          if (window.app && typeof window.app.refreshTransactions === 'function') {
-            window.app.refreshTransactions();
-          }
-          // Fallback to notification service if app method not available
-          else if (window.NotificationService) {
+          // Trigger notification through NotificationService
+          if (window.NotificationService) {
             NotificationService.notifyInvoicePaid(processedInvoice);
           }
+          
+          // Force refresh of assets to update balances
+          this._refreshAssets();
         }
       }
     } catch (error) {
@@ -200,7 +188,12 @@ const WebSocketManager = {
       const data = JSON.parse(event.data);
       console.log('Payment WebSocket message received:', data);
       
-      // Process with PaymentService and update store
+      // First, process asset info if available
+      if (data?.data?.asset_id) {
+        this._processAssetInfo(data.data);
+      }
+      
+      // Process with PaymentService
       if (window.PaymentService) {
         const processedPayment = PaymentService.processWebSocketUpdate(data);
         
@@ -208,24 +201,9 @@ const WebSocketManager = {
         if (processedPayment && processedPayment.status === 'completed') {
           console.log('Completed payment detected, triggering UI update');
           
-          // Call the Vue app's getAssets method directly to refresh assets
-          if (window.app && typeof window.app.getAssets === 'function') {
-            console.log('Calling app.getAssets directly to refresh balances');
-            window.app.getAssets();
-          }
-          // Call refreshTransactions to update transaction list
-          if (window.app && typeof window.app.refreshTransactions === 'function') {
-            console.log('Calling app.refreshTransactions directly to refresh transaction list');
-            window.app.refreshTransactions();
-          }
-          // Fallback to using the store
-          else {
-            console.log('Fallback: using store to refresh assets');
-            const wallet = taprootStore.getters.getCurrentWallet();
-            if (wallet && window.AssetService) {
-              AssetService.getAssets(wallet);
-            }
-          }
+          // Force refresh of assets and transactions
+          this._refreshAssets();
+          this._refreshTransactions();
         }
       }
     } catch (error) {
@@ -243,29 +221,129 @@ const WebSocketManager = {
       const data = JSON.parse(event.data);
       console.log('Balance WebSocket message received:', data);
       
-      // Update the assets when we receive a balance update
-      if (data.type === 'assets_update' && Array.isArray(data.data)) {
-        // Call the Vue app's getAssets method directly
-        if (window.app && typeof window.app.getAssets === 'function') {
-          console.log('Calling app.getAssets directly to refresh balances from balance update');
-          window.app.getAssets();
+      // Process asset data with AssetService
+      if (data?.type === 'assets_update' && Array.isArray(data.data)) {
+        if (window.AssetService && typeof window.AssetService.processWebSocketUpdate === 'function') {
+          // Let AssetService handle the update
+          AssetService.processWebSocketUpdate(data);
+        } else {
+          // Process ourselves if AssetService doesn't have the method
+          this._processAssetUpdate(data.data);
         }
-        // Also refresh transactions to ensure consistency
-        if (window.app && typeof window.app.refreshTransactions === 'function') {
-          console.log('Calling app.refreshTransactions directly from balance update');
-          window.app.refreshTransactions();
-        }
-        // Fallback to using the store
-        else {
-          console.log('Fallback: using store to refresh assets from balance update');
-          const wallet = taprootStore.getters.getCurrentWallet();
-          if (wallet) {
-            AssetService.getAssets(wallet);
-          }
-        }
+        
+        // Also refresh transactions to ensure asset names are up to date
+        this._refreshTransactions();
       }
     } catch (error) {
       console.error('Error handling balance WebSocket message:', error);
+    }
+  },
+  
+  /**
+   * Process asset info from message data
+   * @param {Object} data - Message data with asset info
+   * @private
+   */
+  _processAssetInfo(data) {
+    if (!data?.asset_id) return;
+    
+    // Ensure the global asset map exists
+    if (!window.assetMap) window.assetMap = {};
+    
+    // Update the asset map with the info
+    if (!window.assetMap[data.asset_id]) {
+      window.assetMap[data.asset_id] = {
+        name: data.asset_name || data.name || `Asset ${data.asset_id.substring(0, 8)}...`,
+        type: data.type || 'unknown'
+      };
+    }
+  },
+  
+  /**
+   * Process a batch asset update
+   * @param {Array} assets - Array of asset data
+   * @private
+   */
+  _processAssetUpdate(assets) {
+    if (!Array.isArray(assets)) return;
+    
+    // Ensure the global asset map exists
+    if (!window.assetMap) window.assetMap = {};
+    
+    // Update the asset map with all assets
+    assets.forEach(asset => {
+      if (asset.asset_id) {
+        window.assetMap[asset.asset_id] = {
+          name: asset.name || `Asset ${asset.asset_id.substring(0, 8)}...`,
+          type: asset.type || 'unknown',
+          channel_info: asset.channel_info
+        };
+      }
+    });
+    
+    // Update the store
+    if (window.taprootStore?.actions?.setAssets && window.taprootStore.state?.assets) {
+      // Merge with existing assets
+      const existingAssets = [...window.taprootStore.state.assets];
+      const assetIds = new Set(existingAssets.map(a => a.asset_id));
+      
+      // Update existing and add new
+      const updatedAssets = [...existingAssets];
+      assets.forEach(asset => {
+        if (asset.asset_id) {
+          if (assetIds.has(asset.asset_id)) {
+            // Update existing
+            const index = updatedAssets.findIndex(a => a.asset_id === asset.asset_id);
+            if (index !== -1) {
+              updatedAssets[index] = {...updatedAssets[index], ...asset};
+            }
+          } else {
+            // Add new
+            updatedAssets.push(asset);
+          }
+        }
+      });
+      
+      // Update the store
+      window.taprootStore.actions.setAssets(updatedAssets);
+    }
+  },
+  
+  /**
+   * Refresh assets using the store
+   * @private
+   */
+  _refreshAssets() {
+    const wallet = window.taprootStore?.getters?.getCurrentWallet();
+    if (wallet && window.AssetService) {
+      AssetService.getAssets(wallet);
+    }
+  },
+  
+  /**
+   * Refresh transactions using services
+   * @private
+   */
+  _refreshTransactions() {
+    const wallet = window.taprootStore?.getters?.getCurrentWallet();
+    if (wallet) {
+      if (window.InvoiceService) {
+        InvoiceService.getInvoices(wallet, true);
+      }
+      if (window.PaymentService) {
+        PaymentService.getPayments(wallet, true);
+      }
+    }
+  },
+  
+  /**
+   * Update the store's WebSocket status
+   * @param {Object} status - WebSocket status object
+   * @private
+   */
+  _updateStoreConnectionStatus(status) {
+    if (window.taprootStore?.actions?.setWebsocketStatus) {
+      window.taprootStore.actions.setWebsocketStatus(status);
     }
   },
   
@@ -283,7 +361,7 @@ const WebSocketManager = {
       this.state.connected = false;
       
       // Update store
-      taprootStore.actions.setWebsocketStatus({
+      this._updateStoreConnectionStatus({
         connected: false,
         reconnecting: this.state.reconnectTimeout !== null
       });
@@ -318,7 +396,7 @@ const WebSocketManager = {
       this.state.connected = false;
       
       // Update store
-      taprootStore.actions.setWebsocketStatus({
+      this._updateStoreConnectionStatus({
         connected: false,
         reconnecting: true
       });
@@ -347,7 +425,7 @@ const WebSocketManager = {
       console.log('Maximum WebSocket reconnection attempts reached');
       
       // Update store
-      taprootStore.actions.setWebsocketStatus({
+      this._updateStoreConnectionStatus({
         reconnecting: false,
         fallbackPolling: true
       });
@@ -359,7 +437,7 @@ const WebSocketManager = {
     this.state.reconnectAttempts++;
     
     // Update store
-    taprootStore.actions.setWebsocketStatus({
+    this._updateStoreConnectionStatus({
       reconnecting: true,
       reconnectAttempts: this.state.reconnectAttempts
     });
@@ -386,16 +464,14 @@ const WebSocketManager = {
     this.state.fallbackPolling = true;
     
     // Update store
-    taprootStore.actions.setWebsocketStatus({
+    this._updateStoreConnectionStatus({
       fallbackPolling: true
     });
     
     // Set up polling interval (every 10 seconds)
     this.state.pollingInterval = setInterval(() => {
-      // Trigger polling callbacks
-      if (this.handlers.onPollingRequired) {
-        this.handlers.onPollingRequired();
-      }
+      this._refreshAssets();
+      this._refreshTransactions();
     }, 10000); // 10 seconds
   },
   
@@ -411,7 +487,7 @@ const WebSocketManager = {
     this.state.fallbackPolling = false;
     
     // Update store
-    taprootStore.actions.setWebsocketStatus({
+    this._updateStoreConnectionStatus({
       fallbackPolling: false
     });
   },
@@ -466,7 +542,7 @@ const WebSocketManager = {
     this.state.connected = false;
     
     // Update store
-    taprootStore.actions.setWebsocketStatus({
+    this._updateStoreConnectionStatus({
       connected: false,
       reconnecting: false,
       fallbackPolling: false
@@ -478,11 +554,6 @@ const WebSocketManager = {
    */
   destroy() {
     this.closeAll();
-    
-    // Clear all handlers
-    this.handlers = {
-      onPollingRequired: null
-    };
     
     // Reset state
     this.state.userId = null;

@@ -1,6 +1,6 @@
 /**
- * Simplified Asset Service for Taproot Assets extension
- * Further refactored to remove unnecessary conditionals
+ * Asset Service for Taproot Assets extension
+ * Fixed to ensure asset names are properly available to transactions
  */
 
 const AssetService = {
@@ -15,6 +15,8 @@ const AssetService = {
         throw new Error('Valid wallet is required');
       }
       
+      console.log('Fetching assets for wallet', wallet.id);
+      
       // Request assets from the API
       const response = await LNbits.api.request(
         'GET', 
@@ -23,6 +25,7 @@ const AssetService = {
       );
       
       if (!response || !response.data) {
+        console.warn('No assets returned from API');
         return [];
       }
       
@@ -63,25 +66,44 @@ const AssetService = {
         }
       }
       
-      // Update the store - we know it's always available
-      try {
-        window.taprootStore.actions.setAssets(assets);
-      } catch (e) {
-        console.error('Error updating store with assets:', e);
-      }
+      // Update the store
+      window.taprootStore.actions.setAssets(assets);
+      
+      // Create a global asset map for quick lookups
+      this._updateAssetMap(assets);
       
       return assets;
     } catch (error) {
       console.error('Failed to fetch assets:', error);
-      return []; // Return empty array instead of throwing to maintain original behavior
+      return []; 
     } finally {
       // Set loading state to false in store
-      try {
-        window.taprootStore.actions.setAssetsLoading(false);
-      } catch (e) {
-        // Ignore errors in finally block
-      }
+      window.taprootStore.actions.setAssetsLoading(false);
     }
+  },
+  
+  /**
+   * Update the global asset map for quick lookups
+   * @param {Array} assets - Assets to add to the map
+   * @private
+   */
+  _updateAssetMap(assets) {
+    // Create a global map if it doesn't exist
+    if (!window.assetMap) {
+      window.assetMap = {};
+    }
+    
+    // Update the map with new asset data
+    assets.forEach(asset => {
+      if (asset.asset_id) {
+        window.assetMap[asset.asset_id] = {
+          name: asset.name || 'Unknown',
+          type: asset.type || 'unknown',
+          meta_hash: asset.meta_hash,
+          // Add any other properties that might be needed for lookups
+        };
+      }
+    });
   },
   
   /**
@@ -92,8 +114,22 @@ const AssetService = {
   getAssetById(assetId) {
     if (!assetId) return null;
     
-    // Use the store directly - it's always available
-    return window.taprootStore.state.assets.find(asset => asset.asset_id === assetId) || null;
+    // First try the store
+    const storeAsset = window.taprootStore?.state?.assets?.find(asset => asset.asset_id === assetId);
+    if (storeAsset) return storeAsset;
+    
+    // If not in store, check the map
+    if (window.assetMap && window.assetMap[assetId]) {
+      // Return a minimal asset object from the map
+      return {
+        asset_id: assetId,
+        name: window.assetMap[assetId].name,
+        type: window.assetMap[assetId].type,
+        meta_hash: window.assetMap[assetId].meta_hash
+      };
+    }
+    
+    return null;
   },
   
   /**
@@ -102,8 +138,14 @@ const AssetService = {
    * @returns {string} - Asset name or "Unknown" if not found
    */
   getAssetName(assetId) {
+    // Try to get from global map first (fastest)
+    if (window.assetMap && window.assetMap[assetId]) {
+      return window.assetMap[assetId].name || 'Unknown';
+    }
+    
+    // Then try the store
     const asset = this.getAssetById(assetId);
-    return asset ? asset.name : 'Unknown';
+    return asset ? asset.name || 'Unknown' : 'Unknown';
   },
 
   /**
@@ -140,6 +182,45 @@ const AssetService = {
     }
     
     return 0;
+  },
+  
+  /**
+   * Process asset data from WebSocket updates
+   * @param {Object} data - WebSocket data with asset information
+   */
+  processWebSocketUpdate(data) {
+    if (data?.type === 'assets_update' && Array.isArray(data.data)) {
+      // Update the asset map for quick lookups
+      this._updateAssetMap(data.data);
+      
+      // Update the store if needed
+      if (window.taprootStore?.state?.assets) {
+        // Merge with existing assets
+        const existingAssets = [...window.taprootStore.state.assets];
+        const assetIds = new Set(existingAssets.map(a => a.asset_id));
+        
+        // Update existing and add new
+        const updatedAssets = [...existingAssets];
+        data.data.forEach(asset => {
+          if (asset.asset_id) {
+            if (assetIds.has(asset.asset_id)) {
+              // Update existing
+              const index = updatedAssets.findIndex(a => a.asset_id === asset.asset_id);
+              if (index !== -1) {
+                updatedAssets[index] = {...updatedAssets[index], ...asset};
+              }
+            } else {
+              // Add new
+              updatedAssets.push(asset);
+              assetIds.add(asset.asset_id);
+            }
+          }
+        });
+        
+        // Update the store
+        window.taprootStore.actions.setAssets(updatedAssets);
+      }
+    }
   }
 };
 

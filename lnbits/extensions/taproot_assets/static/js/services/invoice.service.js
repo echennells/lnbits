@@ -1,6 +1,6 @@
 /**
  * Invoice Service for Taproot Assets extension
- * Handles invoice creation, fetching, and management
+ * Simplified and optimized to work with the WebSocket manager
  */
 
 const InvoiceService = {
@@ -16,47 +16,29 @@ const InvoiceService = {
         throw new Error('Valid wallet is required');
       }
       
-      // Set loading state in store if available
-      if (window.taprootStore && window.taprootStore.actions) {
-        window.taprootStore.actions.setTransactionsLoading(true);
-      }
-      
-      // Update current wallet in store if available
-      if (window.taprootStore && window.taprootStore.actions) {
-        window.taprootStore.actions.setCurrentWallet(wallet);
-      }
+      // Set loading state
+      window.taprootStore.actions.setTransactionsLoading(true);
+      window.taprootStore.actions.setCurrentWallet(wallet);
       
       // Request invoices from the API
-      const timestamp = new Date().getTime();
-      const response = await ApiService.getInvoices(wallet.adminkey, true);
-      
-      if (!response || !response.data) {
-        // Update store if available
-        if (window.taprootStore && window.taprootStore.actions) {
-          window.taprootStore.actions.setInvoices([]);
-        }
-        return [];
-      }
+      const response = await ApiService.getInvoices(wallet.adminkey, forceFresh);
       
       // Process the invoices
-      const invoices = Array.isArray(response.data)
+      const invoices = Array.isArray(response?.data)
         ? response.data.map(invoice => this._mapInvoice(invoice))
         : [];
       
-      // Update the store if available
-      if (window.taprootStore && window.taprootStore.actions) {
-        window.taprootStore.actions.setInvoices(invoices);
-      }
+      // Update the store with processed invoices
+      window.taprootStore.actions.setInvoices(invoices);
       
       return invoices;
     } catch (error) {
       console.error('Failed to fetch invoices:', error);
-      throw error;
+      window.taprootStore.actions.setInvoices([]);
+      return [];
     } finally {
       // Ensure loading state is reset
-      if (window.taprootStore && window.taprootStore.actions) {
-        window.taprootStore.actions.setTransactionsLoading(false);
-      }
+      window.taprootStore.actions.setTransactionsLoading(false);
     }
   },
   
@@ -86,18 +68,18 @@ const InvoiceService = {
       };
       
       // Add peer_pubkey if available in channel info
-      if (assetData.channel_info && assetData.channel_info.peer_pubkey) {
+      if (assetData.channel_info?.peer_pubkey) {
         payload.peer_pubkey = assetData.channel_info.peer_pubkey;
       }
       
       // Request creation from the API
       const response = await ApiService.createInvoice(wallet.adminkey, payload);
       
-      if (!response || !response.data) {
+      if (!response?.data) {
         throw new Error('Failed to create invoice: No data returned');
       }
       
-      // Process and return the invoice
+      // Process the invoice
       const createdInvoice = response.data;
       
       // Add asset name to the created invoice for better UX
@@ -106,10 +88,8 @@ const InvoiceService = {
       // Process invoice for store
       const mappedInvoice = this._mapInvoice(createdInvoice);
       
-      // Add to store if available
-      if (window.taprootStore && window.taprootStore.actions) {
-        window.taprootStore.actions.addInvoice(mappedInvoice);
-      }
+      // Add to store
+      window.taprootStore.actions.addInvoice(mappedInvoice);
       
       return createdInvoice;
     } catch (error) {
@@ -134,38 +114,13 @@ const InvoiceService = {
     mapped.type = 'invoice';
     mapped.direction = 'incoming';
     
-    // Format date consistently
+    // Format date using DataUtils
     if (mapped.created_at) {
       try {
-        const date = new Date(mapped.created_at);
-        // Format exactly like LNbits: YYYY-MM-DD HH:MM:SS
-        if (window.Quasar && window.Quasar.date && window.Quasar.date.formatDate) {
-          mapped.date = window.Quasar.date.formatDate(date, 'YYYY-MM-DD HH:mm:ss');
-        } else {
-          mapped.date = date.toISOString().replace('T', ' ').substring(0, 19);
-        }
-        
-        // Calculate "timeFrom" like LNbits
-        const now = new Date();
-        const diffMs = now - date;
-        
-        if (diffMs < 60000) { // less than a minute
-          mapped.timeFrom = 'a minute ago';
-        } else if (diffMs < 3600000) { // less than an hour
-          const mins = Math.floor(diffMs / 60000);
-          mapped.timeFrom = `${mins} minute${mins > 1 ? 's' : ''} ago`;
-        } else if (diffMs < 86400000) { // less than a day
-          const hours = Math.floor(diffMs / 3600000);
-          mapped.timeFrom = `${hours} hour${hours > 1 ? 's' : ''} ago`;
-        } else if (diffMs < 604800000) { // less than a week
-          const days = Math.floor(diffMs / 86400000);
-          mapped.timeFrom = `${days} day${days > 1 ? 's' : ''} ago`;
-        } else {
-          // Just use date for older items
-          mapped.timeFrom = mapped.date;
-        }
+        mapped.date = DataUtils.formatDate(mapped.created_at);
+        mapped.timeFrom = DataUtils.getRelativeTime(mapped.created_at);
       } catch (e) {
-        console.error('Error formatting date:', e, mapped.created_at);
+        console.error('Error formatting date:', e);
         mapped.date = 'Unknown';
         mapped.timeFrom = 'Unknown';
       }
@@ -188,33 +143,34 @@ const InvoiceService = {
   /**
    * Process WebSocket invoice update
    * @param {Object} data - Invoice data from WebSocket
+   * @returns {Object|null} - Processed invoice or null
    */
   processWebSocketUpdate(data) {
-    if (data && data.type === 'invoice_update' && data.data) {
-      // Map the invoice
-      const invoice = this._mapInvoice(data.data);
-      
-      // Add to store if available
-      if (window.taprootStore && window.taprootStore.actions) {
-        window.taprootStore.actions.addInvoice(invoice);
-      }
-      
-      // Return the processed invoice
-      return invoice;
+    if (!data?.type || data.type !== 'invoice_update' || !data.data) {
+      return null;
     }
-    return null;
+    
+    // Map the invoice
+    const invoice = this._mapInvoice(data.data);
+    
+    // Add to store
+    if (invoice) {
+      window.taprootStore.actions.addInvoice(invoice);
+    }
+    
+    return invoice;
   },
   
   /**
    * Process a paid invoice and update state
    * @param {Object} invoice - The paid invoice
-   * @returns {Object} - Information about the processed invoice
+   * @returns {Object|null} - Information about the processed invoice or null
    */
   processPaidInvoice(invoice) {
     if (!invoice) return null;
     
-    // Update the store if available
-    if (invoice.id && window.taprootStore && window.taprootStore.actions) {
+    // Update invoice in store
+    if (invoice.id) {
       window.taprootStore.actions.updateInvoice(invoice.id, { 
         status: 'paid',
         paid_at: new Date().toISOString()
@@ -223,11 +179,34 @@ const InvoiceService = {
     
     // Return information for UI notifications
     return {
-      assetName: AssetService.getAssetName(invoice.asset_id),
+      assetName: window.AssetService?.getAssetName(invoice.asset_id) || 'Unknown Asset',
       amount: invoice.asset_amount || 0,
       paymentHash: invoice.payment_hash,
       invoiceId: invoice.id
     };
+  },
+  
+  /**
+   * Get an invoice by ID
+   * @param {string} invoiceId - ID of the invoice to find
+   * @returns {Object|null} - Invoice object or null if not found
+   */
+  getInvoiceById(invoiceId) {
+    if (!invoiceId || !window.taprootStore?.state?.invoices) {
+      return null;
+    }
+    
+    return window.taprootStore.state.invoices.find(inv => inv.id === invoiceId) || null;
+  },
+  
+  /**
+   * Check if an invoice is paid
+   * @param {string} invoiceId - ID of the invoice to check
+   * @returns {boolean} - Whether the invoice is paid
+   */
+  isInvoicePaid(invoiceId) {
+    const invoice = this.getInvoiceById(invoiceId);
+    return invoice ? invoice.status === 'paid' : false;
   }
 };
 

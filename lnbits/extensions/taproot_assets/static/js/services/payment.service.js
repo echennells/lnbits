@@ -1,6 +1,6 @@
 /**
  * Payments Service for Taproot Assets extension
- * Handles payment processing, fetching, and management
+ * Fixed to ensure asset names are properly displayed in transactions
  */
 
 const PaymentService = {
@@ -16,24 +16,15 @@ const PaymentService = {
         throw new Error('Valid wallet is required');
       }
       
-      // Set loading state in store if available
-      if (window.taprootStore && window.taprootStore.actions) {
-        window.taprootStore.actions.setTransactionsLoading(true);
-      }
-      
-      // Update current wallet in store if available
-      if (window.taprootStore && window.taprootStore.actions) {
-        window.taprootStore.actions.setCurrentWallet(wallet);
-      }
+      // Set loading state in store
+      window.taprootStore.actions.setTransactionsLoading(true);
+      window.taprootStore.actions.setCurrentWallet(wallet);
       
       // Request payments from the API
       const response = await ApiService.getPayments(wallet.adminkey, cache);
       
-      if (!response || !response.data) {
-        // Update store if available
-        if (window.taprootStore && window.taprootStore.actions) {
-          window.taprootStore.actions.setPayments([]);
-        }
+      if (!response?.data) {
+        window.taprootStore.actions.setPayments([]);
         return [];
       }
       
@@ -42,21 +33,61 @@ const PaymentService = {
         ? response.data.map(payment => this._mapPayment(payment))
         : [];
       
-      // Update the store if available
-      if (window.taprootStore && window.taprootStore.actions) {
-        window.taprootStore.actions.setPayments(payments);
-      }
+      // Make sure asset names are available
+      this._ensureAssetNames(payments);
+      
+      // Update the store
+      window.taprootStore.actions.setPayments(payments);
       
       return payments;
     } catch (error) {
       console.error('Failed to fetch payments:', error);
-      throw error;
+      window.taprootStore.actions.setPayments([]);
+      return [];
     } finally {
       // Ensure loading state is reset
-      if (window.taprootStore && window.taprootStore.actions) {
-        window.taprootStore.actions.setTransactionsLoading(false);
-      }
+      window.taprootStore.actions.setTransactionsLoading(false);
     }
+  },
+  
+  /**
+   * Ensure asset names are available for all payments
+   * @param {Array} payments - Array of payment objects
+   * @private
+   */
+  _ensureAssetNames(payments) {
+    if (!Array.isArray(payments)) return;
+    
+    // Create a set of unique asset IDs
+    const assetIds = new Set();
+    payments.forEach(payment => {
+      if (payment.asset_id) {
+        assetIds.add(payment.asset_id);
+      }
+    });
+    
+    // Make sure all assets are in the global map
+    assetIds.forEach(assetId => {
+      if (!window.assetMap) window.assetMap = {};
+      
+      // If asset is not in map, add a placeholder
+      if (!window.assetMap[assetId]) {
+        // Try to get name from store first
+        const asset = window.taprootStore?.state?.assets?.find(a => a.asset_id === assetId);
+        if (asset) {
+          window.assetMap[assetId] = {
+            name: asset.name || 'Unknown',
+            type: asset.type || 'unknown'
+          };
+        } else {
+          // Add placeholder
+          window.assetMap[assetId] = {
+            name: `Asset ${assetId.substring(0, 8)}...`,
+            type: 'unknown'
+          };
+        }
+      }
+    });
   },
   
   /**
@@ -78,7 +109,7 @@ const PaymentService = {
       // Request parsing from the API
       const response = await ApiService.parseInvoice(wallet.adminkey, paymentRequest);
       
-      if (!response || !response.data) {
+      if (!response?.data) {
         throw new Error('Failed to parse invoice: No data returned');
       }
       
@@ -102,7 +133,7 @@ const PaymentService = {
         throw new Error('Valid wallet is required');
       }
       
-      if (!paymentData || !paymentData.paymentRequest) {
+      if (!paymentData?.paymentRequest) {
         throw new Error('Payment request is required');
       }
       
@@ -113,19 +144,19 @@ const PaymentService = {
       };
       
       // Add peer_pubkey if available
-      if (assetData && assetData.channel_info && assetData.channel_info.peer_pubkey) {
+      if (assetData?.channel_info?.peer_pubkey) {
         payload.peer_pubkey = assetData.channel_info.peer_pubkey;
       }
       
       // Make the payment request
       const response = await ApiService.payInvoice(wallet.adminkey, payload);
       
-      if (!response || !response.data) {
+      if (!response?.data) {
         throw new Error('Failed to process payment: No data returned');
       }
       
       // Update asset information in the store with new balance
-      if (response.data.asset_id && assetData && window.taprootStore && window.taprootStore.actions) {
+      if (response.data.asset_id && assetData && window.taprootStore) {
         // Deduct the asset amount from the user's balance
         const newBalance = (assetData.user_balance || 0) - response.data.asset_amount;
         
@@ -133,6 +164,15 @@ const PaymentService = {
         window.taprootStore.actions.updateAsset(assetData.asset_id, { 
           user_balance: Math.max(0, newBalance) 
         });
+        
+        // Make sure this asset is in the global map
+        if (!window.assetMap) window.assetMap = {};
+        if (!window.assetMap[assetData.asset_id]) {
+          window.assetMap[assetData.asset_id] = {
+            name: assetData.name || 'Unknown',
+            type: assetData.type || 'unknown'
+          };
+        }
       }
       
       // Create payment record for store
@@ -143,7 +183,7 @@ const PaymentService = {
         asset_id: response.data.asset_id || assetData.asset_id,
         asset_amount: response.data.asset_amount,
         fee_sats: response.data.fee_msat ? Math.ceil(response.data.fee_msat / 1000) : 0,
-        memo: assetData.name ? `Sent ${response.data.asset_amount} ${assetData.name}` : 'Asset payment',
+        memo: assetData?.name ? `Sent ${response.data.asset_amount} ${assetData.name}` : 'Asset payment',
         status: 'completed',
         user_id: wallet.user,
         wallet_id: wallet.id,
@@ -151,18 +191,14 @@ const PaymentService = {
         preimage: response.data.preimage
       };
       
-      // Add mapped payment to store if available
+      // Add mapped payment to store
       const mappedPayment = this._mapPayment(payment);
-      if (window.taprootStore && window.taprootStore.actions) {
-        window.taprootStore.actions.addPayment(mappedPayment);
-      }
+      window.taprootStore.actions.addPayment(mappedPayment);
       
       return response.data;
     } catch (error) {
       // Check for special cases that might need handling
-      if (error.response && 
-          error.response.data && 
-          error.response.data.detail && 
+      if (error.response?.data?.detail && 
           (error.response.data.detail.includes('internal payment') || 
            error.response.data.detail.includes('own invoice'))) {
         // This is likely an internal payment that should be routed differently
@@ -190,7 +226,7 @@ const PaymentService = {
         throw new Error('Valid wallet is required');
       }
       
-      if (!paymentData || !paymentData.paymentRequest) {
+      if (!paymentData?.paymentRequest) {
         throw new Error('Payment request is required');
       }
       
@@ -203,18 +239,18 @@ const PaymentService = {
       // Call the internal payment endpoint
       const response = await ApiService.processInternalPayment(wallet.adminkey, payload);
       
-      if (!response || !response.data) {
+      if (!response?.data) {
         throw new Error('Failed to process internal payment: No data returned');
       }
       
       // Find the asset in the store
       let asset = null;
-      if (window.taprootStore && window.taprootStore.state && window.taprootStore.state.assets) {
+      if (window.taprootStore?.state?.assets) {
         asset = window.taprootStore.state.assets.find(a => a.asset_id === response.data.asset_id);
       }
       
       // Update asset information in the store if found
-      if (response.data.asset_id && asset && window.taprootStore && window.taprootStore.actions) {
+      if (response.data.asset_id && asset) {
         // Deduct the asset amount from the user's balance
         const newBalance = (asset.user_balance || 0) - response.data.asset_amount;
         
@@ -222,6 +258,15 @@ const PaymentService = {
         window.taprootStore.actions.updateAsset(asset.asset_id, { 
           user_balance: Math.max(0, newBalance) 
         });
+        
+        // Make sure this asset is in the global map
+        if (!window.assetMap) window.assetMap = {};
+        if (!window.assetMap[asset.asset_id]) {
+          window.assetMap[asset.asset_id] = {
+            name: asset.name || 'Unknown',
+            type: asset.type || 'unknown'
+          };
+        }
       }
       
       // Create payment record for store
@@ -232,7 +277,7 @@ const PaymentService = {
         asset_id: response.data.asset_id,
         asset_amount: response.data.asset_amount,
         fee_sats: 0, // Internal payments have zero fee
-        memo: asset ? `Sent ${response.data.asset_amount} ${asset.name} (Internal)` : 'Internal asset payment',
+        memo: asset?.name ? `Sent ${response.data.asset_amount} ${asset.name} (Internal)` : 'Internal asset payment',
         status: 'completed',
         user_id: wallet.user,
         wallet_id: wallet.id,
@@ -243,9 +288,7 @@ const PaymentService = {
       
       // Add mapped payment to store
       const mappedPayment = this._mapPayment(payment);
-      if (window.taprootStore && window.taprootStore.actions) {
-        window.taprootStore.actions.addPayment(mappedPayment);
-      }
+      window.taprootStore.actions.addPayment(mappedPayment);
       
       return response.data;
     } catch (error) {
@@ -269,40 +312,25 @@ const PaymentService = {
     mapped.type = 'payment';
     mapped.direction = 'outgoing';
     
-    // Format date consistently
+    // Format date using DataUtils
     if (mapped.created_at) {
       try {
-        const date = new Date(mapped.created_at);
-        // Format exactly like LNbits: YYYY-MM-DD HH:MM:SS
-        if (window.Quasar && window.Quasar.date) {
-          mapped.date = window.Quasar.date.formatDate(date, 'YYYY-MM-DD HH:mm:ss');
-        } else {
-          mapped.date = date.toISOString().replace('T', ' ').slice(0, 19);
-        }
-        
-        // Calculate "timeFrom" like LNbits
-        const now = new Date();
-        const diffMs = now - date;
-        
-        if (diffMs < 60000) { // less than a minute
-          mapped.timeFrom = 'a minute ago';
-        } else if (diffMs < 3600000) { // less than an hour
-          const mins = Math.floor(diffMs / 60000);
-          mapped.timeFrom = `${mins} minute${mins > 1 ? 's' : ''} ago`;
-        } else if (diffMs < 86400000) { // less than a day
-          const hours = Math.floor(diffMs / 3600000);
-          mapped.timeFrom = `${hours} hour${hours > 1 ? 's' : ''} ago`;
-        } else if (diffMs < 604800000) { // less than a week
-          const days = Math.floor(diffMs / 86400000);
-          mapped.timeFrom = `${days} day${days > 1 ? 's' : ''} ago`;
-        } else {
-          // Just use date for older items
-          mapped.timeFrom = mapped.date;
-        }
+        mapped.date = DataUtils.formatDate(mapped.created_at);
+        mapped.timeFrom = DataUtils.getRelativeTime(mapped.created_at);
       } catch (e) {
-        console.error('Error formatting date:', e, mapped.created_at);
+        console.error('Error formatting date:', e);
         mapped.date = 'Unknown';
         mapped.timeFrom = 'Unknown';
+      }
+    }
+    
+    // Get asset name if not in memo
+    if (mapped.asset_id && !mapped.asset_name) {
+      mapped.asset_name = this._getAssetName(mapped.asset_id);
+      
+      // Update memo if needed
+      if (!mapped.memo && mapped.asset_name && mapped.asset_name !== 'Unknown') {
+        mapped.memo = `Sent ${mapped.asset_amount || 0} ${mapped.asset_name}`;
       }
     }
     
@@ -312,10 +340,40 @@ const PaymentService = {
     mapped.extra = {
       asset_amount: mapped.asset_amount,
       asset_id: mapped.asset_id,
-      fee_sats: mapped.fee_sats
+      fee_sats: mapped.fee_sats,
+      asset_name: mapped.asset_name || this._getAssetName(mapped.asset_id)
     };
     
     return mapped;
+  },
+  
+  /**
+   * Get asset name from ID using multiple sources
+   * @param {string} assetId - Asset ID to look up
+   * @returns {string} - Asset name or "Unknown"
+   * @private
+   */
+  _getAssetName(assetId) {
+    if (!assetId) return 'Unknown';
+    
+    // Try global map first (fastest)
+    if (window.assetMap && window.assetMap[assetId]) {
+      return window.assetMap[assetId].name || 'Unknown';
+    }
+    
+    // Try AssetService next
+    if (window.AssetService && typeof window.AssetService.getAssetName === 'function') {
+      return window.AssetService.getAssetName(assetId);
+    }
+    
+    // Try store as last resort
+    const asset = window.taprootStore?.state?.assets?.find(a => a.asset_id === assetId);
+    if (asset) {
+      return asset.name || 'Unknown';
+    }
+    
+    // Return a short version of the ID if all else fails
+    return `Asset ${assetId.substring(0, 8)}...`;
   },
   
   /**
@@ -323,19 +381,24 @@ const PaymentService = {
    * @param {Object} data - Payment data from WebSocket
    */
   processWebSocketUpdate(data) {
-    if (data && data.type === 'payment_update' && data.data) {
-      // Map the payment
-      const payment = this._mapPayment(data.data);
-      
-      // Add to store if available
-      if (window.taprootStore && window.taprootStore.actions) {
-        window.taprootStore.actions.addPayment(payment);
-      }
-      
-      // Return the processed payment
-      return payment;
+    if (!data?.type || data.type !== 'payment_update' || !data.data) {
+      return null;
     }
-    return null;
+    
+    // Make sure asset name is available
+    if (data.data.asset_id) {
+      this._ensureAssetNames([data.data]);
+    }
+    
+    // Map the payment
+    const payment = this._mapPayment(data.data);
+    
+    // Add to store
+    if (payment) {
+      window.taprootStore.actions.addPayment(payment);
+    }
+    
+    return payment;
   }
 };
 
