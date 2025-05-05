@@ -17,6 +17,7 @@ SETTINGS = "SETTINGS"
 API = "API"
 DB = "DB"
 GENERAL = "GENERAL"
+FACTORY = "FACTORY"  # Added for the TaprootAssetsFactory
 
 # Log level mapping for reference
 LOG_LEVELS = {

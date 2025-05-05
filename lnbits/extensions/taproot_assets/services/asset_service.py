@@ -10,7 +10,7 @@ from lnbits.core.models import WalletTypeInfo, User
 from lnbits.core.crud import get_user
 
 from ..models import TaprootAsset, AssetBalance, AssetTransaction
-from ..wallets.taproot_wallet import TaprootWalletExtension
+from ..wallets.taproot_factory import TaprootAssetsFactory
 from ..error_utils import log_error, handle_grpc_error, raise_http_exception
 from ..crud import (
     get_assets,
@@ -40,12 +40,11 @@ class AssetService:
             List[Dict[str, Any]]: List of assets with balance information
         """
         try:
-            # Create a wallet instance to communicate with tapd
-            taproot_wallet = TaprootWalletExtension()
-
-            # Set the user and wallet ID
-            taproot_wallet.user = wallet.wallet.user
-            taproot_wallet.id = wallet.wallet.id
+            # Create a wallet instance using the factory
+            taproot_wallet = await TaprootAssetsFactory.create_wallet(
+                user_id=wallet.wallet.user,
+                wallet_id=wallet.wallet.id
+            )
 
             # Get assets from tapd
             assets_data = await taproot_wallet.list_assets()

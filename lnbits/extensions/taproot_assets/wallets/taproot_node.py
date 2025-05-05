@@ -8,6 +8,12 @@ import grpc.aio
 import json
 import base64
 from lnbits import bolt11
+from lnbits.nodes.base import Node
+from lnbits.db import Filters, Page
+from lnbits.nodes.base import (
+    NodeChannel, NodePeerInfo, NodeInfoResponse, NodeInvoice, 
+    NodePayment, NodeInvoiceFilters, NodePaymentsFilters, ChannelPoint
+)
 
 # Import the adapter module for Taproot Asset gRPC interfaces
 from .taproot_adapter import (
@@ -39,7 +45,7 @@ from ..logging_utils import (
 )
 from ..error_utils import ErrorContext, TaprootAssetError
 
-class TaprootAssetsNodeExtension:
+class TaprootAssetsNodeExtension(Node):
     """
     Implementation of Taproot Assets node functionality for the extension.
     This mirrors the core TaprootAssetsNode class.
@@ -105,7 +111,7 @@ class TaprootAssetsNodeExtension:
 
     def __init__(
         self,
-        wallet=None,
+        wallet,  # Now required as in the base Node class
         host: str = None,
         network: str = None,
         tls_cert_path: str = None,
@@ -116,9 +122,11 @@ class TaprootAssetsNodeExtension:
     ):
         from ..tapd_settings import taproot_settings
 
+        # Initialize the base Node class
+        super().__init__(wallet)
+        
         log_debug(NODE, "Initializing TaprootAssetsNodeExtension")
         
-        self.wallet = wallet
         self.host = host or taproot_settings.tapd_host
         self.network = network or taproot_settings.tapd_network
 
@@ -248,6 +256,87 @@ class TaprootAssetsNodeExtension:
                 result[field_name] = value
                 
         return result
+
+    # Required abstract methods from Node base class
+    async def _get_id(self) -> str:
+        """Get the node ID."""
+        # Placeholder implementation
+        return "taproot-assets-node"
+
+    async def get_peer_ids(self) -> List[str]:
+        """Get peer IDs."""
+        # Placeholder implementation
+        return []
+
+    async def connect_peer(self, uri: str):
+        """Connect to a peer."""
+        # Placeholder implementation
+        pass
+
+    async def disconnect_peer(self, peer_id: str):
+        """Disconnect from a peer."""
+        # Placeholder implementation
+        pass
+
+    async def _get_peer_info(self, peer_id: str) -> NodePeerInfo:
+        """Get peer information."""
+        # Placeholder implementation
+        return NodePeerInfo(id=peer_id)
+
+    async def open_channel(
+        self,
+        peer_id: str,
+        local_amount: int,
+        push_amount: int | None = None,
+        fee_rate: int | None = None,
+    ) -> ChannelPoint:
+        """Open a channel."""
+        # Placeholder implementation
+        raise NotImplementedError("open_channel not implemented")
+
+    async def close_channel(
+        self,
+        short_id: str | None = None,
+        point: ChannelPoint | None = None,
+        force: bool = False,
+    ):
+        """Close a channel."""
+        # Placeholder implementation
+        raise NotImplementedError("close_channel not implemented")
+
+    async def get_channel(self, channel_id: str) -> NodeChannel | None:
+        """Get a channel."""
+        # Placeholder implementation
+        return None
+
+    async def get_channels(self) -> List[NodeChannel]:
+        """Get all channels."""
+        # Placeholder implementation
+        return []
+
+    async def set_channel_fee(self, channel_id: str, base_msat: int, ppm: int):
+        """Set channel fee."""
+        # Placeholder implementation
+        raise NotImplementedError("set_channel_fee not implemented")
+
+    async def get_info(self) -> NodeInfoResponse:
+        """Get node information."""
+        # Placeholder implementation
+        raise NotImplementedError("get_info not implemented")
+
+    async def get_payments(
+        self, filters: Filters[NodePaymentsFilters]
+    ) -> Page[NodePayment]:
+        """Get payments."""
+        # Placeholder implementation
+        return Page(data=[], total=0)
+
+    async def get_invoices(
+        self, filters: Filters[NodeInvoiceFilters]
+    ) -> Page[NodeInvoice]:
+        """Get invoices."""
+        # Placeholder implementation
+        return Page(data=[], total=0)
 
     # Delegate methods to the appropriate managers
     async def list_assets(self) -> List[Dict[str, Any]]:

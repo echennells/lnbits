@@ -9,8 +9,9 @@ from loguru import logger
 from lnbits.core.models import WalletTypeInfo, User
 
 from ..models import TaprootInvoiceRequest, InvoiceResponse, TaprootInvoice
-from ..wallets.taproot_wallet import TaprootWalletExtension
+from ..wallets.taproot_factory import TaprootAssetsFactory
 from ..error_utils import log_error, handle_grpc_error, raise_http_exception
+from ..logging_utils import API
 from ..crud import (
     create_invoice,
     get_invoice,
@@ -51,12 +52,11 @@ class InvoiceService:
         """
         logger.info(f"Creating invoice for asset_id={data.asset_id}, amount={data.amount}")
         try:
-            # Create a wallet instance
-            taproot_wallet = TaprootWalletExtension()
-            
-            # Set the user and wallet ID
-            taproot_wallet.user = user_id
-            taproot_wallet.id = wallet_id
+            # Create a wallet instance using the factory
+            taproot_wallet = await TaprootAssetsFactory.create_wallet(
+                user_id=user_id,
+                wallet_id=wallet_id
+            )
             
             # Create the invoice
             invoice_response = await taproot_wallet.create_invoice(
@@ -76,13 +76,17 @@ class InvoiceService:
             # Get satoshi fee from settings
             satoshi_amount = taproot_settings.default_sat_fee
 
+            # Map the BaseInvoiceResponse to our expected fields
+            payment_hash = invoice_response.checking_id
+            payment_request = invoice_response.payment_request
+            
             # Create invoice record
             invoice = await create_invoice(
                 asset_id=data.asset_id,
                 asset_amount=data.amount,
                 satoshi_amount=satoshi_amount,
-                payment_hash=invoice_response.payment_hash,
-                payment_request=invoice_response.payment_request,
+                payment_hash=payment_hash,
+                payment_request=payment_request,
                 user_id=user_id,
                 wallet_id=wallet_id,
                 memo=data.memo or "",
@@ -92,8 +96,8 @@ class InvoiceService:
             # Send WebSocket notification for new invoice
             invoice_data = {
                 "id": invoice.id,
-                "payment_hash": invoice_response.payment_hash,
-                "payment_request": invoice_response.payment_request,
+                "payment_hash": payment_hash,
+                "payment_request": payment_request,
                 "asset_id": data.asset_id,
                 "asset_amount": data.amount,
                 "satoshi_amount": satoshi_amount,
@@ -109,8 +113,8 @@ class InvoiceService:
 
             # Return response
             return InvoiceResponse(
-                payment_hash=invoice_response.payment_hash,
-                payment_request=invoice_response.payment_request,
+                payment_hash=payment_hash,
+                payment_request=payment_request,
                 asset_id=data.asset_id,
                 asset_amount=data.amount,
                 satoshi_amount=satoshi_amount,
@@ -119,7 +123,7 @@ class InvoiceService:
             
         except Exception as e:
             # Log error with context and raise standard exception
-            log_error(e, context=f"Creating invoice for asset {data.asset_id}")
+            log_error(API, f"Error creating invoice for asset {data.asset_id}: {str(e)}")
             raise_http_exception(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Failed to create Taproot Asset invoice: {str(e)}"

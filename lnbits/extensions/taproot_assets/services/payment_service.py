@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, List, Tuple, Union
 import re
 import grpc
 from http import HTTPStatus
+from fastapi import HTTPException
 from loguru import logger
 import bolt11
 
@@ -13,7 +14,7 @@ from lnbits.core.models import WalletTypeInfo
 
 from ..models import TaprootPaymentRequest, PaymentResponse, ParsedInvoice
 from ..logging_utils import log_debug, log_info, log_warning, log_error, PAYMENT, API
-from ..wallets.taproot_wallet import TaprootWalletExtension
+from ..wallets.taproot_factory import TaprootAssetsFactory
 from ..error_utils import log_error, handle_grpc_error, raise_http_exception
 from ..crud import (
     get_invoice_by_payment_hash,
@@ -83,7 +84,7 @@ class PaymentService:
             )
         except Exception as e:
             # Log the error with context
-            log_error(e, context="Parsing invoice")
+            log_error(API, f"Error parsing invoice: {str(e)}")
             raise Exception(f"Invalid invoice format: {str(e)}")
     
     @staticmethod
@@ -129,12 +130,11 @@ class PaymentService:
             PaymentResponse: The payment result
         """
         try:
-            # Initialize wallet
-            taproot_wallet = TaprootWalletExtension()
-            
-            # Set the user and wallet ID
-            taproot_wallet.user = wallet.wallet.user
-            taproot_wallet.id = wallet.wallet.id
+            # Initialize wallet using the factory
+            taproot_wallet = await TaprootAssetsFactory.create_wallet(
+                user_id=wallet.wallet.user,
+                wallet_id=wallet.wallet.id
+            )
             
             # Set fee limit
             from ..tapd_settings import taproot_settings
@@ -157,8 +157,8 @@ class PaymentService:
             preimage = payment.preimage or ""
             routing_fees_sats = payment.fee_msat // 1000 if payment.fee_msat else 0
             
-            # Get asset details from extra
-            asset_id = payment.extra.get("asset_id", parsed_invoice.asset_id or "")
+            # Use the parsed invoice asset_id since BasePaymentResponse doesn't have extra field
+            asset_id = parsed_invoice.asset_id or ""
             
             # Use the memo from the invoice if available
             memo = None
@@ -242,7 +242,7 @@ class PaymentService:
             raise_http_exception(status_code, error_message)
         except Exception as e:
             # Use the error utility with context
-            log_error(e, context="Processing payment")
+            log_error(API, f"Error processing payment: {str(e)}")
             raise_http_exception(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR, 
                 detail=f"Failed to pay Taproot Asset invoice: {str(e)}"
@@ -274,12 +274,11 @@ class PaymentService:
                     detail="Invoice not found"
                 )
                 
-            # Initialize wallet
-            taproot_wallet = TaprootWalletExtension()
-            
-            # Set the user and wallet ID
-            taproot_wallet.user = wallet.wallet.user
-            taproot_wallet.id = wallet.wallet.id
+            # Initialize wallet using the factory
+            taproot_wallet = await TaprootAssetsFactory.create_wallet(
+                user_id=wallet.wallet.user,
+                wallet_id=wallet.wallet.id
+            )
             
             # Use the update_after_payment method for internal payments
             # This now handles all database operations internally
@@ -382,12 +381,11 @@ class PaymentService:
             if not invoice:
                 raise_http_exception(status_code=HTTPStatus.NOT_FOUND, detail="Invoice not found")
 
-            # Initialize wallet
-            taproot_wallet = TaprootWalletExtension()
-
-            # Set the user and wallet ID
-            taproot_wallet.user = wallet.wallet.user
-            taproot_wallet.id = wallet.wallet.id
+            # Initialize wallet using the factory
+            taproot_wallet = await TaprootAssetsFactory.create_wallet(
+                user_id=wallet.wallet.user,
+                wallet_id=wallet.wallet.id
+            )
 
             # Use the update_after_payment method
             result = await taproot_wallet.update_taproot_assets_after_payment(
