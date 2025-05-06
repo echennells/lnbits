@@ -2,10 +2,11 @@
 Notification service for Taproot Assets extension.
 Centralizes WebSocket notification logic.
 """
+import json
 from typing import Dict, Any, List, Optional, Union
 from loguru import logger
 
-from .websocket import ws_manager
+from lnbits.core.services.websockets import websocket_manager
 from .logging_utils import (
     log_debug, log_info, log_warning, log_error, 
     WEBSOCKET, ASSET
@@ -29,8 +30,27 @@ class NotificationService:
         Returns:
             bool: True if notification was sent successfully, False otherwise
         """
-        log_debug(WEBSOCKET, f"Sending invoice update notification to user {user_id}")
-        return await ws_manager.notify_invoice_update(user_id, invoice_data)
+        if not user_id or not invoice_data:
+            log_warning(WEBSOCKET, "Cannot send invoice notification with empty user_id or data")
+            return False
+            
+        try:
+            # Create a unique item_id for this user and event type
+            item_id = f"taproot-assets-invoices-{user_id}"
+            
+            # Prepare message with type and data
+            message = json.dumps({
+                "type": "invoice_update",
+                "data": invoice_data
+            })
+            
+            # Send directly through core WebSocket manager
+            await websocket_manager.send_data(message, item_id)
+            log_debug(WEBSOCKET, f"Sent invoice update notification for user {user_id}")
+            return True
+        except Exception as e:
+            log_error(WEBSOCKET, f"Error sending invoice update: {str(e)}")
+            return False
     
     @staticmethod
     async def notify_payment_update(user_id: str, payment_data: Dict[str, Any]) -> bool:
@@ -44,8 +64,27 @@ class NotificationService:
         Returns:
             bool: True if notification was sent successfully, False otherwise
         """
-        log_debug(WEBSOCKET, f"Sending payment update notification to user {user_id}")
-        return await ws_manager.notify_payment_update(user_id, payment_data)
+        if not user_id or not payment_data:
+            log_warning(WEBSOCKET, "Cannot send payment notification with empty user_id or data")
+            return False
+            
+        try:
+            # Create a unique item_id for this user and event type
+            item_id = f"taproot-assets-payments-{user_id}"
+            
+            # Prepare message with type and data
+            message = json.dumps({
+                "type": "payment_update",
+                "data": payment_data
+            })
+            
+            # Send directly through core WebSocket manager
+            await websocket_manager.send_data(message, item_id)
+            log_debug(WEBSOCKET, f"Sent payment update notification for user {user_id}")
+            return True
+        except Exception as e:
+            log_error(WEBSOCKET, f"Error sending payment update: {str(e)}")
+            return False
     
     @staticmethod
     async def notify_assets_update(user_id: str, assets_data: List[Dict[str, Any]]) -> bool:
@@ -59,8 +98,27 @@ class NotificationService:
         Returns:
             bool: True if notification was sent successfully, False otherwise
         """
-        log_debug(WEBSOCKET, f"Sending assets update notification to user {user_id}")
-        return await ws_manager.notify_assets_update(user_id, assets_data)
+        if not user_id or not assets_data:
+            log_warning(WEBSOCKET, "Cannot send assets notification with empty user_id or data")
+            return False
+            
+        try:
+            # Create a unique item_id for this user and event type
+            item_id = f"taproot-assets-balances-{user_id}"
+            
+            # Prepare message with type and data
+            message = json.dumps({
+                "type": "assets_update",
+                "data": assets_data
+            })
+            
+            # Send directly through core WebSocket manager
+            await websocket_manager.send_data(message, item_id)
+            log_debug(WEBSOCKET, f"Sent assets update notification for user {user_id}")
+            return True
+        except Exception as e:
+            log_error(WEBSOCKET, f"Error sending assets update: {str(e)}")
+            return False
     
     @staticmethod
     async def notify_batch_updates(
@@ -95,11 +153,11 @@ class NotificationService:
                 
             try:
                 if update_type == "invoice" and isinstance(data, dict):
-                    results[update_type] = await ws_manager.notify_invoice_update(user_id, data)
+                    results[update_type] = await NotificationService.notify_invoice_update(user_id, data)
                 elif update_type == "payment" and isinstance(data, dict):
-                    results[update_type] = await ws_manager.notify_payment_update(user_id, data)
+                    results[update_type] = await NotificationService.notify_payment_update(user_id, data)
                 elif update_type == "assets" and isinstance(data, list):
-                    results[update_type] = await ws_manager.notify_assets_update(user_id, data)
+                    results[update_type] = await NotificationService.notify_assets_update(user_id, data)
                 else:
                     log_warning(WEBSOCKET, f"Unknown notification type: {update_type}")
                     results[update_type] = False
