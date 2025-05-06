@@ -19,12 +19,9 @@ from ..error_utils import log_error, handle_grpc_error, raise_http_exception
 from ..crud import (
     get_invoice_by_payment_hash,
     is_internal_payment,
-    is_self_payment,
-    create_payment_record,
-    record_asset_transaction,
-    get_asset_balance
+    is_self_payment
 )
-from ..notification_service import NotificationService
+from ..settlement_service import SettlementService
 
 
 class PaymentService:
@@ -161,8 +158,6 @@ class PaymentService:
             routing_fees_sats = payment.fee_msat // 1000 if payment.fee_msat else 0
             
             # Get asset_id from the node's cache if available, otherwise use the parsed invoice
-            # We store the asset_id in the node's cache in the pay_asset_invoice method
-            # This is a workaround since BasePaymentResponse doesn't have an extra field
             asset_id = ""
             if taproot_wallet.node:
                 cached_asset_id = taproot_wallet.node._get_asset_id(payment_hash)
@@ -178,50 +173,24 @@ class PaymentService:
             # Extract memo from the invoice description if available
             memo = parsed_invoice.description if parsed_invoice.description else None
             
-            # Record the payment - for external Lightning payments only
-            try:
-                payment_record = await create_payment_record(
-                    payment_hash=payment_hash,
-                    payment_request=data.payment_request,
-                    asset_id=asset_id,
-                    asset_amount=parsed_invoice.amount,
-                    fee_sats=routing_fees_sats,
-                    user_id=wallet.wallet.user,
-                    wallet_id=wallet.wallet.id,
-                    memo=memo,
-                    preimage=preimage
-                )
-                
-                # Record asset transaction and update balance for external payments
-                await record_asset_transaction(
-                    wallet_id=wallet.wallet.id,
-                    asset_id=asset_id,
-                    amount=parsed_invoice.amount,
-                    tx_type="debit",  # Outgoing payment
-                    payment_hash=payment_hash,
-                    fee=routing_fees_sats,
-                    memo=memo
-                )
-                
-                # Send notifications using the NotificationService
-                if payment_record:
-                    # Use the notification service to send all notifications in one go
-                    await NotificationService.notify_transaction_complete(
-                        user_id=wallet.wallet.user,
-                        wallet_id=wallet.wallet.id,
-                        payment_hash=payment_hash,
-                        asset_id=asset_id,
-                        asset_amount=parsed_invoice.amount,
-                        tx_type="debit",  # Outgoing payment
-                        memo=memo,
-                        fee_sats=routing_fees_sats,
-                        is_internal=False,
-                        is_self_payment=False
-                    )
-                    
-            except Exception as db_error:
-                # Don't fail if payment record creation fails
-                logger.error(f"Failed to store payment record: {str(db_error)}")
+            # Use the centralized SettlementService to record the payment
+            # IMPORTANT: Make sure to use the correct asset amount (parsed_invoice.amount) and not the fee_limit
+            payment_success, payment_record = await SettlementService.record_payment(
+                payment_hash=payment_hash,
+                payment_request=data.payment_request,
+                asset_id=asset_id,
+                asset_amount=parsed_invoice.amount,  # Use the correct asset amount from the invoice
+                fee_sats=routing_fees_sats,         # Use the actual fee paid, not the limit
+                user_id=wallet.wallet.user,
+                wallet_id=wallet.wallet.id,
+                memo=memo,
+                preimage=preimage,
+                is_internal=False,
+                is_self_payment=False
+            )
+            
+            if not payment_success:
+                log_warning(PAYMENT, "Payment was successful but failed to record in database")
             
             # Return success response
             return PaymentResponse(
@@ -231,7 +200,7 @@ class PaymentService:
                 fee_msat=payment.fee_msat or 0,
                 sat_fee_paid=0,  # No service fee
                 routing_fees_sats=routing_fees_sats,
-                asset_amount=parsed_invoice.amount,
+                asset_amount=parsed_invoice.amount,  # Use the correct asset amount from the invoice
                 asset_id=asset_id,
                 memo=memo
             )
@@ -296,26 +265,45 @@ class PaymentService:
                 wallet_id=wallet.wallet.id
             )
             
-            # Use the update_after_payment method for internal payments
-            # This now handles all database operations internally
-            result = await taproot_wallet.update_taproot_assets_after_payment(
-                invoice=data.payment_request,
-                payment_hash=parsed_invoice.payment_hash,
-                fee_limit_sats=data.fee_limit_sats,
-                asset_id=invoice.asset_id
-            )
-            
-            if not result.ok:
-                raise Exception(f"Internal payment failed: {result.error_message}")
-            
             # Check if this is a self-payment
             is_self = await is_self_payment(parsed_invoice.payment_hash, wallet.wallet.user)
+            
+            # First use SettlementService to settle the invoice
+            success, settlement_result = await SettlementService.settle_invoice(
+                payment_hash=parsed_invoice.payment_hash,
+                node=taproot_wallet.node,
+                is_internal=True,
+                is_self_payment=is_self,
+                user_id=wallet.wallet.user,
+                wallet_id=wallet.wallet.id
+            )
+            
+            if not success:
+                raise Exception(f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}")
+            
+            # Then use SettlementService to record the payment
+            payment_success, payment_record = await SettlementService.record_payment(
+                payment_hash=parsed_invoice.payment_hash,
+                payment_request=data.payment_request,
+                asset_id=invoice.asset_id,
+                asset_amount=invoice.asset_amount,  # Use the actual asset amount from the invoice
+                fee_sats=0,  # No fee for internal payments
+                user_id=wallet.wallet.user,
+                wallet_id=wallet.wallet.id,
+                memo=invoice.memo or "",
+                preimage=settlement_result.get('preimage', ''),
+                is_internal=True,
+                is_self_payment=is_self
+            )
+            
+            if not payment_success:
+                log_warning(PAYMENT, "Internal payment was successful but failed to record in database")
             
             # Return success response for internal payment
             return PaymentResponse(
                 success=True,
                 payment_hash=parsed_invoice.payment_hash,
-                preimage=result.preimage or "",
+                preimage=settlement_result.get('preimage', ''),
                 fee_msat=0,  # No routing fee for internal payment
                 sat_fee_paid=0,
                 routing_fees_sats=0,
@@ -333,6 +321,88 @@ class PaymentService:
             raise_http_exception(
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"Failed to process internal payment: {str(e)}"
+            )
+    
+    @staticmethod
+    async def process_self_payment(
+        data: TaprootPaymentRequest,
+        wallet: WalletTypeInfo,
+        parsed_invoice: ParsedInvoice
+    ) -> PaymentResponse:
+        """
+        Process a self-payment (to the same user).
+        
+        Args:
+            data: The payment request data
+            wallet: The wallet information
+            parsed_invoice: The parsed invoice data
+            
+        Returns:
+            PaymentResponse: The payment result
+        """
+        try:
+            # Get the invoice to retrieve asset_id
+            invoice = await get_invoice_by_payment_hash(parsed_invoice.payment_hash)
+            if not invoice:
+                raise_http_exception(status_code=HTTPStatus.NOT_FOUND, detail="Invoice not found")
+
+            # Initialize wallet using the factory
+            taproot_wallet = await TaprootAssetsFactory.create_wallet(
+                user_id=wallet.wallet.user,
+                wallet_id=wallet.wallet.id
+            )
+
+            # Use SettlementService to settle the invoice
+            success, settlement_result = await SettlementService.settle_invoice(
+                payment_hash=parsed_invoice.payment_hash,
+                node=taproot_wallet.node,
+                is_internal=True,
+                is_self_payment=True,
+                user_id=wallet.wallet.user,
+                wallet_id=wallet.wallet.id
+            )
+            
+            if not success:
+                raise Exception(f"Failed to settle self-payment: {settlement_result.get('error', 'Unknown error')}")
+
+            # Then use SettlementService to record the payment
+            payment_success, payment_record = await SettlementService.record_payment(
+                payment_hash=parsed_invoice.payment_hash,
+                payment_request=data.payment_request,
+                asset_id=invoice.asset_id,
+                asset_amount=invoice.asset_amount,  # Use the actual asset amount from the invoice
+                fee_sats=0,  # No fee for self-payments
+                user_id=wallet.wallet.user,
+                wallet_id=wallet.wallet.id,
+                memo=invoice.memo or "",
+                preimage=settlement_result.get('preimage', ''),
+                is_internal=True,
+                is_self_payment=True
+            )
+            
+            if not payment_success:
+                log_warning(PAYMENT, "Self-payment was successful but failed to record in database")
+            
+            # Return success response
+            return PaymentResponse(
+                success=True,
+                payment_hash=parsed_invoice.payment_hash,
+                preimage=settlement_result.get('preimage', ''),
+                asset_amount=invoice.asset_amount,
+                asset_id=invoice.asset_id,
+                memo=invoice.memo,
+                internal_payment=True,
+                self_payment=True
+            )
+            
+        except HTTPException:
+            # Re-raise HTTP exceptions
+            raise
+        except Exception as e:
+            logger.error(f"Self-payment error: {str(e)}")
+            raise_http_exception(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=f"Failed to process self-payment: {str(e)}"
             )
     
     @staticmethod
@@ -374,79 +444,3 @@ class PaymentService:
             return await PaymentService.process_self_payment(data, wallet, parsed_invoice)
         else:
             return await PaymentService.process_external_payment(data, wallet, parsed_invoice)
-    
-    @staticmethod
-    async def process_self_payment(
-        data: TaprootPaymentRequest,
-        wallet: WalletTypeInfo,
-        parsed_invoice: ParsedInvoice
-    ) -> PaymentResponse:
-        """
-        Process a self-payment (to the same user).
-        
-        Args:
-            data: The payment request data
-            wallet: The wallet information
-            parsed_invoice: The parsed invoice data
-            
-        Returns:
-            PaymentResponse: The payment result
-        """
-        try:
-            # Get the invoice to retrieve asset_id
-            invoice = await get_invoice_by_payment_hash(parsed_invoice.payment_hash)
-            if not invoice:
-                raise_http_exception(status_code=HTTPStatus.NOT_FOUND, detail="Invoice not found")
-
-            # Initialize wallet using the factory
-            taproot_wallet = await TaprootAssetsFactory.create_wallet(
-                user_id=wallet.wallet.user,
-                wallet_id=wallet.wallet.id
-            )
-
-            # Use the update_after_payment method
-            result = await taproot_wallet.update_taproot_assets_after_payment(
-                invoice=data.payment_request,
-                payment_hash=parsed_invoice.payment_hash,
-                fee_limit_sats=data.fee_limit_sats,
-                asset_id=invoice.asset_id
-            )
-
-            if not result.ok:
-                raise Exception(f"Self-payment failed: {result.error_message}")
-
-            # Send notifications using the NotificationService
-            await NotificationService.notify_transaction_complete(
-                user_id=wallet.wallet.user,
-                wallet_id=wallet.wallet.id,
-                payment_hash=parsed_invoice.payment_hash,
-                asset_id=invoice.asset_id,
-                asset_amount=invoice.asset_amount,
-                tx_type="debit",  # Outgoing payment
-                memo=invoice.memo or "",
-                fee_sats=0,  # No fee for self-payments
-                is_internal=True,
-                is_self_payment=True
-            )
-            
-            # Return success response
-            return PaymentResponse(
-                success=True,
-                payment_hash=parsed_invoice.payment_hash,
-                preimage=result.preimage or "",
-                asset_amount=invoice.asset_amount,
-                asset_id=invoice.asset_id,
-                memo=invoice.memo,
-                internal_payment=True,
-                self_payment=True
-            )
-            
-        except HTTPException:
-            # Re-raise HTTP exceptions
-            raise
-        except Exception as e:
-            logger.error(f"Self-payment error: {str(e)}")
-            raise_http_exception(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to process self-payment: {str(e)}"
-            )

@@ -16,11 +16,10 @@ from ..crud import (
     create_invoice,
     get_invoice,
     get_invoice_by_payment_hash,
-    get_user_invoices,
-    update_invoice_status,
-    record_asset_transaction
+    get_user_invoices
 )
 from ..notification_service import NotificationService
+from ..settlement_service import SettlementService
 from ..tapd_settings import taproot_settings
 
 
@@ -226,32 +225,58 @@ class InvoiceService:
                 detail="Invalid status",
             )
 
-        updated_invoice = await update_invoice_status(invoice_id, status)
-        
-        # If marking as paid, update the asset balance
-        if status == "paid" and updated_invoice:
+        # If marking as paid, use SettlementService to handle it correctly
+        if status == "paid" and invoice.status != "paid":
             try:
-                # Record the transaction and update balance
-                await record_asset_transaction(
-                    wallet_id=invoice.wallet_id,
-                    asset_id=invoice.asset_id,
-                    amount=invoice.asset_amount,
-                    tx_type="credit",  # Incoming payment
-                    payment_hash=invoice.payment_hash,
-                    memo=invoice.memo
+                # Initialize a wallet instance to get the node
+                taproot_wallet = await TaprootAssetsFactory.create_wallet(
+                    user_id=user_id,
+                    wallet_id=wallet_id
                 )
+                
+                # Use SettlementService to settle the invoice
+                is_internal = True  # This would typically be an internal update
+                is_self_payment = False  # Default for API updates
+                
+                success, result = await SettlementService.settle_invoice(
+                    payment_hash=invoice.payment_hash,
+                    node=taproot_wallet.node,
+                    is_internal=is_internal,
+                    is_self_payment=is_self_payment,
+                    user_id=user_id,
+                    wallet_id=wallet_id
+                )
+                
+                if success:
+                    logger.info(f"Invoice {invoice_id} was settled successfully via SettlementService")
+                    # The settlement service will have already updated the invoice status
+                    return await get_invoice(invoice_id)  # Get the updated invoice
+                else:
+                    logger.error(f"Failed to settle invoice {invoice_id}: {result.get('error', 'Unknown error')}")
+                    raise_http_exception(
+                        status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                        detail=f"Failed to settle invoice: {result.get('error', 'Unknown error')}",
+                    )
             except Exception as e:
-                logger.error(f"Failed to update asset balance: {str(e)}")
-        
-        # Send WebSocket notification about status update using NotificationService
-        if updated_invoice:
-            invoice_data = {
-                "id": updated_invoice.id,
-                "payment_hash": updated_invoice.payment_hash,
-                "status": updated_invoice.status,
-                "asset_id": updated_invoice.asset_id,
-                "asset_amount": updated_invoice.asset_amount
-            }
-            await NotificationService.notify_invoice_update(user_id, invoice_data)
-        
-        return updated_invoice
+                logger.error(f"Error settling invoice {invoice_id}: {str(e)}")
+                raise_http_exception(
+                    status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to settle invoice: {str(e)}",
+                )
+        else:
+            # For non-payment status updates, use the regular update method
+            from ..crud import update_invoice_status as db_update_invoice_status
+            updated_invoice = await db_update_invoice_status(invoice_id, status)
+            
+            # Send WebSocket notification about status update using NotificationService
+            if updated_invoice:
+                invoice_data = {
+                    "id": updated_invoice.id,
+                    "payment_hash": updated_invoice.payment_hash,
+                    "status": updated_invoice.status,
+                    "asset_id": updated_invoice.asset_id,
+                    "asset_amount": updated_invoice.asset_amount
+                }
+                await NotificationService.notify_invoice_update(user_id, invoice_data)
+            
+            return updated_invoice

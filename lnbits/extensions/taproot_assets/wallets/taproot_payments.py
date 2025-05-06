@@ -18,10 +18,8 @@ from .taproot_adapter import (
 # Import Settlement Service
 from ..settlement_service import SettlementService
 
-# Import database functions
+# Import database functions - import only what's needed for non-settlement operations
 from ..crud import (
-    create_payment_record, 
-    record_asset_transaction, 
     get_invoice_by_payment_hash, 
     is_internal_payment,
     is_self_payment
@@ -223,6 +221,29 @@ class TaprootPaymentManager:
                 # Get the asset amount from decoded invoice
                 asset_amount = decoded.amount_msat // 1000 if hasattr(decoded, "amount_msat") else 0
                 
+                # Record the payment using SettlementService
+                if status == "success" and hasattr(self.node, 'wallet') and self.node.wallet:
+                    user_id = self.node.wallet.user
+                    wallet_id = self.node.wallet.id
+                    
+                    # Use the centralized SettlementService to record the payment
+                    payment_success, payment_record = await SettlementService.record_payment(
+                        payment_hash=payment_hash,
+                        payment_request=payment_request,
+                        asset_id=asset_id,
+                        asset_amount=asset_amount,
+                        fee_sats=fee_msat // 1000,
+                        user_id=user_id,
+                        wallet_id=wallet_id,
+                        memo=decoded.description if hasattr(decoded, "description") else None,
+                        preimage=preimage,
+                        is_internal=False,
+                        is_self_payment=False
+                    )
+                    
+                    if not payment_success:
+                        log_warning(PAYMENT, f"Payment was successful but failed to record in database")
+                
                 # Return response with all available information
                 return {
                     "payment_hash": payment_hash,
@@ -302,7 +323,7 @@ class TaprootPaymentManager:
                 # Check if this is a self-payment
                 user_id = self.node.wallet.user
                 wallet_id = self.node.wallet.id
-                is_self_pay = invoice.user_id == user_id
+                is_self_pay = await is_self_payment(payment_hash, user_id)
                 
                 # Process using the Settlement Service
                 success, settlement_result = await SettlementService.settle_invoice(
@@ -318,52 +339,35 @@ class TaprootPaymentManager:
                     log_error(PAYMENT, f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}")
                     raise Exception(f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}")
                     
-                # Use the invoice memo directly without adding any prefix
+                # Use memo from invoice
                 memo = invoice.memo or ""
                 
-                try:
-                    # First record the debit transaction for the sender
-                    debit_tx = await record_asset_transaction(
-                        wallet_id=wallet_id,
-                        asset_id=asset_id,
-                        amount=invoice.asset_amount,
-                        tx_type="debit",  # This is an outgoing payment
-                        payment_hash=payment_hash,
-                        memo=memo
-                    )
-                    
-                    # Get preimage from settlement result or generate one
-                    preimage_hex = settlement_result.get('preimage')
-                    if not preimage_hex:
-                        # Generate a preimage if one doesn't exist
-                        preimage = hashlib.sha256(f"{payment_hash}_{time.time()}".encode()).digest()
-                        preimage_hex = preimage.hex()
-                    
-                    # Record the payment in the payments table
-                    payment_record = await create_payment_record(
-                        payment_hash=payment_hash,
-                        payment_request=payment_request,
-                        asset_id=asset_id,
-                        asset_amount=invoice.asset_amount,
-                        fee_sats=0,  # No fee for internal payments
-                        user_id=user_id,
-                        wallet_id=wallet_id,
-                        memo=memo,
-                        preimage=preimage_hex
-                    )
-                    
-                    log_info(PAYMENT, "=== DATABASE UPDATES COMPLETED ===")
-                    
-                except Exception as db_error:
-                    log_error(PAYMENT, f"Failed to create payment record for internal payment: {str(db_error)}")
-                    # Continue as settlement was successful
+                # Record the payment using SettlementService
+                payment_success, payment_record = await SettlementService.record_payment(
+                    payment_hash=payment_hash,
+                    payment_request=payment_request,
+                    asset_id=asset_id,
+                    asset_amount=invoice.asset_amount,
+                    fee_sats=0,  # No fee for internal payments
+                    user_id=user_id,
+                    wallet_id=wallet_id,
+                    memo=memo,
+                    preimage=settlement_result.get('preimage', ''),
+                    is_internal=True,
+                    is_self_payment=is_self_pay
+                )
+                
+                if not payment_success:
+                    log_warning(PAYMENT, f"Internal payment was successful but failed to record in database")
+                
+                log_info(PAYMENT, "=== DATABASE UPDATES COMPLETED ===")
                 
                 # Return response with appropriate flags
                 response = {
                     "success": True,
                     "payment_hash": payment_hash,
                     "message": "Internal payment processed successfully",
-                    "preimage": preimage_hex,
+                    "preimage": settlement_result.get('preimage', ''),
                     "asset_id": asset_id,
                     "asset_amount": invoice.asset_amount,
                     "internal_payment": True

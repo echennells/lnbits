@@ -4,7 +4,7 @@ from lnbits.settings import settings
 from lnbits.wallets.base import Wallet, InvoiceResponse as BaseInvoiceResponse, PaymentResponse as BasePaymentResponse, PaymentStatus, StatusResponse, PaymentPendingStatus
 
 from .taproot_node import TaprootAssetsNodeExtension
-from ..crud import get_or_create_settings
+from ..crud import get_or_create_settings, get_invoice_by_payment_hash, is_self_payment
 from ..tapd_settings import taproot_settings
 from ..logging_utils import (
     log_debug, log_info, log_warning, log_error, 
@@ -100,10 +100,18 @@ class TaprootWalletExtension(Wallet):
                 await self.ensure_initialized()
                 if self.node is None:
                     raise ValueError("Node not initialized")
-                return await self.node.manually_settle_invoice(
+                
+                # Use SettlementService for settlement
+                success, _ = await SettlementService.settle_invoice(
                     payment_hash=payment_hash,
-                    script_key=script_key
+                    node=self.node,
+                    is_internal=False,  # Default to external payment for manual settlement
+                    is_self_payment=False,
+                    user_id=self.user,
+                    wallet_id=self.id
                 )
+                
+                return success
         except Exception as e:
             log_error(WALLET, f"Error in manual settlement: {str(e)}")
             return False
@@ -259,9 +267,6 @@ class TaprootWalletExtension(Wallet):
             log_info(WALLET, f"Paying asset invoice{asset_info}{peer_info}, fee_limit={fee_limit_sats or 'default'} sats")
 
             # Call the node's pay_asset_invoice method
-            # Make sure to pass the asset_id to the node's pay_asset_invoice method
-            # This is important because the node's pay_asset_invoice method will use this asset_id
-            # to pay the invoice with the correct asset
             payment_result = await self.node.pay_asset_invoice(
                 payment_request=invoice,
                 fee_limit_sats=fee_limit_sats,
@@ -276,9 +281,10 @@ class TaprootWalletExtension(Wallet):
             
             log_info(WALLET, f"Payment successful, hash={payment_hash[:8]}..., fee={fee_msat//1000} sats")
             
+            # REMOVED: No longer record payment here - this will be handled by the PaymentService
+            # This fixes the duplicate payment record issue
+            
             # Create a custom response with the asset_id and asset_amount
-            # We need to include this information in the response
-            # so the payment service can use it to record the transaction
             response = BasePaymentResponse(
                 ok=True,
                 checking_id=payment_hash,
@@ -289,8 +295,6 @@ class TaprootWalletExtension(Wallet):
             
             # Store the asset_id in the node's preimage cache
             # This is a workaround since BasePaymentResponse doesn't have an extra field
-            # The payment service will use the asset_id from the parsed invoice
-            # but we need to make sure it's the correct one
             asset_id = payment_result.get("asset_id", asset_id)
             if asset_id:
                 self.node._store_asset_id(payment_hash, asset_id)
@@ -338,29 +342,53 @@ class TaprootWalletExtension(Wallet):
                 raise ValueError("Node not initialized")
             log_info(WALLET, f"Processing internal payment for {payment_hash[:8]}..., asset_id={asset_id[:8] if asset_id else 'unknown'}")
 
-            # Call the node's update_after_payment method
-            update_result = await self.node.update_after_payment(
-                payment_request=invoice,
+            # Get the invoice to retrieve information
+            db_invoice = await get_invoice_by_payment_hash(payment_hash)
+            if not db_invoice:
+                log_error(WALLET, f"Invoice not found for payment hash: {payment_hash}")
+                return BasePaymentResponse(
+                    ok=False,
+                    checking_id=payment_hash,
+                    fee_msat=None,
+                    preimage=None,
+                    error_message="Invoice not found"
+                )
+            
+            # Determine if this is a self-payment
+            is_self = await is_self_payment(payment_hash, self.user) if self.user else False
+            
+            # Use SettlementService to settle the invoice
+            success, settlement_result = await SettlementService.settle_invoice(
                 payment_hash=payment_hash,
-                fee_limit_sats=fee_limit_sats,
-                asset_id=asset_id
+                node=self.node,
+                is_internal=True,
+                is_self_payment=is_self,
+                user_id=self.user,
+                wallet_id=self.id
             )
             
-            log_debug(WALLET, f"Internal payment result: {update_result}")
-
-            # Add self-payment flag if this was a self-payment
-            is_self_payment = update_result.get("self_payment", False)
-            if is_self_payment:
-                log_info(WALLET, "Processed as self-payment")
-            else:
-                log_info(WALLET, "Processed as internal payment")
-
+            if not success:
+                log_error(WALLET, f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}")
+                return BasePaymentResponse(
+                    ok=False,
+                    checking_id=payment_hash,
+                    fee_msat=None,
+                    preimage=None,
+                    error_message=f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}"
+                )
+            
+            # Get preimage from settlement result
+            preimage = settlement_result.get('preimage', '')
+            
+            # Record the payment is now handled by the PaymentService, so we don't need to do it here
+            # This avoids duplicating payment records
+            
             # Create response
             return BasePaymentResponse(
-                ok=update_result.get("success", False),
+                ok=True,
                 checking_id=payment_hash,
                 fee_msat=0,  # No fee for internal payments
-                preimage=update_result.get("preimage", ""),
+                preimage=preimage,
                 error_message=None
             )
         except Exception as e:

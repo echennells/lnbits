@@ -5,14 +5,14 @@ Handles all invoice settlement logic consistently across different payment types
 import asyncio
 import hashlib
 import time
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 import grpc
 import grpc.aio
 from loguru import logger
 
 from .wallets.taproot_adapter import invoices_pb2
 from .notification_service import NotificationService
-from .models import TaprootInvoice
+from .models import TaprootInvoice, TaprootPayment
 
 # Import database functions
 from .crud import (
@@ -21,7 +21,8 @@ from .crud import (
     record_asset_transaction,
     get_asset_balance,
     is_internal_payment,
-    is_self_payment
+    is_self_payment,
+    create_payment_record
 )
 
 from .logging_utils import (
@@ -38,6 +39,9 @@ class SettlementService:
     
     # Class-level cache to track settled payment hashes
     _settled_payment_hashes = set()
+    
+    # Lock for database operations to prevent race conditions
+    _db_lock = asyncio.Lock()
     
     @classmethod
     async def settle_invoice(
@@ -102,13 +106,15 @@ class SettlementService:
                     
                     # Update asset balance if invoice exists
                     if invoice:
-                        await cls._update_asset_balance(
-                            invoice.wallet_id,
-                            invoice.asset_id,
-                            invoice.asset_amount,
-                            payment_hash,
-                            invoice.memo
-                        )
+                        # Use DB lock to prevent race conditions
+                        async with cls._db_lock:
+                            await cls._update_asset_balance(
+                                invoice.wallet_id,
+                                invoice.asset_id,
+                                invoice.asset_amount,
+                                payment_hash,
+                                invoice.memo
+                            )
                         
                         # Send WebSocket notifications
                         await cls._send_settlement_notifications(
@@ -120,6 +126,90 @@ class SettlementService:
             except Exception as e:
                 log_error(TRANSFER, f"Failed to settle invoice: {str(e)}", exc_info=True)
                 return False, {"error": str(e)}
+    
+    @classmethod
+    async def record_payment(
+        cls,
+        payment_hash: str,
+        payment_request: str,
+        asset_id: str,
+        asset_amount: int,
+        fee_sats: int,
+        user_id: str,
+        wallet_id: str,
+        memo: Optional[str] = None,
+        preimage: Optional[str] = None,
+        is_internal: bool = False,
+        is_self_payment: bool = False
+    ) -> Tuple[bool, Optional[TaprootPayment]]:
+        """
+        Record a payment in the database with proper locking to avoid race conditions.
+        
+        Args:
+            payment_hash: Payment hash
+            payment_request: Original payment request
+            asset_id: Asset ID
+            asset_amount: Amount of the asset (not the fee)
+            fee_sats: Fee in satoshis (actual fee, not the limit)
+            user_id: User ID
+            wallet_id: Wallet ID
+            memo: Optional memo
+            preimage: Optional preimage
+            is_internal: Whether this is an internal payment
+            is_self_payment: Whether this is a self-payment
+            
+        Returns:
+            Tuple containing:
+                - Success status (bool)
+                - Optional payment record
+        """
+        try:
+            log_info(PAYMENT, f"Recording payment: hash={payment_hash[:8]}..., asset_amount={asset_amount}, fee_sats={fee_sats}")
+            
+            async with cls._db_lock:
+                # Record the payment with the correct asset amount, not the fee
+                payment_record = await create_payment_record(
+                    payment_hash=payment_hash,
+                    payment_request=payment_request,
+                    asset_id=asset_id,
+                    asset_amount=asset_amount,  # Ensure this is the actual asset amount
+                    fee_sats=fee_sats,  # This is the fee, separate from asset amount
+                    user_id=user_id,
+                    wallet_id=wallet_id,
+                    memo=memo or "",
+                    preimage=preimage or ""
+                )
+                
+                # Also record the transaction with the correct asset amount
+                tx_type = "debit"  # Outgoing payment
+                await record_asset_transaction(
+                    wallet_id=wallet_id,
+                    asset_id=asset_id,
+                    amount=asset_amount,  # Use the correct asset amount here
+                    tx_type=tx_type,
+                    payment_hash=payment_hash,
+                    fee=fee_sats,  # Fee is separate
+                    memo=memo or ""
+                )
+                
+                # Send notifications
+                await NotificationService.notify_transaction_complete(
+                    user_id=user_id,
+                    wallet_id=wallet_id,
+                    payment_hash=payment_hash,
+                    asset_id=asset_id,
+                    asset_amount=asset_amount,  # Use correct asset amount in notification
+                    tx_type=tx_type,
+                    memo=memo,
+                    fee_sats=fee_sats,
+                    is_internal=is_internal,
+                    is_self_payment=is_self_payment
+                )
+                
+                return True, payment_record
+        except Exception as e:
+            log_error(PAYMENT, f"Failed to record payment: {str(e)}", exc_info=True)
+            return False, None
     
     @classmethod
     async def _get_or_generate_preimage(cls, node, payment_hash: str) -> Optional[str]:
@@ -155,13 +245,15 @@ class SettlementService:
             if not invoice:
                 log_error(TRANSFER, f"No invoice found with payment_hash: {payment_hash}")
                 return False, {"error": "Invoice not found"}
-                
-            # Update invoice status to paid
-            updated_invoice = await update_invoice_status(invoice.id, "paid")
-            if not updated_invoice or updated_invoice.status != "paid":
-                log_error(TRANSFER, f"Failed to update invoice {invoice.id} status in database")
-                return False, {"error": "Failed to update invoice status"}
-                
+            
+            # Use DB lock to prevent race conditions
+            async with cls._db_lock:
+                # Update invoice status to paid
+                updated_invoice = await update_invoice_status(invoice.id, "paid")
+                if not updated_invoice or updated_invoice.status != "paid":
+                    log_error(TRANSFER, f"Failed to update invoice {invoice.id} status in database")
+                    return False, {"error": "Failed to update invoice status"}
+            
             payment_type = "self-payment" if is_self_payment else "internal payment"
             log_info(TRANSFER, f"Database updated: Invoice {invoice.id} status set to paid ({payment_type})")
             
@@ -225,7 +317,10 @@ class SettlementService:
             # Update the invoice status in the database if we have an invoice record
             updated_invoice = None
             if invoice:
-                updated_invoice = await update_invoice_status(invoice.id, "paid")
+                # Use DB lock to prevent race conditions
+                async with cls._db_lock:
+                    updated_invoice = await update_invoice_status(invoice.id, "paid")
+                
                 if not updated_invoice or updated_invoice.status != "paid":
                     log_error(TRANSFER, f"Failed to update invoice {invoice.id} status in database")
                     # Note: We don't fail the operation here since the Lightning settlement succeeded
@@ -269,6 +364,7 @@ class SettlementService:
         """
         try:
             # Record the asset transaction as a credit
+            # Note: We already have a DB lock in the caller
             await record_asset_transaction(
                 wallet_id=wallet_id,
                 asset_id=asset_id,

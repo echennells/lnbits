@@ -11,7 +11,7 @@ from .taproot_adapter import (
     invoices_pb2
 )
 
-# Import database functions
+# Import database functions - only keeping what's needed for non-settlement operations
 from ..crud import (
     get_invoice_by_payment_hash,
     is_internal_payment,
@@ -82,7 +82,9 @@ class TaprootTransferManager:
                 success, _ = await SettlementService.settle_invoice(
                     payment_hash=payment_hash,
                     node=self.node,
-                    is_internal=is_internal
+                    is_internal=is_internal,
+                    user_id=self.node.wallet.user if hasattr(self.node, 'wallet') and self.node.wallet else None,
+                    wallet_id=self.node.wallet.id if hasattr(self.node, 'wallet') and self.node.wallet else None
                 )
                 
                 return success
@@ -117,7 +119,7 @@ class TaprootTransferManager:
                 # Get all script key mappings
                 script_key_mappings = list(self.node.invoice_manager._script_key_to_payment_hash.keys())
                 if not script_key_mappings:
-                    return
+                    return 0
                     
                 # Count of newly processed payments
                 newly_processed = 0
@@ -137,13 +139,27 @@ class TaprootTransferManager:
                     # Check if this is an internal payment
                     is_internal = await is_internal_payment(payment_hash)
                     
+                    # Check if this is a self-payment if we have wallet info
+                    is_self_payment = False
+                    user_id = None
+                    wallet_id = None
+                    
+                    if hasattr(self.node, 'wallet') and self.node.wallet:
+                        user_id = self.node.wallet.user
+                        wallet_id = self.node.wallet.id
+                        if user_id and invoice:
+                            is_self_payment = await is_self_payment(payment_hash, user_id)
+                    
                     # Attempt settlement with Settlement Service
                     logger.info(f"Found unprocessed payment, attempting settlement")
                     
                     success, _ = await SettlementService.settle_invoice(
                         payment_hash=payment_hash,
                         node=self.node,
-                        is_internal=is_internal
+                        is_internal=is_internal,
+                        is_self_payment=is_self_payment,
+                        user_id=user_id,
+                        wallet_id=wallet_id
                     )
                     
                     # Track newly processed payments
@@ -278,36 +294,46 @@ class TaprootTransferManager:
         logger.info(f"Monitoring invoice {payment_hash}")
 
         try:
-            # First check if this is an internal payment
+            # Get the invoice from database to determine payment type
+            invoice = await get_invoice_by_payment_hash(payment_hash)
+            
+            # Determine if this is an internal payment
             is_internal = await is_internal_payment(payment_hash)
             
-            # For internal payments, skip the Lightning monitoring
+            # For internal payments, handle settlement via SettlementService
             if is_internal:
                 # Check if it's a self-payment (same user) or just internal (different users)
-                invoice = await get_invoice_by_payment_hash(payment_hash)
-                if invoice:
-                    is_self = False
-                    if hasattr(self.node, 'wallet') and self.node.wallet:
-                        is_self = await is_self_payment(payment_hash, self.node.wallet.user)
+                is_self = False
+                user_id = None
+                wallet_id = None
+                
+                if hasattr(self.node, 'wallet') and self.node.wallet:
+                    user_id = self.node.wallet.user
+                    wallet_id = self.node.wallet.id
+                    if user_id:
+                        is_self = await is_self_payment(payment_hash, user_id)
+                
+                if is_self:
+                    logger.info(f"Self-payment detected for {payment_hash}, using SettlementService")
+                else:
+                    logger.info(f"Internal payment detected for {payment_hash}, using SettlementService")
+                
+                # Use Settlement Service for internal payments
+                success, result = await SettlementService.settle_invoice(
+                    payment_hash=payment_hash,
+                    node=self.node,
+                    is_internal=True,
+                    is_self_payment=is_self,
+                    user_id=user_id,
+                    wallet_id=wallet_id
+                )
+                
+                if success:
+                    logger.info(f"Internal payment successfully settled: {payment_hash}")
+                else:
+                    error_msg = result.get('error', 'Unknown error')
+                    logger.error(f"Failed to settle internal payment: {payment_hash}, error: {error_msg}")
                     
-                    if is_self:
-                        logger.info(f"Self-payment detected for {payment_hash}, using database settlement")
-                    else:
-                        logger.info(f"Internal payment detected for {payment_hash}, using database settlement")
-                    
-                    # Use Settlement Service for internal payments
-                    success, _ = await SettlementService.settle_invoice(
-                        payment_hash=payment_hash,
-                        node=self.node,
-                        is_internal=True,
-                        is_self_payment=is_self
-                    )
-                    
-                    if success:
-                        logger.info(f"Internal payment successfully settled: {payment_hash}")
-                    else:
-                        logger.error(f"Failed to settle internal payment: {payment_hash}")
-                        
                 return
             
             # Continue with Lightning monitoring for external payments
@@ -330,15 +356,26 @@ class TaprootTransferManager:
                     if script_key_hex:
                         self.node.invoice_manager._store_script_key_mapping(script_key_hex, payment_hash)
                     
+                    # Get wallet info if available
+                    user_id = None
+                    wallet_id = None
+                    if hasattr(self.node, 'wallet') and self.node.wallet:
+                        user_id = self.node.wallet.user
+                        wallet_id = self.node.wallet.id
+                    
                     # Attempt settlement using Settlement Service
-                    success, _ = await SettlementService.settle_invoice(
+                    success, result = await SettlementService.settle_invoice(
                         payment_hash=payment_hash,
                         node=self.node,
-                        is_internal=False
+                        is_internal=False,
+                        is_self_payment=False,
+                        user_id=user_id,
+                        wallet_id=wallet_id
                     )
                     
                     if not success:
-                        logger.error(f"Failed to settle Lightning payment: {payment_hash}")
+                        error_msg = result.get('error', 'Unknown error')
+                        logger.error(f"Failed to settle Lightning payment: {payment_hash}, error: {error_msg}")
                     
                     break
                     
