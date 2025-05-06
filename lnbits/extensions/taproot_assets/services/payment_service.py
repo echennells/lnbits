@@ -15,7 +15,7 @@ from lnbits.core.models import WalletTypeInfo
 from ..models import TaprootPaymentRequest, PaymentResponse, ParsedInvoice
 from ..logging_utils import log_debug, log_info, log_warning, log_error, PAYMENT, API
 from ..wallets.taproot_factory import TaprootAssetsFactory
-from ..error_utils import log_error, handle_grpc_error, raise_http_exception
+from ..error_utils import log_error, handle_grpc_error, raise_http_exception, ErrorContext
 from ..crud import (
     get_invoice_by_payment_hash,
     is_internal_payment,
@@ -44,7 +44,7 @@ class PaymentService:
         Raises:
             Exception: If the invoice format is invalid
         """
-        try:
+        with ErrorContext("parse_invoice", API):
             # Use the bolt11 library to decode the invoice
             decoded = bolt11.decode(payment_request)
             
@@ -79,10 +79,6 @@ class PaymentService:
                 valid=True,
                 asset_id=asset_id
             )
-        except Exception as e:
-            # Log the error with context
-            log_error(API, f"Error parsing invoice: {str(e)}")
-            raise Exception(f"Invalid invoice format: {str(e)}")
     
     @staticmethod
     async def determine_payment_type(
@@ -126,7 +122,7 @@ class PaymentService:
         Returns:
             PaymentResponse: The payment result
         """
-        try:
+        with ErrorContext("process_external_payment", PAYMENT):
             # Initialize wallet using the factory
             taproot_wallet = await TaprootAssetsFactory.create_wallet(
                 user_id=wallet.wallet.user,
@@ -204,34 +200,6 @@ class PaymentService:
                 asset_id=asset_id,
                 memo=memo
             )
-        
-        except grpc.aio.AioRpcError as e:
-            # Use standardized gRPC error handling
-            context = "Processing payment"
-            error_message, status_code = handle_grpc_error(e, context)
-            
-            # Handle special case for self-payment detection
-            if "self-payments not allowed" in e.details().lower():
-                # Log that our detection failed
-                logger.warning(f"Self-payment detection failed for an invoice with error: {e.details()}")
-                
-                # Try to extract payment hash from error message for debugging
-                match = re.search(r'hash=([a-fA-F0-9]{64})', e.details())
-                if match:
-                    logger.warning(f"Potentially missed internal payment for hash: {match.group(1)}")
-                
-                # Use more specific error message
-                error_message = "This invoice belongs to another user on this node. The system will handle this as an internal payment automatically."
-            
-            # Raise the HTTP exception with the standardized error message
-            raise_http_exception(status_code, error_message)
-        except Exception as e:
-            # Use the error utility with context
-            log_error(API, f"Error processing payment: {str(e)}")
-            raise_http_exception(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR, 
-                detail=f"Failed to pay Taproot Asset invoice: {str(e)}"
-            )
     
     @staticmethod
     async def process_internal_payment(
@@ -250,7 +218,7 @@ class PaymentService:
         Returns:
             PaymentResponse: The payment result
         """
-        try:
+        with ErrorContext("process_internal_payment", PAYMENT):
             # Get the invoice to retrieve asset_id
             invoice = await get_invoice_by_payment_hash(parsed_invoice.payment_hash)
             if not invoice:
@@ -313,15 +281,6 @@ class PaymentService:
                 internal_payment=True,  # Flag to indicate this was an internal payment
                 self_payment=is_self  # Flag to indicate if this was a self-payment
             )
-        except HTTPException:
-            # Re-raise HTTP exceptions
-            raise
-        except Exception as e:
-            logger.error(f"Internal payment error: {str(e)}")
-            raise_http_exception(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to process internal payment: {str(e)}"
-            )
     
     @staticmethod
     async def process_self_payment(
@@ -340,7 +299,7 @@ class PaymentService:
         Returns:
             PaymentResponse: The payment result
         """
-        try:
+        with ErrorContext("process_self_payment", PAYMENT):
             # Get the invoice to retrieve asset_id
             invoice = await get_invoice_by_payment_hash(parsed_invoice.payment_hash)
             if not invoice:
@@ -394,16 +353,6 @@ class PaymentService:
                 internal_payment=True,
                 self_payment=True
             )
-            
-        except HTTPException:
-            # Re-raise HTTP exceptions
-            raise
-        except Exception as e:
-            logger.error(f"Self-payment error: {str(e)}")
-            raise_http_exception(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to process self-payment: {str(e)}"
-            )
     
     @staticmethod
     async def process_payment(
@@ -424,23 +373,24 @@ class PaymentService:
         Returns:
             PaymentResponse: The payment result
         """
-        # Parse the invoice to get payment details
-        parsed_invoice = await PaymentService.parse_invoice(data.payment_request)
-        
-        # Determine the payment type if not forced
-        if force_payment_type:
-            payment_type = force_payment_type
-            log_info(PAYMENT, f"Using forced payment type: {payment_type}")
-        else:
-            payment_type = await PaymentService.determine_payment_type(
-                parsed_invoice.payment_hash, wallet.wallet.user
-            )
-            log_info(PAYMENT, f"Payment type determined: {payment_type}")
-        
-        # Process the payment based on its type
-        if payment_type == "internal":
-            return await PaymentService.process_internal_payment(data, wallet, parsed_invoice)
-        elif payment_type == "self":
-            return await PaymentService.process_self_payment(data, wallet, parsed_invoice)
-        else:
-            return await PaymentService.process_external_payment(data, wallet, parsed_invoice)
+        with ErrorContext("process_payment", PAYMENT):
+            # Parse the invoice to get payment details
+            parsed_invoice = await PaymentService.parse_invoice(data.payment_request)
+            
+            # Determine the payment type if not forced
+            if force_payment_type:
+                payment_type = force_payment_type
+                log_info(PAYMENT, f"Using forced payment type: {payment_type}")
+            else:
+                payment_type = await PaymentService.determine_payment_type(
+                    parsed_invoice.payment_hash, wallet.wallet.user
+                )
+                log_info(PAYMENT, f"Payment type determined: {payment_type}")
+            
+            # Process the payment based on its type
+            if payment_type == "internal":
+                return await PaymentService.process_internal_payment(data, wallet, parsed_invoice)
+            elif payment_type == "self":
+                return await PaymentService.process_self_payment(data, wallet, parsed_invoice)
+            else:
+                return await PaymentService.process_external_payment(data, wallet, parsed_invoice)

@@ -10,7 +10,7 @@ from lnbits.core.models import WalletTypeInfo, User
 
 from ..models import TaprootInvoiceRequest, InvoiceResponse, TaprootInvoice
 from ..wallets.taproot_factory import TaprootAssetsFactory
-from ..error_utils import log_error, handle_grpc_error, raise_http_exception
+from ..error_utils import log_error, handle_grpc_error, raise_http_exception, ErrorContext
 from ..logging_utils import API
 from ..crud import (
     create_invoice,
@@ -50,7 +50,7 @@ class InvoiceService:
             HTTPException: If invoice creation fails
         """
         logger.info(f"Creating invoice for asset_id={data.asset_id}, amount={data.amount}")
-        try:
+        with ErrorContext("create_invoice", API):
             # Create a wallet instance using the factory
             taproot_wallet = await TaprootAssetsFactory.create_wallet(
                 user_id=user_id,
@@ -119,14 +119,6 @@ class InvoiceService:
                 satoshi_amount=satoshi_amount,
                 checking_id=invoice.id,
             )
-            
-        except Exception as e:
-            # Log error with context and raise standard exception
-            log_error(API, f"Error creating invoice for asset {data.asset_id}: {str(e)}")
-            raise_http_exception(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to create Taproot Asset invoice: {str(e)}"
-            )
     
     @staticmethod
     async def get_invoice(invoice_id: str, user_id: str) -> TaprootInvoice:
@@ -143,21 +135,22 @@ class InvoiceService:
         Raises:
             HTTPException: If the invoice is not found or doesn't belong to the user
         """
-        invoice = await get_invoice(invoice_id)
+        with ErrorContext("get_invoice", API):
+            invoice = await get_invoice(invoice_id)
 
-        if not invoice:
-            raise_http_exception(
-                status_code=HTTPStatus.NOT_FOUND,
-                detail="Invoice not found",
-            )
+            if not invoice:
+                raise_http_exception(
+                    status_code=HTTPStatus.NOT_FOUND,
+                    detail="Invoice not found",
+                )
 
-        if invoice.user_id != user_id:
-            raise_http_exception(
-                status_code=HTTPStatus.FORBIDDEN,
-                detail="Not your invoice",
-            )
+            if invoice.user_id != user_id:
+                raise_http_exception(
+                    status_code=HTTPStatus.FORBIDDEN,
+                    detail="Not your invoice",
+                )
 
-        return invoice
+            return invoice
     
     @staticmethod
     async def get_user_invoices(user_id: str) -> List[TaprootInvoice]:
@@ -173,15 +166,9 @@ class InvoiceService:
         Raises:
             HTTPException: If there's an error retrieving invoices
         """
-        try:
+        with ErrorContext("get_user_invoices", API):
             invoices = await get_user_invoices(user_id)
             return invoices
-        except Exception as e:
-            logger.error(f"Error retrieving invoices: {str(e)}")
-            raise_http_exception(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to retrieve invoices: {str(e)}",
-            )
     
     @staticmethod
     async def update_invoice_status(
@@ -205,29 +192,29 @@ class InvoiceService:
         Raises:
             HTTPException: If the invoice is not found, doesn't belong to the user, or the status is invalid
         """
-        invoice = await get_invoice(invoice_id)
+        with ErrorContext("update_invoice_status", API):
+            invoice = await get_invoice(invoice_id)
 
-        if not invoice:
-            raise_http_exception(
-                status_code=HTTPStatus.NOT_FOUND,
-                detail="Invoice not found",
-            )
+            if not invoice:
+                raise_http_exception(
+                    status_code=HTTPStatus.NOT_FOUND,
+                    detail="Invoice not found",
+                )
 
-        if invoice.user_id != user_id:
-            raise_http_exception(
-                status_code=HTTPStatus.FORBIDDEN,
-                detail="Not your invoice",
-            )
+            if invoice.user_id != user_id:
+                raise_http_exception(
+                    status_code=HTTPStatus.FORBIDDEN,
+                    detail="Not your invoice",
+                )
 
-        if status not in ["pending", "paid", "expired", "cancelled"]:
-            raise_http_exception(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail="Invalid status",
-            )
+            if status not in ["pending", "paid", "expired", "cancelled"]:
+                raise_http_exception(
+                    status_code=HTTPStatus.BAD_REQUEST,
+                    detail="Invalid status",
+                )
 
-        # If marking as paid, use SettlementService to handle it correctly
-        if status == "paid" and invoice.status != "paid":
-            try:
+            # If marking as paid, use SettlementService to handle it correctly
+            if status == "paid" and invoice.status != "paid":
                 # Initialize a wallet instance to get the node
                 taproot_wallet = await TaprootAssetsFactory.create_wallet(
                     user_id=user_id,
@@ -257,26 +244,20 @@ class InvoiceService:
                         status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                         detail=f"Failed to settle invoice: {result.get('error', 'Unknown error')}",
                     )
-            except Exception as e:
-                logger.error(f"Error settling invoice {invoice_id}: {str(e)}")
-                raise_http_exception(
-                    status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to settle invoice: {str(e)}",
-                )
-        else:
-            # For non-payment status updates, use the regular update method
-            from ..crud import update_invoice_status as db_update_invoice_status
-            updated_invoice = await db_update_invoice_status(invoice_id, status)
-            
-            # Send WebSocket notification about status update using NotificationService
-            if updated_invoice:
-                invoice_data = {
-                    "id": updated_invoice.id,
-                    "payment_hash": updated_invoice.payment_hash,
-                    "status": updated_invoice.status,
-                    "asset_id": updated_invoice.asset_id,
-                    "asset_amount": updated_invoice.asset_amount
-                }
-                await NotificationService.notify_invoice_update(user_id, invoice_data)
-            
-            return updated_invoice
+            else:
+                # For non-payment status updates, use the regular update method
+                from ..crud import update_invoice_status as db_update_invoice_status
+                updated_invoice = await db_update_invoice_status(invoice_id, status)
+                
+                # Send WebSocket notification about status update using NotificationService
+                if updated_invoice:
+                    invoice_data = {
+                        "id": updated_invoice.id,
+                        "payment_hash": updated_invoice.payment_hash,
+                        "status": updated_invoice.status,
+                        "asset_id": updated_invoice.asset_id,
+                        "asset_amount": updated_invoice.asset_amount
+                    }
+                    await NotificationService.notify_invoice_update(user_id, invoice_data)
+                
+                return updated_invoice

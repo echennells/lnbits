@@ -29,6 +29,7 @@ from .logging_utils import (
     log_debug, log_info, log_warning, log_error, 
     log_exception, PAYMENT, TRANSFER, LogContext
 )
+from .error_utils import ErrorContext
 
 class SettlementService:
     """
@@ -70,8 +71,8 @@ class SettlementService:
                 - Optional result data dictionary
         """
         log_context = "internal payment" if is_internal else "Lightning payment"
-        with LogContext(TRANSFER, f"settling invoice {payment_hash[:8]}... ({log_context})", log_level="info"):
-            try:
+        with ErrorContext(f"settle_invoice_{log_context}", TRANSFER):
+            with LogContext(TRANSFER, f"settling invoice {payment_hash[:8]}... ({log_context})", log_level="info"):
                 # First check if already settled
                 if payment_hash in cls._settled_payment_hashes:
                     log_debug(TRANSFER, f"Invoice {payment_hash[:8]}... already marked as settled, skipping")
@@ -122,10 +123,6 @@ class SettlementService:
                         )
                 
                 return success, result
-                
-            except Exception as e:
-                log_error(TRANSFER, f"Failed to settle invoice: {str(e)}", exc_info=True)
-                return False, {"error": str(e)}
     
     @classmethod
     async def record_payment(
@@ -163,7 +160,7 @@ class SettlementService:
                 - Success status (bool)
                 - Optional payment record
         """
-        try:
+        with ErrorContext("record_payment", PAYMENT):
             log_info(PAYMENT, f"Recording payment: hash={payment_hash[:8]}..., asset_amount={asset_amount}, fee_sats={fee_sats}")
             
             async with cls._db_lock:
@@ -207,9 +204,6 @@ class SettlementService:
                 )
                 
                 return True, payment_record
-        except Exception as e:
-            log_error(PAYMENT, f"Failed to record payment: {str(e)}", exc_info=True)
-            return False, None
     
     @classmethod
     async def _get_or_generate_preimage(cls, node, payment_hash: str) -> Optional[str]:
@@ -241,7 +235,7 @@ class SettlementService:
         Handle settlement for internal payments (including self-payments).
         These are processed through database updates rather than Lightning network.
         """
-        try:
+        with ErrorContext("settle_internal_payment", TRANSFER):
             if not invoice:
                 log_error(TRANSFER, f"No invoice found with payment_hash: {payment_hash}")
                 return False, {"error": "Invoice not found"}
@@ -266,10 +260,6 @@ class SettlementService:
                 "is_self_payment": is_self_payment,
                 "updated_invoice": updated_invoice
             }
-            
-        except Exception as e:
-            log_error(TRANSFER, f"Failed to settle internal payment: {str(e)}", exc_info=True)
-            return False, {"error": str(e)}
     
     @classmethod
     async def _settle_lightning_payment(
@@ -283,7 +273,7 @@ class SettlementService:
         Handle settlement for Lightning network payments.
         Uses HODL invoice settlement via the Lightning node.
         """
-        try:
+        with ErrorContext("settle_lightning_payment", TRANSFER):
             # Convert the preimage to bytes
             preimage_bytes = bytes.fromhex(preimage_hex)
 
@@ -335,10 +325,6 @@ class SettlementService:
                 "lightning_settled": lightning_settled,
                 "updated_invoice": updated_invoice
             }
-            
-        except Exception as e:
-            log_error(TRANSFER, f"Failed to settle Lightning payment: {str(e)}", exc_info=True)
-            return False, {"error": str(e)}
     
     @classmethod
     async def _update_asset_balance(
@@ -362,7 +348,7 @@ class SettlementService:
         Returns:
             bool: Success status
         """
-        try:
+        with ErrorContext("update_asset_balance", TRANSFER):
             # Record the asset transaction as a credit
             # Note: We already have a DB lock in the caller
             await record_asset_transaction(
@@ -375,9 +361,6 @@ class SettlementService:
             )
             log_info(TRANSFER, f"Asset balance updated for asset_id={asset_id}, amount={amount}")
             return True
-        except Exception as e:
-            log_error(TRANSFER, f"Failed to update asset balance: {str(e)}", exc_info=True)
-            return False
     
     @classmethod
     async def _send_settlement_notifications(

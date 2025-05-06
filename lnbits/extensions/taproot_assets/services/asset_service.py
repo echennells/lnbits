@@ -11,7 +11,8 @@ from lnbits.core.crud import get_user
 
 from ..models import TaprootAsset, AssetBalance, AssetTransaction
 from ..wallets.taproot_factory import TaprootAssetsFactory
-from ..error_utils import log_error, handle_grpc_error, raise_http_exception
+from ..error_utils import log_error, handle_grpc_error, raise_http_exception, ErrorContext
+from ..logging_utils import API, ASSET
 from ..crud import (
     get_assets,
     get_asset,
@@ -39,7 +40,7 @@ class AssetService:
         Returns:
             List[Dict[str, Any]]: List of assets with balance information
         """
-        try:
+        with ErrorContext("list_assets", ASSET):
             # Create a wallet instance using the factory
             taproot_wallet = await TaprootAssetsFactory.create_wallet(
                 user_id=wallet.wallet.user,
@@ -74,9 +75,6 @@ class AssetService:
                 await NotificationService.notify_assets_update(wallet.wallet.user, assets_data)
                 
             return assets_data
-        except Exception as e:
-            logger.error(f"Failed to list assets: {str(e)}")
-            return []  # Return empty list on error
     
     @staticmethod
     async def get_asset(asset_id: str, wallet: WalletTypeInfo) -> Dict[str, Any]:
@@ -93,36 +91,37 @@ class AssetService:
         Raises:
             HTTPException: If the asset is not found or doesn't belong to the user
         """
-        # Get user for permission check
-        user = await get_user(wallet.wallet.user)
-        if not user:
-            raise_http_exception(
-                status_code=HTTPStatus.NOT_FOUND,
-                detail="User not found",
-            )
+        with ErrorContext("get_asset", ASSET):
+            # Get user for permission check
+            user = await get_user(wallet.wallet.user)
+            if not user:
+                raise_http_exception(
+                    status_code=HTTPStatus.NOT_FOUND,
+                    detail="User not found",
+                )
+                
+            asset = await get_asset(asset_id)
+
+            if not asset:
+                raise_http_exception(
+                    status_code=HTTPStatus.NOT_FOUND,
+                    detail="Asset not found",
+                )
+
+            if asset.user_id != user.id:
+                raise_http_exception(
+                    status_code=HTTPStatus.FORBIDDEN,
+                    detail="Not your asset",
+                )
             
-        asset = await get_asset(asset_id)
-
-        if not asset:
-            raise_http_exception(
-                status_code=HTTPStatus.NOT_FOUND,
-                detail="Asset not found",
-            )
-
-        if asset.user_id != user.id:
-            raise_http_exception(
-                status_code=HTTPStatus.FORBIDDEN,
-                detail="Not your asset",
-            )
-        
-        # Get user's balance for this asset
-        balance = await get_asset_balance(wallet.wallet.id, asset.asset_id)
-        
-        # Add user balance to the response
-        asset_dict = asset.dict()
-        asset_dict["user_balance"] = balance.balance if balance else 0
-        
-        return asset_dict
+            # Get user's balance for this asset
+            balance = await get_asset_balance(wallet.wallet.id, asset.asset_id)
+            
+            # Add user balance to the response
+            asset_dict = asset.dict()
+            asset_dict["user_balance"] = balance.balance if balance else 0
+            
+            return asset_dict
     
     @staticmethod
     async def get_asset_balances(wallet: WalletTypeInfo) -> List[AssetBalance]:
@@ -138,15 +137,9 @@ class AssetService:
         Raises:
             HTTPException: If there's an error retrieving asset balances
         """
-        try:
+        with ErrorContext("get_asset_balances", ASSET):
             balances = await get_wallet_asset_balances(wallet.wallet.id)
             return balances
-        except Exception as e:
-            logger.error(f"Error retrieving asset balances: {str(e)}")
-            raise_http_exception(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to retrieve asset balances: {str(e)}",
-            )
     
     @staticmethod
     async def get_asset_balance(asset_id: str, wallet: WalletTypeInfo) -> Dict[str, Any]:
@@ -163,17 +156,11 @@ class AssetService:
         Raises:
             HTTPException: If there's an error retrieving the asset balance
         """
-        try:
+        with ErrorContext("get_asset_balance", ASSET):
             balance = await get_asset_balance(wallet.wallet.id, asset_id)
             if not balance:
                 return {"wallet_id": wallet.wallet.id, "asset_id": asset_id, "balance": 0}
             return balance
-        except Exception as e:
-            logger.error(f"Error retrieving asset balance: {str(e)}")
-            raise_http_exception(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to retrieve asset balance: {str(e)}",
-            )
     
     @staticmethod
     async def get_asset_transactions(
@@ -195,12 +182,6 @@ class AssetService:
         Raises:
             HTTPException: If there's an error retrieving asset transactions
         """
-        try:
+        with ErrorContext("get_asset_transactions", ASSET):
             transactions = await get_asset_transactions(wallet.wallet.id, asset_id, limit)
             return transactions
-        except Exception as e:
-            logger.error(f"Error retrieving asset transactions: {str(e)}")
-            raise_http_exception(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"Failed to retrieve asset transactions: {str(e)}",
-            )
