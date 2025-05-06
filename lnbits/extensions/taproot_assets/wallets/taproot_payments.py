@@ -221,28 +221,8 @@ class TaprootPaymentManager:
                 # Get the asset amount from decoded invoice
                 asset_amount = decoded.amount_msat // 1000 if hasattr(decoded, "amount_msat") else 0
                 
-                # Record the payment using SettlementService
-                if status == "success" and hasattr(self.node, 'wallet') and self.node.wallet:
-                    user_id = self.node.wallet.user
-                    wallet_id = self.node.wallet.id
-                    
-                    # Use the centralized SettlementService to record the payment
-                    payment_success, payment_record = await SettlementService.record_payment(
-                        payment_hash=payment_hash,
-                        payment_request=payment_request,
-                        asset_id=asset_id,
-                        asset_amount=asset_amount,
-                        fee_sats=fee_msat // 1000,
-                        user_id=user_id,
-                        wallet_id=wallet_id,
-                        memo=decoded.description if hasattr(decoded, "description") else None,
-                        preimage=preimage,
-                        is_internal=False,
-                        is_self_payment=False
-                    )
-                    
-                    if not payment_success:
-                        log_warning(PAYMENT, f"Payment was successful but failed to record in database")
+                # We're NOT recording the payment here anymore - this will be handled by the PaymentService
+                # This fixes the issue with the duplicate payment records
                 
                 # Return response with all available information
                 return {
