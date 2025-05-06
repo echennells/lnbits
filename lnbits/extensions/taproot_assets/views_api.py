@@ -140,12 +140,19 @@ async def api_internal_payment(
     
     # Verify this is actually an internal payment
     payment_type = await PaymentService.determine_payment_type(parsed_invoice.payment_hash, wallet.wallet.user)
-    if payment_type not in ["internal", "self"]:
-        log_warning(API, f"Not an internal payment. Invoice was not created on this node. Payment hash: {parsed_invoice.payment_hash}")
-        raise_http_exception(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail="Not an internal payment. Invoice was not created on this node."
-        )
+    if payment_type not in ["internal"]:
+        if payment_type == "self":
+            log_warning(API, f"Self-payments are not allowed. Payment hash: {parsed_invoice.payment_hash}")
+            raise_http_exception(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="Self-payments are not allowed. You cannot pay your own invoice."
+            )
+        else:
+            log_warning(API, f"Not an internal payment. Invoice was not created on this node. Payment hash: {parsed_invoice.payment_hash}")
+            raise_http_exception(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="Not an internal payment. Invoice was not created on this node."
+            )
     
     # Process as internal payment
     log_info(API, f"Confirmed as internal payment, processing")

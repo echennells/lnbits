@@ -368,7 +368,7 @@ class PaymentService:
             data: The payment request data
             wallet: The wallet information
             force_payment_type: Optional parameter to force a specific payment type
-                           ("internal", "self", or "external")
+                           ("internal" or "external")
         
         Returns:
             PaymentResponse: The payment result
@@ -387,10 +387,13 @@ class PaymentService:
                 )
                 log_info(PAYMENT, f"Payment type determined: {payment_type}")
             
+            # Reject self-payments
+            if payment_type == "self":
+                log_warning(PAYMENT, f"Self-payment rejected for payment hash: {parsed_invoice.payment_hash}")
+                raise Exception("Self-payments are not allowed. You cannot pay your own invoice.")
+            
             # Process the payment based on its type
             if payment_type == "internal":
                 return await PaymentService.process_internal_payment(data, wallet, parsed_invoice)
-            elif payment_type == "self":
-                return await PaymentService.process_self_payment(data, wallet, parsed_invoice)
             else:
                 return await PaymentService.process_external_payment(data, wallet, parsed_invoice)

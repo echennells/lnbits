@@ -193,9 +193,6 @@ const NotificationService = {
     if (paymentResult.internal_payment) {
       title = 'Internal Payment Processed';
       message = 'Payment to another user on this node has been processed successfully.';
-    } else if (paymentResult.self_payment) {
-      title = 'Self-Payment Processed';
-      message = 'Self-payment has been processed successfully.';
     } else {
       title = 'Payment Successful!';
       message = 'Payment has been sent successfully.';

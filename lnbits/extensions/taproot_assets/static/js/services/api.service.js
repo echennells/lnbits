@@ -129,21 +129,6 @@ const ApiService = {
   },
 
   /**
-   * Process a self-payment (deprecated - use processInternalPayment instead)
-   * @param {string} adminkey - Admin key for authentication
-   * @param {Object} payload - Payment payload
-   * @returns {Promise} - Promise that resolves with payment result
-   */
-  processSelfPayment(adminkey, payload) {
-    return LNbits.api
-      .request('POST', '/taproot_assets/api/v1/taproot/self-payment', adminkey, payload)
-      .catch(error => {
-        console.error('API Error processing self payment:', error);
-        throw error;
-      });
-  },
-
-  /**
    * Parse an invoice using the server-side endpoint
    * @param {string} adminkey - Admin key for authentication
    * @param {string} paymentRequest - Payment request to parse
