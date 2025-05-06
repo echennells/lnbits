@@ -318,11 +318,8 @@ class TaprootPaymentManager:
                     log_error(PAYMENT, f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}")
                     raise Exception(f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}")
                     
-                # Create descriptive memo based on payment type
-                if is_self_pay:
-                    memo = f"Self-payment: {invoice.memo or 'Taproot Asset Transfer'}"
-                else:
-                    memo = f"Internal payment to {invoice.user_id}: {invoice.memo or 'Taproot Asset Transfer'}"
+                # Use the invoice memo directly without adding any prefix
+                memo = invoice.memo or ""
                 
                 try:
                     # First record the debit transaction for the sender

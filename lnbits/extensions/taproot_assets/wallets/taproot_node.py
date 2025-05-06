@@ -53,6 +53,9 @@ class TaprootAssetsNodeExtension(Node):
     # Class-level cache to store preimages with expiry times
     _preimage_cache = {}
     
+    # Class-level cache to store asset_ids for payment hashes
+    _asset_id_cache = {}
+    
     # Default expiry time for preimages (24 hours)
     DEFAULT_PREIMAGE_EXPIRY = 86400
 
@@ -70,6 +73,34 @@ class TaprootAssetsNodeExtension(Node):
             "expiry": expiry
         }
         log_debug(NODE, f"Stored preimage for payment hash: {payment_hash[:8]}...")
+
+    def _store_asset_id(self, payment_hash: str, asset_id: str):
+        """
+        Store an asset_id for a given payment hash.
+        
+        Args:
+            payment_hash: The payment hash
+            asset_id: The asset_id corresponding to the payment hash
+        """
+        self.__class__._asset_id_cache[payment_hash] = asset_id
+        log_debug(NODE, f"Stored asset_id {asset_id[:8]}... for payment hash: {payment_hash[:8]}...")
+
+    def _get_asset_id(self, payment_hash: str) -> Optional[str]:
+        """
+        Retrieve an asset_id for a given payment hash.
+        
+        Args:
+            payment_hash: The payment hash to look up
+            
+        Returns:
+            str: The asset_id if found, None otherwise
+        """
+        asset_id = self.__class__._asset_id_cache.get(payment_hash)
+        if asset_id:
+            log_debug(NODE, f"Found asset_id {asset_id[:8]}... for payment hash: {payment_hash[:8]}...")
+        else:
+            log_debug(NODE, f"No asset_id found for payment hash: {payment_hash[:8]}...")
+        return asset_id
 
     def _get_preimage(self, payment_hash: str) -> Optional[str]:
         """

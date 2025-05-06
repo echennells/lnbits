@@ -275,7 +275,7 @@ class SettlementService:
                 amount=amount,
                 tx_type="credit",  # Incoming payment
                 payment_hash=payment_hash,
-                memo=memo or f"Received {amount} of asset {asset_id}"
+                memo=memo or ""  # Use empty string if no memo provided
             )
             log_info(TRANSFER, f"Asset balance updated for asset_id={asset_id}, amount={amount}")
             return True

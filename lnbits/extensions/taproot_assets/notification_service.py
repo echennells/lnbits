@@ -154,7 +154,7 @@ class NotificationService:
             "asset_id": asset_id,
             "asset_amount": asset_amount,
             "fee_sats": fee_sats,
-            "memo": memo or f"Taproot Asset {'Received' if tx_type == 'credit' else 'Sent'}",
+            "memo": memo or "",  # Use empty string if no memo provided
             "status": "completed",
             "internal_payment": is_internal,
             "self_payment": is_self_payment

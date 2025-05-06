@@ -259,6 +259,9 @@ class TaprootWalletExtension(Wallet):
             log_info(WALLET, f"Paying asset invoice{asset_info}{peer_info}, fee_limit={fee_limit_sats or 'default'} sats")
 
             # Call the node's pay_asset_invoice method
+            # Make sure to pass the asset_id to the node's pay_asset_invoice method
+            # This is important because the node's pay_asset_invoice method will use this asset_id
+            # to pay the invoice with the correct asset
             payment_result = await self.node.pay_asset_invoice(
                 payment_request=invoice,
                 fee_limit_sats=fee_limit_sats,
@@ -273,13 +276,26 @@ class TaprootWalletExtension(Wallet):
             
             log_info(WALLET, f"Payment successful, hash={payment_hash[:8]}..., fee={fee_msat//1000} sats")
             
-            return BasePaymentResponse(
+            # Create a custom response with the asset_id and asset_amount
+            # We need to include this information in the response
+            # so the payment service can use it to record the transaction
+            response = BasePaymentResponse(
                 ok=True,
                 checking_id=payment_hash,
                 fee_msat=fee_msat,
                 preimage=preimage,
                 error_message=None
             )
+            
+            # Store the asset_id in the node's preimage cache
+            # This is a workaround since BasePaymentResponse doesn't have an extra field
+            # The payment service will use the asset_id from the parsed invoice
+            # but we need to make sure it's the correct one
+            asset_id = payment_result.get("asset_id", asset_id)
+            if asset_id:
+                self.node._store_asset_id(payment_hash, asset_id)
+            
+            return response
         except Exception as e:
             log_error(WALLET, f"Failed to pay invoice: {str(e)}")
             return BasePaymentResponse(

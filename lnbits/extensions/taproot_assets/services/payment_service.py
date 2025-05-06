@@ -141,6 +141,9 @@ class PaymentService:
             fee_limit_sats = max(data.fee_limit_sats or taproot_settings.default_sat_fee, 10)
             
             # Make the payment
+            # Pass the asset_id from the parsed invoice to the pay_asset_invoice method
+            # This is important because the pay_asset_invoice method will use this asset_id
+            # to pay the invoice with the correct asset
             payment = await taproot_wallet.pay_asset_invoice(
                 invoice=data.payment_request,
                 fee_limit_sats=fee_limit_sats,
@@ -157,11 +160,23 @@ class PaymentService:
             preimage = payment.preimage or ""
             routing_fees_sats = payment.fee_msat // 1000 if payment.fee_msat else 0
             
-            # Use the parsed invoice asset_id since BasePaymentResponse doesn't have extra field
-            asset_id = parsed_invoice.asset_id or ""
+            # Get asset_id from the node's cache if available, otherwise use the parsed invoice
+            # We store the asset_id in the node's cache in the pay_asset_invoice method
+            # This is a workaround since BasePaymentResponse doesn't have an extra field
+            asset_id = ""
+            if taproot_wallet.node:
+                cached_asset_id = taproot_wallet.node._get_asset_id(payment_hash)
+                if cached_asset_id:
+                    asset_id = cached_asset_id
+                    log_info(PAYMENT, f"Using asset_id from cache: {asset_id}")
             
-            # Use the memo from the invoice if available
-            memo = None
+            # If no cached asset_id, use the one from the parsed invoice
+            if not asset_id:
+                asset_id = parsed_invoice.asset_id or ""
+                log_info(PAYMENT, f"Using asset_id from parsed invoice: {asset_id}")
+            
+            # Extract memo from the invoice description if available
+            memo = parsed_invoice.description if parsed_invoice.description else None
             
             # Record the payment - for external Lightning payments only
             try:
@@ -217,7 +232,8 @@ class PaymentService:
                 sat_fee_paid=0,  # No service fee
                 routing_fees_sats=routing_fees_sats,
                 asset_amount=parsed_invoice.amount,
-                asset_id=asset_id
+                asset_id=asset_id,
+                memo=memo
             )
         
         except grpc.aio.AioRpcError as e:
@@ -305,6 +321,7 @@ class PaymentService:
                 routing_fees_sats=0,
                 asset_amount=invoice.asset_amount,
                 asset_id=invoice.asset_id,
+                memo=invoice.memo,
                 internal_payment=True,  # Flag to indicate this was an internal payment
                 self_payment=is_self  # Flag to indicate if this was a self-payment
             )
@@ -419,6 +436,7 @@ class PaymentService:
                 preimage=result.preimage or "",
                 asset_amount=invoice.asset_amount,
                 asset_id=invoice.asset_id,
+                memo=invoice.memo,
                 internal_payment=True,
                 self_payment=True
             )

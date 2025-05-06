@@ -191,6 +191,7 @@ class PaymentResponse(BaseModel):
     routing_fees_sats: Optional[int] = None
     asset_amount: int
     asset_id: Optional[str] = None
+    memo: Optional[str] = None
     internal_payment: Optional[bool] = False
     self_payment: Optional[bool] = False
 

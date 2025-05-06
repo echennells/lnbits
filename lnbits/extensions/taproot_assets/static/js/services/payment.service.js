@@ -183,7 +183,7 @@ const PaymentService = {
         asset_id: response.data.asset_id || assetData.asset_id,
         asset_amount: response.data.asset_amount,
         fee_sats: response.data.fee_msat ? Math.ceil(response.data.fee_msat / 1000) : 0,
-        memo: assetData?.name ? `Sent ${response.data.asset_amount} ${assetData.name}` : 'Asset payment',
+        memo: response.data.memo || '', // Use memo from backend response
         status: 'completed',
         user_id: wallet.user,
         wallet_id: wallet.id,
@@ -277,7 +277,7 @@ const PaymentService = {
         asset_id: response.data.asset_id,
         asset_amount: response.data.asset_amount,
         fee_sats: 0, // Internal payments have zero fee
-        memo: asset?.name ? `Sent ${response.data.asset_amount} ${asset.name} (Internal)` : 'Internal asset payment',
+        memo: response.data.memo || '', // Use memo from backend response
         status: 'completed',
         user_id: wallet.user,
         wallet_id: wallet.id,
@@ -313,9 +313,9 @@ const PaymentService = {
     if (mapped.asset_id && !mapped.asset_name) {
       mapped.asset_name = this._getAssetName(mapped.asset_id);
       
-      // Update memo if needed
+      // Don't override memo if it already exists
       if (!mapped.memo && mapped.asset_name && mapped.asset_name !== 'Unknown') {
-        mapped.memo = `Sent ${mapped.asset_amount || 0} ${mapped.asset_name}`;
+        mapped.memo = '';
       }
     }
     
