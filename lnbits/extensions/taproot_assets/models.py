@@ -38,7 +38,7 @@ class TaprootInvoiceRequest(BaseModel):
 class TaprootPaymentRequest(BaseModel):
     """Request model for paying a Taproot Asset invoice."""
     payment_request: str
-    fee_limit_sats: Optional[int] = 1000  # Default to 1000 sats fee limit
+    fee_limit_sats: Optional[int] = 10  # Default to 10 sats fee limit
     peer_pubkey: Optional[str] = None  # Add peer_pubkey for multi-channel support
 
 
@@ -181,6 +181,8 @@ class PaymentResponse(BaseModel):
     memo: Optional[str] = None
     internal_payment: Optional[bool] = False
     self_payment: Optional[bool] = False
+    status: str = "success"  # Can be "success" or "failed"
+    error: Optional[str] = None  # Error message if payment failed
 
 
 class ParsedInvoice(BaseModel):

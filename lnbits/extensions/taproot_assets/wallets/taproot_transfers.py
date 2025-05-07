@@ -106,7 +106,7 @@ class TaprootTransferManager:
 
         RETRY_DELAY = 5  # seconds
         MAX_RETRIES = 3  # number of retries before giving up
-        HEARTBEAT_INTERVAL = 300  # 5 minutes between heartbeats
+        HEARTBEAT_INTERVAL = 60  # 1 minute between heartbeats
 
         # Set up last cache size for efficient logging
         last_cache_size = 0
@@ -211,29 +211,6 @@ class TaprootTransferManager:
                     logger.error(f"Error in heartbeat: {str(e)}")
                     await asyncio.sleep(10)
 
-        async def _cleanup_preimage_cache() -> int:
-            """
-            Clean up expired preimages from the cache.
-            
-            Returns:
-                int: Number of expired entries removed
-            """
-            now = time.time()
-            expired_count = 0
-            
-            # Get a list of expired payment hashes
-            expired_hashes = []
-            for payment_hash, entry in self.node._preimage_cache.items():
-                if isinstance(entry, dict) and 'expiry' in entry:
-                    if entry['expiry'] < now:
-                        expired_hashes.append(payment_hash)
-            
-            # Remove expired entries
-            for payment_hash in expired_hashes:
-                del self.node._preimage_cache[payment_hash]
-                expired_count += 1
-                
-            return expired_count
 
         for retry in range(MAX_RETRIES):
             try:
@@ -394,6 +371,30 @@ class TaprootTransferManager:
         except Exception as e:
             logger.error(f"Error monitoring invoice: {str(e)}")
 
+    async def _cleanup_preimage_cache(self) -> int:
+        """
+        Clean up expired preimages from the cache.
+        
+        Returns:
+            int: Number of expired entries removed
+        """
+        now = time.time()
+        expired_count = 0
+        
+        # Get a list of expired payment hashes
+        expired_hashes = []
+        for payment_hash, entry in self.node._preimage_cache.items():
+            if isinstance(entry, dict) and 'expiry' in entry:
+                if entry['expiry'] < now:
+                    expired_hashes.append(payment_hash)
+        
+        # Remove expired entries
+        for payment_hash in expired_hashes:
+            del self.node._preimage_cache[payment_hash]
+            expired_count += 1
+            
+        return expired_count
+        
     async def _extract_script_key_from_invoice(self, invoice) -> Optional[str]:
         """Extract script key from invoice HTLCs."""
         if not hasattr(invoice, 'htlcs') or not invoice.htlcs:

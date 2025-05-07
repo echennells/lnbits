@@ -69,7 +69,7 @@ class TaprootPaymentManager:
                 log_debug(PAYMENT, f"Paying asset invoice: {payment_request[:30]}...")
 
                 # Set default fee limit with minimum for routing
-                fee_limit_sats = max(fee_limit_sats or 1000, 10)
+                fee_limit_sats = max(fee_limit_sats or 10, 1)
                 log_info(PAYMENT, f"Using fee_limit_sats={fee_limit_sats} for payment")
 
                 # Decode invoice to get payment hash and extract asset ID if needed
@@ -209,13 +209,33 @@ class TaprootPaymentManager:
                         log_error(PAYMENT, f"gRPC error in payment stream: {e.code()}: {e.details()}")
                         raise Exception(f"Payment error: {e.details()}")
                 except Exception as e:
-                    if accepted_sell_order_seen:
-                        # If we've seen an accepted_sell_order, the payment might still succeed
-                        log_info(PAYMENT, f"Payment stream ended with error after accepted_sell_order: {str(e)}")
+                    error_str = str(e).lower()
+                    
+                    # Check for specific error codes or messages
+                    if "payment failed: 2" in error_str:
+                        # Error code 2 indicates insufficient channel balance (sats)
+                        log_error(PAYMENT, f"Payment failed due to insufficient channel balance: {str(e)}")
+                        status = "failed"
+                        raise Exception("Failed - Insufficient sats balance in channel")
+                    elif "insufficient balance" in error_str or "no asset channel balance" in error_str:
+                        # Other balance-related errors
+                        log_error(PAYMENT, f"Payment failed due to insufficient balance: {str(e)}")
+                        status = "failed"
+                        raise Exception("Payment failed: Insufficient balance")
+                    elif accepted_sell_order_seen and "timeout" in error_str:
+                        # Timeout after accepted_sell_order might still succeed
+                        log_info(PAYMENT, f"Payment stream ended with timeout after accepted_sell_order: {str(e)}")
                         log_info(PAYMENT, "Considering payment as potentially successful")
                         status = "success"
+                    elif accepted_sell_order_seen:
+                        # For other errors after accepted_sell_order, mark as failed
+                        log_error(PAYMENT, f"Payment failed after accepted_sell_order: {str(e)}")
+                        status = "failed"
+                        raise Exception(f"Payment failed: {str(e)}")
                     else:
+                        # General error handling
                         log_error(PAYMENT, f"Error in payment stream: {str(e)}")
+                        status = "failed"
                         raise Exception(f"Payment error: {str(e)}")
                 
                 # Get the asset amount from decoded invoice

@@ -147,7 +147,16 @@ class PaymentService:
 
             # Verify payment success
             if "status" in payment_result and payment_result["status"] != "success":
-                raise Exception(f"Payment failed: {payment_result.get('error', 'Unknown error')}")
+                error_msg = f"Payment failed: {payment_result.get('error', 'Unknown error')}"
+                log_error(PAYMENT, error_msg)
+                return PaymentResponse(
+                    success=False,
+                    payment_hash=payment_result.get("payment_hash", ""),
+                    status="failed",
+                    error=error_msg,
+                    asset_amount=parsed_invoice.amount,
+                    asset_id=parsed_invoice.asset_id or ""
+                )
                 
             # Get payment details
             payment_hash = payment_result.get("payment_hash", "")
@@ -226,9 +235,14 @@ class PaymentService:
             # Get the invoice to retrieve asset_id
             invoice = await get_invoice_by_payment_hash(parsed_invoice.payment_hash)
             if not invoice:
-                raise_http_exception(
-                    status_code=HTTPStatus.NOT_FOUND, 
-                    detail="Invoice not found"
+                log_error(PAYMENT, f"Invoice not found for payment hash: {parsed_invoice.payment_hash}")
+                return PaymentResponse(
+                    success=False,
+                    payment_hash=parsed_invoice.payment_hash,
+                    status="failed",
+                    error="Invoice not found",
+                    asset_amount=parsed_invoice.amount,
+                    asset_id=parsed_invoice.asset_id or ""
                 )
                 
             # Initialize wallet using the factory
@@ -248,18 +262,39 @@ class PaymentService:
             }
             
             # Use SettlementService to settle the invoice with sender information
-            success, settlement_result = await SettlementService.settle_invoice(
-                payment_hash=parsed_invoice.payment_hash,
-                node=taproot_wallet.node,
-                is_internal=True,
-                is_self_payment=is_self,
-                user_id=wallet.wallet.user,
-                wallet_id=wallet.wallet.id,
-                sender_info=sender_info  # Pass sender info to handle both sides of the transaction
-            )
-            
-            if not success:
-                raise Exception(f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}")
+            try:
+                success, settlement_result = await SettlementService.settle_invoice(
+                    payment_hash=parsed_invoice.payment_hash,
+                    node=taproot_wallet.node,
+                    is_internal=True,
+                    is_self_payment=is_self,
+                    user_id=wallet.wallet.user,
+                    wallet_id=wallet.wallet.id,
+                    sender_info=sender_info  # Pass sender info to handle both sides of the transaction
+                )
+                
+                if not success:
+                    error_msg = f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}"
+                    log_error(PAYMENT, error_msg)
+                    return PaymentResponse(
+                        success=False,
+                        payment_hash=parsed_invoice.payment_hash,
+                        status="failed",
+                        error=error_msg,
+                        asset_amount=parsed_invoice.amount,
+                        asset_id=parsed_invoice.asset_id or ""
+                    )
+            except Exception as e:
+                error_msg = f"Error during internal payment settlement: {str(e)}"
+                log_error(PAYMENT, error_msg)
+                return PaymentResponse(
+                    success=False,
+                    payment_hash=parsed_invoice.payment_hash,
+                    status="failed",
+                    error=error_msg,
+                    asset_amount=parsed_invoice.amount,
+                    asset_id=parsed_invoice.asset_id or ""
+                )
             
             # Create payment record for notification purposes
             # This doesn't change the balance again since it was already handled in settle_invoice
@@ -314,27 +349,62 @@ class PaymentService:
         Returns:
             PaymentResponse: The payment result
         """
-        with ErrorContext("process_payment", PAYMENT):
-            # Parse the invoice to get payment details
-            parsed_invoice = await PaymentService.parse_invoice(data.payment_request)
+        try:
+            with ErrorContext("process_payment", PAYMENT):
+                # Parse the invoice to get payment details
+                parsed_invoice = await PaymentService.parse_invoice(data.payment_request)
+                
+                # Determine the payment type if not forced
+                if force_payment_type:
+                    payment_type = force_payment_type
+                    log_info(PAYMENT, f"Using forced payment type: {payment_type}")
+                else:
+                    payment_type = await PaymentService.determine_payment_type(
+                        parsed_invoice.payment_hash, wallet.wallet.user
+                    )
+                    log_info(PAYMENT, f"Payment type determined: {payment_type}")
+                
+                # Reject self-payments
+                if payment_type == "self":
+                    log_warning(PAYMENT, f"Self-payment rejected for payment hash: {parsed_invoice.payment_hash}")
+                    return PaymentResponse(
+                        success=False,
+                        payment_hash=parsed_invoice.payment_hash,
+                        status="failed",
+                        error="Self-payments are not allowed. You cannot pay your own invoice.",
+                        asset_amount=parsed_invoice.amount,
+                        asset_id=parsed_invoice.asset_id
+                    )
+                
+                # Process the payment based on its type
+                if payment_type == "internal":
+                    return await PaymentService.process_internal_payment(data, wallet, parsed_invoice)
+                else:
+                    return await PaymentService.process_external_payment(data, wallet, parsed_invoice)
+        except Exception as e:
+            # Handle any exceptions and return a failed payment response
+            error_message = str(e)
+            log_error(PAYMENT, f"Payment failed with error: {error_message}")
             
-            # Determine the payment type if not forced
-            if force_payment_type:
-                payment_type = force_payment_type
-                log_info(PAYMENT, f"Using forced payment type: {payment_type}")
-            else:
-                payment_type = await PaymentService.determine_payment_type(
-                    parsed_invoice.payment_hash, wallet.wallet.user
-                )
-                log_info(PAYMENT, f"Payment type determined: {payment_type}")
+            # Try to extract payment hash from the parsed invoice if available
+            payment_hash = ""
+            asset_amount = 0
+            asset_id = ""
+            try:
+                # If we've parsed the invoice, use its details
+                if 'parsed_invoice' in locals():
+                    payment_hash = parsed_invoice.payment_hash
+                    asset_amount = parsed_invoice.amount
+                    asset_id = parsed_invoice.asset_id or ""
+            except Exception:
+                pass
             
-            # Reject self-payments
-            if payment_type == "self":
-                log_warning(PAYMENT, f"Self-payment rejected for payment hash: {parsed_invoice.payment_hash}")
-                raise Exception("Self-payments are not allowed. You cannot pay your own invoice.")
-            
-            # Process the payment based on its type
-            if payment_type == "internal":
-                return await PaymentService.process_internal_payment(data, wallet, parsed_invoice)
-            else:
-                return await PaymentService.process_external_payment(data, wallet, parsed_invoice)
+            # Return a failed payment response
+            return PaymentResponse(
+                success=False,
+                payment_hash=payment_hash,
+                status="failed",
+                error=error_message,
+                asset_amount=asset_amount,
+                asset_id=asset_id
+            )

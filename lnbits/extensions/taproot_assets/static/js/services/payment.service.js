@@ -155,45 +155,55 @@ const PaymentService = {
         throw new Error('Failed to process payment: No data returned');
       }
       
-      // Update asset information in the store with new balance
-      if (response.data.asset_id && assetData && window.taprootStore) {
-        // Deduct the asset amount from the user's balance
-        const newBalance = (assetData.user_balance || 0) - response.data.asset_amount;
-        
-        // Update the asset in the store
-        window.taprootStore.actions.updateAsset(assetData.asset_id, { 
-          user_balance: Math.max(0, newBalance) 
-        });
-        
-        // Make sure this asset is in the global map
-        if (!window.assetMap) window.assetMap = {};
-        if (!window.assetMap[assetData.asset_id]) {
-          window.assetMap[assetData.asset_id] = {
-            name: assetData.name || 'Unknown',
-            type: assetData.type || 'unknown'
-          };
-        }
+      // Check if the payment was successful
+      if (!response.data.status || response.data.status === 'failed') {
+        // If status is explicitly failed, throw an error with the details
+        const errorMessage = response.data.error || 'Payment failed';
+        throw new Error(errorMessage);
       }
       
-      // Create payment record for store
-      const payment = {
-        id: response.data.payment_hash || Date.now().toString(),
-        payment_hash: response.data.payment_hash,
-        payment_request: paymentData.paymentRequest,
-        asset_id: response.data.asset_id || assetData.asset_id,
-        asset_amount: response.data.asset_amount,
-        fee_sats: response.data.fee_msat ? Math.ceil(response.data.fee_msat / 1000) : 0,
-        memo: response.data.memo || '', // Use memo from backend response
-        status: 'completed',
-        user_id: wallet.user,
-        wallet_id: wallet.id,
-        created_at: new Date().toISOString(),
-        preimage: response.data.preimage
-      };
-      
-      // Add mapped payment to store
-      const mappedPayment = this._mapPayment(payment);
-      window.taprootStore.actions.addPayment(mappedPayment);
+      // Only update UI if payment was successful
+      if (response.data.status === 'success') {
+        // Update asset information in the store with new balance
+        if (response.data.asset_id && assetData && window.taprootStore) {
+          // Deduct the asset amount from the user's balance
+          const newBalance = (assetData.user_balance || 0) - response.data.asset_amount;
+          
+          // Update the asset in the store
+          window.taprootStore.actions.updateAsset(assetData.asset_id, { 
+            user_balance: Math.max(0, newBalance) 
+          });
+          
+          // Make sure this asset is in the global map
+          if (!window.assetMap) window.assetMap = {};
+          if (!window.assetMap[assetData.asset_id]) {
+            window.assetMap[assetData.asset_id] = {
+              name: assetData.name || 'Unknown',
+              type: assetData.type || 'unknown'
+            };
+          }
+        }
+        
+        // Create payment record for store
+        const payment = {
+          id: response.data.payment_hash || Date.now().toString(),
+          payment_hash: response.data.payment_hash,
+          payment_request: paymentData.paymentRequest,
+          asset_id: response.data.asset_id || assetData.asset_id,
+          asset_amount: response.data.asset_amount,
+          fee_sats: response.data.fee_msat ? Math.ceil(response.data.fee_msat / 1000) : 0,
+          memo: response.data.memo || '', // Use memo from backend response
+          status: 'completed',
+          user_id: wallet.user,
+          wallet_id: wallet.id,
+          created_at: new Date().toISOString(),
+          preimage: response.data.preimage
+        };
+        
+        // Add mapped payment to store
+        const mappedPayment = this._mapPayment(payment);
+        window.taprootStore.actions.addPayment(mappedPayment);
+      }
       
       return response.data;
     } catch (error) {

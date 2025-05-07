@@ -65,7 +65,7 @@ window.app = Vue.createApp({
         form: {
           paymentRequest: '',
           amount: 0,
-          feeLimit: 1000
+          feeLimit: 10
         },
         inProgress: false,
         invoiceDecodeError: false
@@ -452,7 +452,7 @@ window.app = Vue.createApp({
       this.paymentDialog.form = {
         paymentRequest: '',
         amount: 0,
-        feeLimit: 1000
+        feeLimit: 10
       };
       this.paymentDialog.inProgress = false;
       this.paymentDialog.invoiceDecodeError = false;
