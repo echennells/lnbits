@@ -11,15 +11,12 @@ from lnbits.core.crud import get_user
 
 from ..models import TaprootAsset, AssetBalance, AssetTransaction
 from ..wallets.taproot_factory import TaprootAssetsFactory
-from ..error_utils import log_error, handle_grpc_error, raise_http_exception, ErrorContext
+from ..error_utils import raise_http_exception, ErrorContext
 from ..logging_utils import API, ASSET
-from ..crud import (
-    get_assets,
-    get_asset,
-    get_asset_balance,
-    get_wallet_asset_balances,
-    get_asset_transactions
-)
+# Import from specific CRUD submodules
+from ..crud.assets import get_assets, get_asset
+from ..crud.balances import get_asset_balance, get_wallet_asset_balances
+from ..crud.transactions import get_asset_transactions
 from ..notification_service import NotificationService
 
 

@@ -1,7 +1,7 @@
 import asyncio
 from fastapi import APIRouter
 from loguru import logger
-from .crud import db
+from .db import db
 from .views import taproot_assets_router
 from .views_api import taproot_assets_api_router
 

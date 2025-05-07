@@ -10,11 +10,9 @@ from lnbits.core.models import WalletTypeInfo, User
 from lnbits.core.crud import get_user
 
 from ..models import TaprootPayment
-from ..error_utils import log_error, raise_http_exception
-from ..crud import (
-    get_user_payments,
-    get_fee_transactions
-)
+from ..error_utils import raise_http_exception
+# Import from specific CRUD submodule
+from ..crud.payments import get_user_payments, get_fee_transactions
 
 
 class PaymentRecordService:

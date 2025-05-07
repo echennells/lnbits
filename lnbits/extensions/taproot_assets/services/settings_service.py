@@ -9,9 +9,10 @@ from loguru import logger
 from lnbits.core.models import User
 
 from ..models import TaprootSettings
-from ..error_utils import log_error, raise_http_exception, ErrorContext
+from ..error_utils import raise_http_exception, ErrorContext
 from ..logging_utils import API, SETTINGS
-from ..crud import get_or_create_settings, update_settings
+# Import from specific CRUD submodule
+from ..crud.settings import get_or_create_settings, update_settings
 from ..tapd_settings import taproot_settings
 
 

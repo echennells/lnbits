@@ -19,8 +19,9 @@ from .taproot_adapter import (
 from ..settlement_service import SettlementService
 
 # Import database functions - import only what's needed for non-settlement operations
-from ..crud import (
-    get_invoice_by_payment_hash, 
+# Import from specific CRUD submodule
+from ..crud.invoices import (
+    get_invoice_by_payment_hash,
     is_internal_payment,
     is_self_payment
 )

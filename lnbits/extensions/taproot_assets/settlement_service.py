@@ -15,15 +15,16 @@ from .notification_service import NotificationService
 from .models import TaprootInvoice, TaprootPayment
 
 # Import database functions
-from .crud import (
+# Import database functions from specific CRUD submodules
+from .crud.invoices import (
     get_invoice_by_payment_hash,
     update_invoice_status,
-    record_asset_transaction,
-    get_asset_balance,
     is_internal_payment,
-    is_self_payment,
-    create_payment_record
+    is_self_payment
 )
+from .crud.transactions import record_asset_transaction
+from .crud.balances import get_asset_balance
+from .crud.payments import create_payment_record
 
 from .logging_utils import (
     log_debug, log_info, log_warning, log_error, 
