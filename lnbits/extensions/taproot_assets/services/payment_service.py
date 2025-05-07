@@ -240,39 +240,45 @@ class PaymentService:
             # Check if this is a self-payment
             is_self = await is_self_payment(parsed_invoice.payment_hash, wallet.wallet.user)
             
-            # First use SettlementService to settle the invoice
+            # Create sender information dictionary
+            sender_info = {
+                "wallet_id": wallet.wallet.id,
+                "user_id": wallet.wallet.user,
+                "payment_request": data.payment_request
+            }
+            
+            # Use SettlementService to settle the invoice with sender information
             success, settlement_result = await SettlementService.settle_invoice(
                 payment_hash=parsed_invoice.payment_hash,
                 node=taproot_wallet.node,
                 is_internal=True,
                 is_self_payment=is_self,
                 user_id=wallet.wallet.user,
-                wallet_id=wallet.wallet.id
+                wallet_id=wallet.wallet.id,
+                sender_info=sender_info  # Pass sender info to handle both sides of the transaction
             )
             
             if not success:
                 raise Exception(f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}")
             
-            # Add a small delay to allow any pending transactions to complete
-            await asyncio.sleep(0.5)
-            
-            # Then use SettlementService to record the payment
-            payment_success, payment_record = await SettlementService.record_payment(
-                payment_hash=parsed_invoice.payment_hash,
-                payment_request=data.payment_request,
-                asset_id=invoice.asset_id,
-                asset_amount=invoice.asset_amount,  # Use the actual asset amount from the invoice
-                fee_sats=0,  # No fee for internal payments
-                user_id=wallet.wallet.user,
-                wallet_id=wallet.wallet.id,
-                memo=invoice.memo or "",
-                preimage=settlement_result.get('preimage', ''),
-                is_internal=True,
-                is_self_payment=is_self
-            )
-            
-            if not payment_success:
-                log_warning(PAYMENT, "Internal payment was successful but failed to record in database")
+            # Create payment record for notification purposes
+            # This doesn't change the balance again since it was already handled in settle_invoice
+            try:
+                await SettlementService.record_payment(
+                    payment_hash=parsed_invoice.payment_hash,
+                    payment_request=data.payment_request,
+                    asset_id=invoice.asset_id,
+                    asset_amount=invoice.asset_amount,
+                    fee_sats=0,  # No fee for internal payments
+                    user_id=wallet.wallet.user,
+                    wallet_id=wallet.wallet.id,
+                    memo=invoice.memo or "",
+                    preimage=settlement_result.get('preimage', ''),
+                    is_internal=True,  # Mark as internal so it won't create another transaction
+                    is_self_payment=is_self
+                )
+            except Exception as e:
+                log_warning(PAYMENT, f"Internal payment notification failed: {str(e)}")
             
             # Return success response for internal payment
             return PaymentResponse(

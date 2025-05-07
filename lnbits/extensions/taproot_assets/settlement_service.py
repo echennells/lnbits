@@ -56,7 +56,8 @@ class SettlementService:
         is_internal: bool = False,
         is_self_payment: bool = False,
         user_id: Optional[str] = None,
-        wallet_id: Optional[str] = None
+        wallet_id: Optional[str] = None,
+        sender_info: Optional[Dict[str, Any]] = None
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """
         Settle an invoice using the appropriate method based on payment type.
@@ -68,6 +69,7 @@ class SettlementService:
             is_self_payment: Whether this is a self-payment (same user)
             user_id: Optional user ID for notification
             wallet_id: Optional wallet ID for balance updates
+            sender_info: Optional information about the sender for internal payments
             
         Returns:
             Tuple containing:
@@ -101,22 +103,30 @@ class SettlementService:
                 
                 # Process based on payment type
                 if is_internal:
-                    success, result = await cls._settle_internal_payment(
-                        payment_hash, invoice, preimage_hex, is_self_payment, user_id, wallet_id
-                    )
+                    # For internal payments, handle both recipient and sender in one transaction
+                    if sender_info and invoice:
+                        success, result = await cls._settle_internal_payment_with_sender(
+                            payment_hash, invoice, preimage_hex, 
+                            is_self_payment, sender_info
+                        )
+                    else:
+                        success, result = await cls._settle_internal_payment(
+                            payment_hash, invoice, preimage_hex, 
+                            is_self_payment, user_id, wallet_id
+                        )
                 else:
                     success, result = await cls._settle_lightning_payment(
                         payment_hash, invoice, preimage_hex, node
                     )
                 
-                # If successful, track settlement and update asset balance
+                # If successful, track settlement
                 if success:
                     async with cls._cache_lock:
                         cls._settled_payment_hashes.add(payment_hash)
                     
-                    # Update asset balance if invoice exists
-                    if invoice:
-                        # Use transaction context manager to ensure atomicity
+                    # For Lightning payments, update asset balance if invoice exists
+                    if not is_internal and invoice:
+                        # Update asset balance if it's not an internal payment
                         async with transaction() as conn:
                             await cls._update_asset_balance(
                                 invoice.wallet_id,
@@ -126,13 +136,84 @@ class SettlementService:
                                 invoice.memo,
                                 conn=conn
                             )
-                        
+                    
+                    # Send WebSocket notifications if invoice exists
+                    if invoice:
                         # Send WebSocket notifications
                         await cls._send_settlement_notifications(
                             invoice, result.get("updated_invoice"), node
                         )
                 
                 return success, result
+
+    @classmethod
+    async def _settle_internal_payment_with_sender(
+        cls,
+        payment_hash: str,
+        invoice: Optional[TaprootInvoice],
+        preimage_hex: str,
+        is_self_payment: bool = False,
+        sender_info: Dict[str, Any] = None
+    ) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Handle settlement for internal payments with sender information.
+        This processes both sides of the transaction in a single atomic operation.
+        """
+        with ErrorContext("settle_internal_payment_with_sender", TRANSFER):
+            if not invoice:
+                log_error(TRANSFER, f"No invoice found with payment_hash: {payment_hash}")
+                return False, {"error": "Invoice not found"}
+                
+            sender_wallet_id = sender_info.get("wallet_id")
+            sender_user_id = sender_info.get("user_id")
+            
+            if not sender_wallet_id or not sender_user_id:
+                log_error(TRANSFER, f"Missing sender information for payment: {payment_hash}")
+                return False, {"error": "Incomplete sender information"}
+            
+            # Use transaction context manager to ensure atomicity
+            async with transaction() as conn:
+                # 1. Update invoice status to paid
+                updated_invoice = await update_invoice_status(invoice.id, "paid", conn=conn)
+                if not updated_invoice or updated_invoice.status != "paid":
+                    log_error(TRANSFER, f"Failed to update invoice {invoice.id} status in database")
+                    return False, {"error": "Failed to update invoice status"}
+                
+                # 2. Credit the recipient (record transaction and update balance)
+                await record_asset_transaction(
+                    wallet_id=invoice.wallet_id,
+                    asset_id=invoice.asset_id,
+                    amount=invoice.asset_amount,
+                    tx_type="credit",
+                    payment_hash=payment_hash,
+                    memo=invoice.memo or "",
+                    conn=conn
+                )
+                
+                # 3. Debit the sender (record transaction and update balance)
+                await record_asset_transaction(
+                    wallet_id=sender_wallet_id,
+                    asset_id=invoice.asset_id,
+                    amount=invoice.asset_amount,
+                    tx_type="debit",
+                    payment_hash=payment_hash,
+                    memo=invoice.memo or "",
+                    conn=conn
+                )
+            
+            payment_type = "self-payment" if is_self_payment else "internal payment"
+            log_info(TRANSFER, f"Database updated: Invoice {invoice.id} status set to paid ({payment_type})")
+            log_info(TRANSFER, f"Asset balance updated for both sender and recipient, amount={invoice.asset_amount}")
+            
+            # Return success with details
+            return True, {
+                "success": True,
+                "payment_hash": payment_hash,
+                "preimage": preimage_hex,
+                "is_internal": True,
+                "is_self_payment": is_self_payment,
+                "updated_invoice": updated_invoice
+            }
     
     @classmethod
     async def record_payment(
@@ -181,7 +262,29 @@ class SettlementService:
             async with cls._cache_lock:
                 is_processed = payment_hash in cls._settled_payment_hashes
                 
-            if is_processed:
+            if is_processed and is_internal:
+                # For internal payments, we already handled both sides in settle_invoice
+                # Just create the payment record for notification purposes
+                try:
+                    payment_record = await create_payment_record(
+                        payment_hash=payment_hash,
+                        payment_request=payment_request,
+                        asset_id=asset_id,
+                        asset_amount=asset_amount,
+                        fee_sats=fee_sats,
+                        user_id=user_id,
+                        wallet_id=wallet_id,
+                        memo=memo or "",
+                        preimage=preimage or "",
+                        conn=conn
+                    )
+                    
+                    log_info(PAYMENT, f"Internal payment record created for notification purposes: {payment_hash[:8]}...")
+                    return True, payment_record
+                except Exception as e:
+                    log_warning(PAYMENT, f"Failed to create payment record for notification: {str(e)}")
+                    return False, None
+            elif is_processed:
                 log_info(PAYMENT, f"Payment {payment_hash[:8]}... already processed, skipping record creation")
                 return True, None
                 
@@ -222,18 +325,21 @@ class SettlementService:
                         conn=tx_conn
                     )
                     
-                    # Also record the transaction with the correct asset amount
-                    tx_type = "debit"  # Outgoing payment
-                    await record_asset_transaction(
-                        wallet_id=wallet_id,
-                        asset_id=asset_id,
-                        amount=asset_amount,  # Use the correct asset amount here
-                        tx_type=tx_type,
-                        payment_hash=payment_hash,
-                        fee=fee_sats,  # Fee is separate
-                        memo=memo or "",
-                        conn=tx_conn
-                    )
+                    # Only create asset transaction if this is not an internal payment
+                    # For internal payments, both sides are handled in settle_invoice
+                    if not is_internal:
+                        # Record the transaction with the correct asset amount
+                        tx_type = "debit"  # Outgoing payment
+                        await record_asset_transaction(
+                            wallet_id=wallet_id,
+                            asset_id=asset_id,
+                            amount=asset_amount,  # Use the correct asset amount here
+                            tx_type=tx_type,
+                            payment_hash=payment_hash,
+                            fee=fee_sats,  # Fee is separate
+                            memo=memo or "",
+                            conn=tx_conn
+                        )
                     
                     # Add to our settled payment hashes set to prevent duplicate processing
                     async with cls._cache_lock:
@@ -256,7 +362,7 @@ class SettlementService:
                     payment_hash=payment_hash,
                     asset_id=asset_id,
                     asset_amount=asset_amount,  # Use correct asset amount in notification
-                    tx_type=tx_type,
+                    tx_type="debit",
                     memo=memo,
                     fee_sats=fee_sats,
                     is_internal=is_internal,
@@ -268,6 +374,7 @@ class SettlementService:
             
             return True, payment_record
     
+    # The below methods remain unchanged to minimize changes to the codebase
     @classmethod
     async def _get_or_generate_preimage(cls, node, payment_hash: str) -> Optional[str]:
         """Get an existing preimage or generate a new one if needed."""
@@ -310,6 +417,17 @@ class SettlementService:
                 if not updated_invoice or updated_invoice.status != "paid":
                     log_error(TRANSFER, f"Failed to update invoice {invoice.id} status in database")
                     return False, {"error": "Failed to update invoice status"}
+                
+                # Credit the recipient
+                await record_asset_transaction(
+                    wallet_id=invoice.wallet_id,
+                    asset_id=invoice.asset_id,
+                    amount=invoice.asset_amount,
+                    tx_type="credit",
+                    payment_hash=payment_hash,
+                    memo=invoice.memo or "",
+                    conn=conn
+                )
             
             payment_type = "self-payment" if is_self_payment else "internal payment"
             log_info(TRANSFER, f"Database updated: Invoice {invoice.id} status set to paid ({payment_type})")
