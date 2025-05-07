@@ -7,8 +7,7 @@ from .taproot_node import TaprootAssetsNodeExtension
 # Import from crud re-exports
 from ..crud import (
     get_or_create_settings,
-    get_invoice_by_payment_hash,
-    is_self_payment
+    get_invoice_by_payment_hash
 )
 from ..tapd_settings import taproot_settings
 from ..logging_utils import (
@@ -16,14 +15,16 @@ from ..logging_utils import (
     log_exception, WALLET, LogContext
 )
 from ..error_utils import ErrorContext
-from ..settlement_service import SettlementService
 
 
 class TaprootWalletExtension(Wallet):
     """
     Wallet implementation for Taproot Assets.
     This wallet interfaces with a Taproot Assets daemon (tapd) to provide
-    functionality for managing and transacting with Taproot Assets.
+    low-level functionality for managing and transacting with Taproot Assets.
+    
+    This class focuses only on the direct interaction with the node and does not
+    include business logic, which is handled by the service layer.
     """
     __node_cls__ = TaprootAssetsNodeExtension
 
@@ -77,51 +78,57 @@ class TaprootWalletExtension(Wallet):
         )
 
     async def list_assets(self) -> List[Dict[str, Any]]:
-        """List all Taproot Assets."""
+        """
+        List all Taproot Assets - low-level node method.
+        
+        Returns:
+            List[Dict[str, Any]]: Raw list of assets from node
+        """
         with LogContext(WALLET, "listing assets"):
             await self.ensure_initialized()
             if self.node is None:
                 raise ValueError("Node not initialized")
             return await self.node.list_assets()
 
-    async def manually_settle_invoice(
+    async def get_raw_node_invoice(
         self,
-        payment_hash: str,
-        script_key: Optional[str] = None,
-    ) -> bool:
+        memo: str,
+        asset_id: str,
+        asset_amount: int,
+        expiry: Optional[int] = None,
+        peer_pubkey: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
-        Manually settle a HODL invoice using the stored preimage.
-        This can be used as a fallback if automatic settlement fails.
+        Create an invoice for a Taproot Asset transfer at the node level.
+        This is a low-level operation that directly interacts with the node.
 
         Args:
-            payment_hash: The payment hash of the invoice to settle
-            script_key: Optional script key to use for lookup if payment hash is not found directly
+            memo: Description for the invoice
+            asset_id: The ID of the Taproot Asset
+            asset_amount: The amount of the asset to transfer
+            expiry: Optional expiry time in seconds
+            peer_pubkey: Optional peer public key to specify which channel to use
 
         Returns:
-            bool: True if settlement was successful, False otherwise
+            Dict containing the invoice information with accepted_buy_quote and invoice_result
         """
-        try:
-            with LogContext(WALLET, f"manually settling invoice {payment_hash[:8]}..."):
-                await self.ensure_initialized()
-                if self.node is None:
-                    raise ValueError("Node not initialized")
-                
-                # Use SettlementService for settlement
-                success, _ = await SettlementService.settle_invoice(
-                    payment_hash=payment_hash,
-                    node=self.node,
-                    is_internal=False,  # Default to external payment for manual settlement
-                    is_self_payment=False,
-                    user_id=self.user,
-                    wallet_id=self.id
-                )
-                
-                return success
-        except Exception as e:
-            log_error(WALLET, f"Error in manual settlement: {str(e)}")
-            return False
-        finally:
-            await self.cleanup()
+        with ErrorContext("get_raw_node_invoice", WALLET):
+            await self.ensure_initialized()
+            if self.node is None:
+                raise ValueError("Node not initialized")
+            peer_info = f" with peer {peer_pubkey[:8]}..." if peer_pubkey else ""
+            log_debug(WALLET, f"Creating raw node invoice for {asset_id[:8]}..., amount={asset_amount}{peer_info}")
+            
+            result = await self.node.create_asset_invoice(
+                memo=memo,
+                asset_id=asset_id,
+                asset_amount=asset_amount,
+                expiry=expiry,
+                peer_pubkey=peer_pubkey
+            )
+            
+            log_debug(WALLET, f"Raw node invoice created successfully")
+            return result
 
     async def create_invoice(
         self,
@@ -161,7 +168,7 @@ class TaprootWalletExtension(Wallet):
 
         try:
             # Create the invoice using the low-level method
-            invoice_result = await self.create_asset_invoice(
+            invoice_result = await self.get_raw_node_invoice(
                 memo=memo or "Taproot Asset Transfer",
                 asset_id=asset_id,
                 asset_amount=amount,
@@ -190,48 +197,47 @@ class TaprootWalletExtension(Wallet):
         finally:
             await self.cleanup()
 
-    async def create_asset_invoice(
+    async def send_raw_payment(
         self,
-        memo: str,
-        asset_id: str,
-        asset_amount: int,
-        expiry: Optional[int] = None,
+        payment_request: str,
+        fee_limit_sats: Optional[int] = None,
+        asset_id: Optional[str] = None,
         peer_pubkey: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Create an invoice for a Taproot Asset transfer.
-
-        This uses the TaprootAssetChannels service's AddInvoice method that is specifically
-        designed for asset invoices. The RFQ (Request for Quote) process is handled internally
-        by the Taproot Assets daemon.
-
+        Low-level method to send a payment to a Taproot Asset invoice.
+        This method only performs the direct node interaction without business logic.
+        
         Args:
-            memo: Description for the invoice
-            asset_id: The ID of the Taproot Asset
-            asset_amount: The amount of the asset to transfer
-            expiry: Optional expiry time in seconds
+            payment_request: The payment request (BOLT11 invoice)
+            fee_limit_sats: Optional fee limit in satoshis
+            asset_id: Optional ID of the Taproot Asset to use for payment
             peer_pubkey: Optional peer public key to specify which channel to use
-
+            
         Returns:
-            Dict containing the invoice information with accepted_buy_quote and invoice_result
+            Dict[str, Any]: Raw payment result from the node
         """
-        with ErrorContext("create_asset_invoice", WALLET):
+        with ErrorContext("send_raw_payment", WALLET):
             await self.ensure_initialized()
             if self.node is None:
                 raise ValueError("Node not initialized")
-            peer_info = f" with peer {peer_pubkey[:8]}..." if peer_pubkey else ""
-            log_debug(WALLET, f"Creating asset invoice for {asset_id[:8]}..., amount={asset_amount}{peer_info}")
-            
-            result = await self.node.create_asset_invoice(
-                memo=memo,
+
+            # Call the node's pay_asset_invoice method
+            payment_result = await self.node.pay_asset_invoice(
+                payment_request=payment_request,
+                fee_limit_sats=fee_limit_sats,
                 asset_id=asset_id,
-                asset_amount=asset_amount,
-                expiry=expiry,
                 peer_pubkey=peer_pubkey
             )
             
-            log_debug(WALLET, f"Asset invoice created successfully")
-            return result
+            # Store the asset_id in the node's cache if present
+            payment_hash = payment_result.get("payment_hash")
+            asset_id_to_store = payment_result.get("asset_id", asset_id)
+            
+            if payment_hash and asset_id_to_store:
+                self.node._store_asset_id(payment_hash, asset_id_to_store)
+                
+            return payment_result
 
     async def pay_asset_invoice(
         self,
@@ -241,20 +247,18 @@ class TaprootWalletExtension(Wallet):
         **kwargs,
     ) -> BasePaymentResponse:
         """
-        Pay a Taproot Asset invoice using the node.
+        Low-level method to pay a Taproot Asset invoice.
+        This method only performs the direct node interaction.
         
-        This method only handles the direct node interaction and returns the raw result.
-        Business logic should be handled by the PaymentService.
-
         Args:
             invoice: The payment request (BOLT11 invoice)
             fee_limit_sats: Optional fee limit in satoshis
             peer_pubkey: Optional peer public key to specify which channel to use
             **kwargs: Additional parameters including:
                 - asset_id: Optional ID of the Taproot Asset to use for payment
-
+                
         Returns:
-            PaymentResponse: Contains information about the payment
+            BasePaymentResponse: Contains basic information about the payment
         """
         try:
             await self.ensure_initialized()
@@ -264,8 +268,8 @@ class TaprootWalletExtension(Wallet):
             # Extract asset_id from kwargs if provided
             asset_id = kwargs.get("asset_id")
             
-            # Call the node's pay_asset_invoice method
-            payment_result = await self.node.pay_asset_invoice(
+            # Call the raw payment method
+            payment_result = await self.send_raw_payment(
                 payment_request=invoice,
                 fee_limit_sats=fee_limit_sats,
                 asset_id=asset_id,
@@ -286,12 +290,6 @@ class TaprootWalletExtension(Wallet):
                 error_message=None
             )
             
-            # Store the asset_id in the node's preimage cache
-            # This is a workaround since BasePaymentResponse doesn't have an extra field
-            asset_id = payment_result.get("asset_id", asset_id)
-            if asset_id:
-                self.node._store_asset_id(payment_hash, asset_id)
-            
             return response
         except Exception as e:
             log_error(WALLET, f"Failed to pay invoice: {str(e)}")
@@ -301,82 +299,6 @@ class TaprootWalletExtension(Wallet):
                 fee_msat=None,
                 preimage=None,
                 error_message=f"Failed to pay invoice: {str(e)}"
-            )
-        finally:
-            await self.cleanup()
-
-    async def update_taproot_assets_after_payment(
-        self,
-        invoice: str,
-        payment_hash: str,
-        fee_limit_sats: Optional[int] = None,
-        asset_id: Optional[str] = None,
-    ) -> BasePaymentResponse:
-        """
-        Update Taproot Assets after payment has been made from LNbits wallet.
-        Delegates to SettlementService for settlement.
-        
-        This function is called after a successful payment through the LNbits wallet system
-        to update the Taproot Assets daemon about the payment. It is used for internal payments 
-        (including self-payments) to update the asset state without requiring an actual 
-        Lightning Network payment.
-
-        Args:
-            invoice: The payment request (BOLT11 invoice)
-            payment_hash: The payment hash of the completed payment
-            fee_limit_sats: Optional fee limit in satoshis
-            asset_id: Optional asset ID to use for the update
-
-        Returns:
-            PaymentResponse: Contains confirmation of the asset update
-        """
-        try:
-            await self.ensure_initialized()
-            if self.node is None:
-                raise ValueError("Node not initialized")
-            
-            # Determine if this is a self-payment
-            is_self = await is_self_payment(payment_hash, self.user) if self.user else False
-            
-            # Directly delegate to SettlementService for settlement
-            success, settlement_result = await SettlementService.settle_invoice(
-                payment_hash=payment_hash,
-                node=self.node,
-                is_internal=True,
-                is_self_payment=is_self,
-                user_id=self.user,
-                wallet_id=self.id
-            )
-            
-            if not success:
-                error_msg = settlement_result.get('error', 'Unknown error')
-                return BasePaymentResponse(
-                    ok=False,
-                    checking_id=payment_hash,
-                    fee_msat=None,
-                    preimage=None,
-                    error_message=f"Failed to settle internal payment: {error_msg}"
-                )
-            
-            # Get preimage from settlement result
-            preimage = settlement_result.get('preimage', '')
-            
-            # Create response
-            return BasePaymentResponse(
-                ok=True,
-                checking_id=payment_hash,
-                fee_msat=0,  # No fee for internal payments
-                preimage=preimage,
-                error_message=None
-            )
-        except Exception as e:
-            log_error(WALLET, f"Failed to update Taproot Assets after payment: {str(e)}")
-            return BasePaymentResponse(
-                ok=False,
-                checking_id=payment_hash,
-                fee_msat=None,
-                preimage=None,
-                error_message=f"Failed to update Taproot Assets: {str(e)}"
             )
         finally:
             await self.cleanup()

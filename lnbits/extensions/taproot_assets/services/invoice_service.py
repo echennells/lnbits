@@ -58,28 +58,28 @@ class InvoiceService:
                 wallet_id=wallet_id
             )
             
-            # Create the invoice
-            invoice_response = await taproot_wallet.create_invoice(
-                amount=data.amount,
+            # Get raw node invoice using the wallet's low-level method
+            invoice_result = await taproot_wallet.get_raw_node_invoice(
                 memo=data.memo or "",
                 asset_id=data.asset_id,
+                asset_amount=data.amount,
                 expiry=data.expiry,
-                peer_pubkey=data.peer_pubkey,
+                peer_pubkey=data.peer_pubkey
             )
 
-            if not invoice_response.ok:
+            if not invoice_result or "invoice_result" not in invoice_result:
                 raise_http_exception(
                     status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to create invoice: {invoice_response.error_message}"
+                    detail=f"Failed to create invoice: Invalid response from node"
                 )
 
+            # Extract payment details
+            payment_hash = invoice_result["invoice_result"]["r_hash"]
+            payment_request = invoice_result["invoice_result"]["payment_request"]
+            
             # Get satoshi fee from settings
             satoshi_amount = taproot_settings.default_sat_fee
 
-            # Map the BaseInvoiceResponse to our expected fields
-            payment_hash = invoice_response.checking_id
-            payment_request = invoice_response.payment_request
-            
             # Create invoice record
             invoice = await create_invoice(
                 asset_id=data.asset_id,

@@ -28,7 +28,7 @@ from ..settlement_service import SettlementService
 class PaymentService:
     """
     Service for handling Taproot Asset payments.
-    This service encapsulates payment-related business logic.
+    This service encapsulates all payment-related business logic.
     """
     
     @staticmethod
@@ -134,25 +134,24 @@ class PaymentService:
             from ..tapd_settings import taproot_settings
             fee_limit_sats = max(data.fee_limit_sats or taproot_settings.default_sat_fee, 10)
             
-            # Make the payment
-            # Pass the asset_id from the parsed invoice to the pay_asset_invoice method
-            # This is important because the pay_asset_invoice method will use this asset_id
-            # to pay the invoice with the correct asset
-            payment = await taproot_wallet.pay_asset_invoice(
-                invoice=data.payment_request,
+            # Make the payment using the low-level wallet method
+            # This only handles the direct node communication
+            log_info(PAYMENT, f"Making external payment, fee_limit_sats={fee_limit_sats}")
+            payment_result = await taproot_wallet.send_raw_payment(
+                payment_request=data.payment_request,
                 fee_limit_sats=fee_limit_sats,
-                peer_pubkey=data.peer_pubkey,
-                asset_id=parsed_invoice.asset_id
+                asset_id=parsed_invoice.asset_id,
+                peer_pubkey=data.peer_pubkey
             )
 
             # Verify payment success
-            if not payment.ok:
-                raise Exception(f"Payment failed: {payment.error_message}")
+            if "status" in payment_result and payment_result["status"] != "success":
+                raise Exception(f"Payment failed: {payment_result.get('error', 'Unknown error')}")
                 
             # Get payment details
-            payment_hash = payment.checking_id
-            preimage = payment.preimage or ""
-            routing_fees_sats = payment.fee_msat // 1000 if payment.fee_msat else 0
+            payment_hash = payment_result.get("payment_hash", "")
+            preimage = payment_result.get("payment_preimage", "")
+            routing_fees_sats = payment_result.get("fee_sats", 0)
             
             # Get asset_id from the node's cache if available, otherwise use the parsed invoice
             asset_id = ""
@@ -194,7 +193,7 @@ class PaymentService:
                 success=True,
                 payment_hash=payment_hash,
                 preimage=preimage,
-                fee_msat=payment.fee_msat or 0,
+                fee_msat=routing_fees_sats * 1000,  # Convert sats to msats
                 sat_fee_paid=0,  # No service fee
                 routing_fees_sats=routing_fees_sats,
                 asset_amount=parsed_invoice.amount,  # Use the correct asset amount from the invoice
@@ -281,78 +280,6 @@ class PaymentService:
                 memo=invoice.memo,
                 internal_payment=True,  # Flag to indicate this was an internal payment
                 self_payment=is_self  # Flag to indicate if this was a self-payment
-            )
-    
-    @staticmethod
-    async def process_self_payment(
-        data: TaprootPaymentRequest,
-        wallet: WalletTypeInfo,
-        parsed_invoice: ParsedInvoice
-    ) -> PaymentResponse:
-        """
-        Process a self-payment (to the same user).
-        
-        Args:
-            data: The payment request data
-            wallet: The wallet information
-            parsed_invoice: The parsed invoice data
-            
-        Returns:
-            PaymentResponse: The payment result
-        """
-        with ErrorContext("process_self_payment", PAYMENT):
-            # Get the invoice to retrieve asset_id
-            invoice = await get_invoice_by_payment_hash(parsed_invoice.payment_hash)
-            if not invoice:
-                raise_http_exception(status_code=HTTPStatus.NOT_FOUND, detail="Invoice not found")
-
-            # Initialize wallet using the factory
-            taproot_wallet = await TaprootAssetsFactory.create_wallet(
-                user_id=wallet.wallet.user,
-                wallet_id=wallet.wallet.id
-            )
-
-            # Use SettlementService to settle the invoice
-            success, settlement_result = await SettlementService.settle_invoice(
-                payment_hash=parsed_invoice.payment_hash,
-                node=taproot_wallet.node,
-                is_internal=True,
-                is_self_payment=True,
-                user_id=wallet.wallet.user,
-                wallet_id=wallet.wallet.id
-            )
-            
-            if not success:
-                raise Exception(f"Failed to settle self-payment: {settlement_result.get('error', 'Unknown error')}")
-
-            # Then use SettlementService to record the payment
-            payment_success, payment_record = await SettlementService.record_payment(
-                payment_hash=parsed_invoice.payment_hash,
-                payment_request=data.payment_request,
-                asset_id=invoice.asset_id,
-                asset_amount=invoice.asset_amount,  # Use the actual asset amount from the invoice
-                fee_sats=0,  # No fee for self-payments
-                user_id=wallet.wallet.user,
-                wallet_id=wallet.wallet.id,
-                memo=invoice.memo or "",
-                preimage=settlement_result.get('preimage', ''),
-                is_internal=True,
-                is_self_payment=True
-            )
-            
-            if not payment_success:
-                log_warning(PAYMENT, "Self-payment was successful but failed to record in database")
-            
-            # Return success response
-            return PaymentResponse(
-                success=True,
-                payment_hash=parsed_invoice.payment_hash,
-                preimage=settlement_result.get('preimage', ''),
-                asset_amount=invoice.asset_amount,
-                asset_id=invoice.asset_id,
-                memo=invoice.memo,
-                internal_payment=True,
-                self_payment=True
             )
     
     @staticmethod
