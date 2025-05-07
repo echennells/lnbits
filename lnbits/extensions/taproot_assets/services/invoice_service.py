@@ -12,8 +12,8 @@ from ..models import TaprootInvoiceRequest, InvoiceResponse, TaprootInvoice
 from ..wallets.taproot_factory import TaprootAssetsFactory
 from ..error_utils import raise_http_exception, ErrorContext
 from ..logging_utils import API
-# Import from specific CRUD submodule
-from ..crud.invoices import (
+# Import from crud re-exports
+from ..crud import (
     create_invoice,
     get_invoice,
     get_invoice_by_payment_hash,
@@ -247,7 +247,7 @@ class InvoiceService:
                     )
             else:
                 # For non-payment status updates, use the regular update method
-                from ..crud.invoices import update_invoice_status as db_update_invoice_status
+                from ..crud import update_invoice_status as db_update_invoice_status
                 updated_invoice = await db_update_invoice_status(invoice_id, status)
                 
                 # Send WebSocket notification about status update using NotificationService

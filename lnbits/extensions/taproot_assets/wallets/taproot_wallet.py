@@ -4,9 +4,12 @@ from lnbits.settings import settings
 from lnbits.wallets.base import Wallet, InvoiceResponse as BaseInvoiceResponse, PaymentResponse as BasePaymentResponse, PaymentStatus, StatusResponse, PaymentPendingStatus
 
 from .taproot_node import TaprootAssetsNodeExtension
-# Import from specific CRUD submodules
-from ..crud.settings import get_or_create_settings
-from ..crud.invoices import get_invoice_by_payment_hash, is_self_payment
+# Import from crud re-exports
+from ..crud import (
+    get_or_create_settings,
+    get_invoice_by_payment_hash,
+    is_self_payment
+)
 from ..tapd_settings import taproot_settings
 from ..logging_utils import (
     log_debug, log_info, log_warning, log_error, 

@@ -14,17 +14,16 @@ from .wallets.taproot_adapter import invoices_pb2
 from .notification_service import NotificationService
 from .models import TaprootInvoice, TaprootPayment
 
-# Import database functions
-# Import database functions from specific CRUD submodules
-from .crud.invoices import (
+# Import database functions from crud re-exports
+from .crud import (
     get_invoice_by_payment_hash,
     update_invoice_status,
     is_internal_payment,
-    is_self_payment
+    is_self_payment,
+    record_asset_transaction,
+    get_asset_balance,
+    create_payment_record
 )
-from .crud.transactions import record_asset_transaction
-from .crud.balances import get_asset_balance
-from .crud.payments import create_payment_record
 
 from .logging_utils import (
     log_debug, log_info, log_warning, log_error, 

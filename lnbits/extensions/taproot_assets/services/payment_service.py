@@ -16,8 +16,8 @@ from ..models import TaprootPaymentRequest, PaymentResponse, ParsedInvoice
 from ..logging_utils import log_debug, log_info, log_warning, log_error, PAYMENT, API
 from ..wallets.taproot_factory import TaprootAssetsFactory
 from ..error_utils import raise_http_exception, ErrorContext
-# Import from specific CRUD submodule
-from ..crud.invoices import (
+# Import from crud re-exports
+from ..crud import (
     get_invoice_by_payment_hash,
     is_internal_payment,
     is_self_payment
