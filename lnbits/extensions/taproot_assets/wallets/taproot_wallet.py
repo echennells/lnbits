@@ -133,7 +133,8 @@ class TaprootWalletExtension(Wallet):
     ) -> BaseInvoiceResponse:
         """
         Create an invoice for a Taproot Asset transfer.
-
+        This method only handles the direct node interaction.
+        
         Args:
             amount: Amount of the asset to transfer
             memo: Optional description for the invoice
@@ -152,19 +153,14 @@ class TaprootWalletExtension(Wallet):
         # Extract asset_id and other parameters from kwargs
         asset_id = kwargs.get("asset_id")
         expiry = kwargs.get("expiry")
+        peer_pubkey = kwargs.get("peer_pubkey")
         
         if not asset_id:
             log_warning(WALLET, "Missing asset_id parameter in create_invoice")
             return BaseInvoiceResponse(False, None, None, "Missing asset_id parameter")
 
         try:
-            # Get peer_pubkey from kwargs if provided
-            peer_pubkey = kwargs.get("peer_pubkey")
-            peer_info = f" with peer {peer_pubkey[:8]}..." if peer_pubkey else ""
-            
-            log_info(WALLET, f"Creating invoice for asset {asset_id[:8]}..., amount={amount}{peer_info}")
-            
-            # Create the invoice
+            # Create the invoice using the low-level method
             invoice_result = await self.create_asset_invoice(
                 memo=memo or "Taproot Asset Transfer",
                 asset_id=asset_id,
@@ -176,8 +172,6 @@ class TaprootWalletExtension(Wallet):
             # Extract payment details
             payment_hash = invoice_result["invoice_result"]["r_hash"]
             payment_request = invoice_result["invoice_result"]["payment_request"]
-            
-            log_info(WALLET, f"Invoice created successfully, payment_hash={payment_hash[:8]}...")
 
             return BaseInvoiceResponse(
                 ok=True,
@@ -247,7 +241,10 @@ class TaprootWalletExtension(Wallet):
         **kwargs,
     ) -> BasePaymentResponse:
         """
-        Pay a Taproot Asset invoice.
+        Pay a Taproot Asset invoice using the node.
+        
+        This method only handles the direct node interaction and returns the raw result.
+        Business logic should be handled by the PaymentService.
 
         Args:
             invoice: The payment request (BOLT11 invoice)
@@ -266,11 +263,7 @@ class TaprootWalletExtension(Wallet):
             
             # Extract asset_id from kwargs if provided
             asset_id = kwargs.get("asset_id")
-            asset_info = f" using asset {asset_id[:8]}..." if asset_id else ""
-            peer_info = f" with peer {peer_pubkey[:8]}..." if peer_pubkey else ""
             
-            log_info(WALLET, f"Paying asset invoice{asset_info}{peer_info}, fee_limit={fee_limit_sats or 'default'} sats")
-
             # Call the node's pay_asset_invoice method
             payment_result = await self.node.pay_asset_invoice(
                 payment_request=invoice,
@@ -284,12 +277,7 @@ class TaprootWalletExtension(Wallet):
             preimage = payment_result.get("payment_preimage", "")
             fee_msat = payment_result.get("fee_sats", 0) * 1000  # Convert sats to msats
             
-            log_info(WALLET, f"Payment successful, hash={payment_hash[:8]}..., fee={fee_msat//1000} sats")
-            
-            # REMOVED: No longer record payment here - this will be handled by the PaymentService
-            # This fixes the duplicate payment record issue
-            
-            # Create a custom response with the asset_id and asset_amount
+            # Create a simple response with just the payment information
             response = BasePaymentResponse(
                 ok=True,
                 checking_id=payment_hash,
@@ -326,6 +314,7 @@ class TaprootWalletExtension(Wallet):
     ) -> BasePaymentResponse:
         """
         Update Taproot Assets after payment has been made from LNbits wallet.
+        Delegates to SettlementService for settlement.
         
         This function is called after a successful payment through the LNbits wallet system
         to update the Taproot Assets daemon about the payment. It is used for internal payments 
@@ -345,24 +334,11 @@ class TaprootWalletExtension(Wallet):
             await self.ensure_initialized()
             if self.node is None:
                 raise ValueError("Node not initialized")
-            log_info(WALLET, f"Processing internal payment for {payment_hash[:8]}..., asset_id={asset_id[:8] if asset_id else 'unknown'}")
-
-            # Get the invoice to retrieve information
-            db_invoice = await get_invoice_by_payment_hash(payment_hash)
-            if not db_invoice:
-                log_error(WALLET, f"Invoice not found for payment hash: {payment_hash}")
-                return BasePaymentResponse(
-                    ok=False,
-                    checking_id=payment_hash,
-                    fee_msat=None,
-                    preimage=None,
-                    error_message="Invoice not found"
-                )
             
             # Determine if this is a self-payment
             is_self = await is_self_payment(payment_hash, self.user) if self.user else False
             
-            # Use SettlementService to settle the invoice
+            # Directly delegate to SettlementService for settlement
             success, settlement_result = await SettlementService.settle_invoice(
                 payment_hash=payment_hash,
                 node=self.node,
@@ -373,20 +349,17 @@ class TaprootWalletExtension(Wallet):
             )
             
             if not success:
-                log_error(WALLET, f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}")
+                error_msg = settlement_result.get('error', 'Unknown error')
                 return BasePaymentResponse(
                     ok=False,
                     checking_id=payment_hash,
                     fee_msat=None,
                     preimage=None,
-                    error_message=f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}"
+                    error_message=f"Failed to settle internal payment: {error_msg}"
                 )
             
             # Get preimage from settlement result
             preimage = settlement_result.get('preimage', '')
-            
-            # Record the payment is now handled by the PaymentService, so we don't need to do it here
-            # This avoids duplicating payment records
             
             # Create response
             return BasePaymentResponse(

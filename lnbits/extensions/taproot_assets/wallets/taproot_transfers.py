@@ -57,6 +57,7 @@ class TaprootTransferManager:
     ) -> bool:
         """
         Manually settle a HODL invoice. Used as a fallback if automatic settlement fails.
+        This is now a thin wrapper around SettlementService.settle_invoice.
 
         Args:
             payment_hash: The payment hash of the invoice to settle
@@ -70,22 +71,20 @@ class TaprootTransferManager:
                 # Check if this is an internal payment
                 is_internal = await is_internal_payment(payment_hash)
                 
-                # Try to get the preimage directly from the payment hash
-                preimage_hex = self.node._get_preimage(payment_hash)
-                
-                # If not found and script key is provided, try to look up the payment hash
-                if not preimage_hex and script_key:
-                    mapped_payment_hash = self.node.invoice_manager._get_payment_hash_from_script_key(script_key)
-                    if mapped_payment_hash:
-                        preimage_hex = self.node._get_preimage(mapped_payment_hash)
+                # Get wallet info if available
+                user_id = None
+                wallet_id = None
+                if hasattr(self.node, 'wallet') and self.node.wallet:
+                    user_id = self.node.wallet.user
+                    wallet_id = self.node.wallet.id
                 
                 # Delegate to the settlement service
                 success, _ = await SettlementService.settle_invoice(
                     payment_hash=payment_hash,
                     node=self.node,
                     is_internal=is_internal,
-                    user_id=self.node.wallet.user if hasattr(self.node, 'wallet') and self.node.wallet else None,
-                    wallet_id=self.node.wallet.id if hasattr(self.node, 'wallet') and self.node.wallet else None
+                    user_id=user_id,
+                    wallet_id=wallet_id
                 )
                 
                 return success
@@ -352,8 +351,9 @@ class TaprootTransferManager:
                 # Process ACCEPTED state (3)
                 if invoice.state == 3:  # ACCEPTED state
                     logger.info(f"Invoice {payment_hash} is ACCEPTED - attempting to settle")
-                    script_key_hex = await self._extract_script_key_from_invoice(invoice)
                     
+                    # Extract and store script key if available
+                    script_key_hex = await self._extract_script_key_from_invoice(invoice)
                     if script_key_hex:
                         self.node.invoice_manager._store_script_key_mapping(script_key_hex, payment_hash)
                     
@@ -364,7 +364,7 @@ class TaprootTransferManager:
                         user_id = self.node.wallet.user
                         wallet_id = self.node.wallet.id
                     
-                    # Attempt settlement using Settlement Service
+                    # Delegate to SettlementService for settlement
                     success, result = await SettlementService.settle_invoice(
                         payment_hash=payment_hash,
                         node=self.node,
@@ -374,7 +374,9 @@ class TaprootTransferManager:
                         wallet_id=wallet_id
                     )
                     
-                    if not success:
+                    if success:
+                        logger.info(f"Lightning payment successfully settled: {payment_hash}")
+                    else:
                         error_msg = result.get('error', 'Unknown error')
                         logger.error(f"Failed to settle Lightning payment: {payment_hash}, error: {error_msg}")
                     
