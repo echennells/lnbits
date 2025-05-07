@@ -12,18 +12,6 @@ import sqlite3
 DB_PATH = "/home/ubuntu/fresh/lnbits/data/ext_taproot_assets.sqlite3"
 
 # SQL statements to create the tables
-CREATE_SETTINGS_TABLE = """
-CREATE TABLE IF NOT EXISTS settings (
-    id TEXT PRIMARY KEY,
-    tapd_host TEXT NOT NULL,
-    tapd_network TEXT NOT NULL,
-    tapd_tls_cert_path TEXT NOT NULL,
-    tapd_macaroon_path TEXT NOT NULL,
-    tapd_macaroon_hex TEXT,
-    lnd_macaroon_path TEXT NOT NULL,
-    lnd_macaroon_hex TEXT
-);
-"""
 
 CREATE_ASSETS_TABLE = """
 CREATE TABLE IF NOT EXISTS assets (
@@ -75,9 +63,6 @@ def init_db():
     cursor = conn.cursor()
     
     # Create the tables
-    print("Creating settings table...")
-    cursor.execute(CREATE_SETTINGS_TABLE)
-    
     print("Creating assets table...")
     cursor.execute(CREATE_ASSETS_TABLE)
     

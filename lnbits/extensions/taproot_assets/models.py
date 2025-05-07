@@ -8,19 +8,6 @@ from pydantic import BaseModel, Field
 T = TypeVar('T')
 
 
-class TaprootSettings(BaseModel):
-    """Settings for the Taproot Assets extension."""
-    id: Optional[str] = None  # Add this field for database operations
-    tapd_host: str = "lit:10009"
-    tapd_network: str = "mainnet"
-    tapd_tls_cert_path: str = "/root/.lnd/tls.cert"
-    tapd_macaroon_path: str = "/root/.tapd/data/mainnet/admin.macaroon"
-    tapd_macaroon_hex: Optional[str] = None
-    lnd_macaroon_path: str = "/root/.lnd/data/chain/bitcoin/mainnet/admin.macaroon"
-    lnd_macaroon_hex: Optional[str] = None
-    default_sat_fee: int = 1  # Default satoshi fee for Taproot Asset transfers
-
-
 class TaprootAsset(BaseModel):
     """Model for a Taproot Asset."""
     id: str

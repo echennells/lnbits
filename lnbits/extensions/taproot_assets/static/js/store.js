@@ -35,17 +35,7 @@ const taprootStore = {
     // Current user wallet
     currentWallet: null,
     
-    // User settings
-    settings: {
-      tapd_host: '',
-      tapd_network: 'signet',
-      tapd_tls_cert_path: '',
-      tapd_macaroon_path: '',
-      tapd_macaroon_hex: '',
-      lnd_macaroon_path: '',
-      lnd_macaroon_hex: '',
-      default_sat_fee: 1
-    }
+    // WebSocket status only
   }),
   
   // Computed properties
@@ -331,18 +321,7 @@ const taprootStore = {
       }
     },
     
-    // Settings
-    setSettings(settings) {
-      if (this.state) {
-        this.state.settings = { ...this.state.settings, ...settings };
-      }
-    },
-    
-    updateSetting(key, value) {
-      if (this.state && this.state.settings && key in this.state.settings) {
-        this.state.settings[key] = value;
-      }
-    }
+    // WebSocket status methods only
   }
 };
 

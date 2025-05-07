@@ -8,10 +8,9 @@ from pydantic import BaseModel
 
 from .error_utils import raise_http_exception, handle_api_error
 from .logging_utils import log_debug, log_info, log_warning, log_error, API
-from .models import TaprootSettings, TaprootInvoiceRequest, TaprootPaymentRequest
+from .models import TaprootInvoiceRequest, TaprootPaymentRequest
 
 # Import services
-from .services.settings_service import SettingsService
 from .services.asset_service import AssetService
 from .services.invoice_service import InvoiceService
 from .services.payment_service import PaymentService
@@ -20,53 +19,6 @@ from .services.payment_record_service import PaymentRecordService
 # The parent router in __init__.py already adds the "/taproot_assets" prefix
 # So we only need to add the API path here
 taproot_assets_api_router = APIRouter(prefix="/api/v1/taproot", tags=["taproot_assets"])
-
-
-@taproot_assets_api_router.get("/settings", status_code=HTTPStatus.OK)
-@handle_api_error
-async def api_get_settings(user: User = Depends(check_user_exists)):
-    """Get Taproot Assets extension settings."""
-    log_debug(API, f"Getting settings for user {user.id}")
-    return await SettingsService.get_settings(user)
-
-
-@taproot_assets_api_router.put("/settings", status_code=HTTPStatus.OK)
-@handle_api_error
-async def api_update_settings(
-    settings: TaprootSettings, user: User = Depends(check_user_exists)
-):
-    """Update Taproot Assets extension settings."""
-    log_info(API, f"Updating settings for user {user.id}")
-    return await SettingsService.update_settings(settings, user)
-
-
-class TapdSettingsUpdate(BaseModel):
-    tapd_host: Optional[str] = None
-    tapd_network: Optional[str] = None
-    tapd_tls_cert_path: Optional[str] = None
-    tapd_macaroon_path: Optional[str] = None
-    tapd_macaroon_hex: Optional[str] = None
-    lnd_macaroon_path: Optional[str] = None
-    lnd_macaroon_hex: Optional[str] = None
-    default_sat_fee: Optional[int] = None
-
-
-@taproot_assets_api_router.put("/tapd-settings", status_code=HTTPStatus.OK)
-@handle_api_error
-async def api_update_tapd_settings(
-    data: TapdSettingsUpdate, user: User = Depends(check_user_exists)
-):
-    """Update Taproot daemon settings."""
-    log_info(API, f"Updating tapd settings for user {user.id}")
-    return await SettingsService.update_tapd_settings(data.dict(exclude_unset=True), user)
-
-
-@taproot_assets_api_router.get("/tapd-settings", status_code=HTTPStatus.OK)
-@handle_api_error
-async def api_get_tapd_settings(user: User = Depends(check_user_exists)):
-    """Get Taproot daemon settings."""
-    log_debug(API, f"Getting tapd settings for user {user.id}")
-    return await SettingsService.get_tapd_settings(user)
 
 
 @taproot_assets_api_router.get("/parse-invoice", status_code=HTTPStatus.OK)

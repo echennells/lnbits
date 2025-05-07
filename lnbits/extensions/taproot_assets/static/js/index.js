@@ -88,17 +88,6 @@ window.app = Vue.createApp({
       // Transition state for animations
       transitionEnabled: false,
       
-      // User settings
-      settings: {
-        tapd_host: '',
-        tapd_network: 'signet', 
-        tapd_tls_cert_path: '',
-        tapd_macaroon_path: '',
-        tapd_macaroon_hex: '',
-        lnd_macaroon_path: '',
-        lnd_macaroon_hex: '',
-        default_sat_fee: 1
-      },
       
       // WebSocket status
       websocketStatus: {
@@ -177,26 +166,6 @@ window.app = Vue.createApp({
     
     shortify(text, maxLength) {
       return DataUtils.shortify(text, maxLength);
-    },
-    
-    // Settings methods
-    async getSettings() {
-      try {
-        if (!this.g.user.wallets || !this.g.user.wallets.length) return;
-        const wallet = this.g.user.wallets[0];
-        
-        const response = await ApiService.getSettings(wallet.adminkey);
-        
-        // Update local settings
-        this.settings = response.data;
-        
-        // Also update store if available
-        if (window.taprootStore && window.taprootStore.actions) {
-          window.taprootStore.actions.setSettings(response.data);
-        }
-      } catch (error) {
-        NotificationService.processApiError(error, 'Failed to fetch settings');
-      }
     },
     
     // Asset methods
@@ -739,7 +708,7 @@ window.app = Vue.createApp({
     
     // Initialize only after app is created
     if (this.g.user && this.g.user.wallets && this.g.user.wallets.length) {
-      this.getSettings();
+      // Note: All settings are loaded from environment variables on the server
       this.getAssets();
       this.getInvoices();
       this.getPayments();

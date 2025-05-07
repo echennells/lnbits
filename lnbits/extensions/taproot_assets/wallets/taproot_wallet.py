@@ -6,7 +6,6 @@ from lnbits.wallets.base import Wallet, InvoiceResponse as BaseInvoiceResponse, 
 from .taproot_node import TaprootAssetsNodeExtension
 # Import from crud re-exports
 from ..crud import (
-    get_or_create_settings,
     get_invoice_by_payment_hash
 )
 from ..tapd_settings import taproot_settings

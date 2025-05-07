@@ -8,7 +8,6 @@ from typing import Dict, Any, List, Optional, Tuple
 from .db import db, get_table_name
 
 # Re-export all functions from the submodules
-from .crud.settings import get_or_create_settings, update_settings
 from .crud.assets import create_asset, get_assets, get_asset
 from .crud.invoices import (
     create_invoice, get_invoice, get_invoice_by_payment_hash, update_invoice_status,

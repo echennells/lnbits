@@ -4,25 +4,8 @@ from .db import get_table_name
 async def m001_initial(db):
     """
     Initial database migration for the Taproot Assets extension.
+    Creates required tables except for settings which are now handled via environment variables.
     """
-    await db.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {get_table_name("settings")} (
-            id TEXT PRIMARY KEY,
-            tapd_host TEXT NOT NULL,
-            tapd_network TEXT NOT NULL,
-            tapd_tls_cert_path TEXT NOT NULL,
-            tapd_macaroon_path TEXT NOT NULL,
-            tapd_macaroon_hex TEXT,
-            lnd_macaroon_path TEXT NOT NULL,
-            lnd_macaroon_hex TEXT,
-            default_sat_fee {db.big_int} NOT NULL DEFAULT 1,
-            created_at TIMESTAMP NOT NULL DEFAULT {db.timestamp_now},
-            updated_at TIMESTAMP NOT NULL DEFAULT {db.timestamp_now}
-        );
-        """
-    )
-
     await db.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {get_table_name("assets")} (
@@ -63,48 +46,6 @@ async def m001_initial(db):
         );
         """
     )
-
-
-async def m002_add_sat_fee_column(db):
-    """
-    Migration to add default_sat_fee column to settings table if it doesn't exist.
-    """
-    try:
-        # Check if the column exists - using db.type to handle different syntax
-        columns = None
-        table_name = get_table_name("settings")
-        
-        if db.type == "SQLITE":
-            # For SQLite, we need to use pragma which doesn't support schema prefix
-            safe_table = table_name.split(".")[-1]  # Get just the table name without schema
-            columns = await db.fetchall(
-                f"SELECT name FROM pragma_table_info('{safe_table}')"
-            )
-        else:  # POSTGRES or COCKROACH
-            schema = db.schema
-            columns = await db.fetchall(
-                f"""
-                SELECT column_name as name
-                FROM information_schema.columns
-                WHERE table_schema = '{schema}' AND table_name = 'settings'
-                """
-            )
-
-        column_names = [col["name"] for col in columns]
-
-        # Add column if it doesn't exist - using portable syntax
-        if "default_sat_fee" not in column_names:
-            await db.execute(
-                f"""
-                ALTER TABLE {table_name}
-                ADD COLUMN default_sat_fee {db.big_int} NOT NULL DEFAULT 1;
-                """
-            )
-            logger.info("Added default_sat_fee column to settings table")
-        else:
-            logger.debug("default_sat_fee column already exists in settings table")
-    except Exception as e:
-        logger.warning(f"Error in migration m002_add_sat_fee_column: {str(e)}")
 
 
 async def m003_create_fee_transactions_table(db):

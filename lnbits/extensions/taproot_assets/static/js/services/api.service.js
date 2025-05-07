@@ -5,35 +5,6 @@
 
 const ApiService = {
   /**
-   * Get settings for the Taproot Assets extension
-   * @param {string} adminkey - Admin key for authentication
-   * @returns {Promise} - Promise that resolves with settings data
-   */
-  getSettings(adminkey) {
-    return LNbits.api
-      .request('GET', '/taproot_assets/api/v1/taproot/settings', adminkey)
-      .catch(error => {
-        console.error('API Error getting settings:', error);
-        throw error;
-      });
-  },
-
-  /**
-   * Save settings for the Taproot Assets extension
-   * @param {string} adminkey - Admin key for authentication
-   * @param {Object} settings - Settings object to save
-   * @returns {Promise} - Promise that resolves with saved settings data
-   */
-  saveSettings(adminkey, settings) {
-    return LNbits.api
-      .request('PUT', '/taproot_assets/api/v1/taproot/settings', adminkey, settings)
-      .catch(error => {
-        console.error('API Error saving settings:', error);
-        throw error;
-      });
-  },
-
-  /**
    * Get list of assets from the Taproot Assets daemon
    * @param {string} adminkey - Admin key for authentication
    * @returns {Promise} - Promise that resolves with assets data
