@@ -5,6 +5,7 @@ Handles payment-related business logic.
 from typing import Dict, Any, Optional, List, Tuple, Union
 import re
 import grpc
+import asyncio
 from http import HTTPStatus
 from fastapi import HTTPException
 from loguru import logger
@@ -171,6 +172,9 @@ class PaymentService:
             
             # Use the centralized SettlementService to record the payment
             # IMPORTANT: Make sure to use the correct asset amount (parsed_invoice.amount) and not the fee_limit
+            # Add a small delay to allow any pending transactions to complete
+            await asyncio.sleep(0.5)
+            
             payment_success, payment_record = await SettlementService.record_payment(
                 payment_hash=payment_hash,
                 payment_request=data.payment_request,
@@ -248,6 +252,9 @@ class PaymentService:
             
             if not success:
                 raise Exception(f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}")
+            
+            # Add a small delay to allow any pending transactions to complete
+            await asyncio.sleep(0.5)
             
             # Then use SettlementService to record the payment
             payment_success, payment_record = await SettlementService.record_payment(

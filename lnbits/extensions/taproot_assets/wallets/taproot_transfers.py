@@ -11,8 +11,7 @@ from .taproot_adapter import (
     invoices_pb2
 )
 
-# Import database functions - only keeping what's needed for non-settlement operations
-# Import from crud re-exports
+# Import database functions from crud re-exports
 from ..crud import (
     get_invoice_by_payment_hash,
     is_internal_payment,

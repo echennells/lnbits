@@ -8,8 +8,10 @@ from lnbits.helpers import urlsafe_short_hash
 
 from ..models import TaprootInvoice
 from ..db import db, get_table_name
+from ..db_utils import with_transaction
 from .utils import get_record_by_id, get_record_by_field, get_records_by_field
 
+@with_transaction
 async def create_invoice(
     asset_id: str,
     asset_amount: int,
@@ -62,7 +64,7 @@ async def create_invoice(
     )
     
     # Insert using standardized method
-    await (conn or db).insert(get_table_name("invoices"), invoice)
+    await conn.insert(get_table_name("invoices"), invoice)
     
     return invoice
 
@@ -95,6 +97,7 @@ async def get_invoice_by_payment_hash(payment_hash: str, conn=None) -> Optional[
     return await get_record_by_field("invoices", "payment_hash", payment_hash, TaprootInvoice, conn=conn)
 
 
+@with_transaction
 async def update_invoice_status(invoice_id: str, status: str, conn=None) -> Optional[TaprootInvoice]:
     """
     Update the status of a Taproot Asset invoice.
@@ -119,7 +122,7 @@ async def update_invoice_status(invoice_id: str, status: str, conn=None) -> Opti
         invoice.paid_at = now
     
     # Update the invoice in the database using standardized method
-    await (conn or db).update(
+    await conn.update(
         get_table_name("invoices"),
         invoice,
         "WHERE id = :id"
@@ -181,6 +184,7 @@ async def is_internal_payment(payment_hash: str) -> bool:
     return invoice is not None
 
 
+@with_transaction
 async def validate_invoice_for_settlement(payment_hash: str, conn=None) -> Tuple[bool, Optional[TaprootInvoice], Optional[str]]:
     """
     Validate if an invoice can be settled.
@@ -213,6 +217,7 @@ async def validate_invoice_for_settlement(payment_hash: str, conn=None) -> Tuple
     return True, invoice, None
 
 
+@with_transaction
 async def update_invoice_for_settlement(invoice: TaprootInvoice, conn=None) -> Optional[TaprootInvoice]:
     """
     Update an invoice to paid status for settlement.

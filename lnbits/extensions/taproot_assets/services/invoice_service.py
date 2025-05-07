@@ -80,36 +80,47 @@ class InvoiceService:
             # Get satoshi fee from settings
             satoshi_amount = taproot_settings.default_sat_fee
 
-            # Create invoice record
-            invoice = await create_invoice(
-                asset_id=data.asset_id,
-                asset_amount=data.amount,
-                satoshi_amount=satoshi_amount,
-                payment_hash=payment_hash,
-                payment_request=payment_request,
-                user_id=user_id,
-                wallet_id=wallet_id,
-                memo=data.memo or "",
-                expiry=data.expiry,
-            )
-
-            # Send WebSocket notification for new invoice
-            invoice_data = {
-                "id": invoice.id,
-                "payment_hash": payment_hash,
-                "payment_request": payment_request,
-                "asset_id": data.asset_id,
-                "asset_amount": data.amount,
-                "satoshi_amount": satoshi_amount,
-                "memo": invoice.memo,
-                "status": "pending",
-                "created_at": invoice.created_at.isoformat() if hasattr(invoice.created_at, "isoformat") else str(invoice.created_at)
-            }
+            # Import transaction context manager
+            from ..db_utils import transaction
             
-            # Use NotificationService for WebSocket notification
-            notification_sent = await NotificationService.notify_invoice_update(user_id, invoice_data)
-            if not notification_sent:
-                logger.warning(f"Failed to send WebSocket notification for invoice {invoice.id}")
+            # Create invoice record within a transaction
+            invoice = None
+            async with transaction(max_retries=3, retry_delay=0.2) as conn:
+                invoice = await create_invoice(
+                    asset_id=data.asset_id,
+                    asset_amount=data.amount,
+                    satoshi_amount=satoshi_amount,
+                    payment_hash=payment_hash,
+                    payment_request=payment_request,
+                    user_id=user_id,
+                    wallet_id=wallet_id,
+                    memo=data.memo or "",
+                    expiry=data.expiry,
+                    conn=conn
+                )
+
+            # Send WebSocket notification for new invoice AFTER the transaction is committed
+            if invoice:
+                try:
+                    invoice_data = {
+                        "id": invoice.id,
+                        "payment_hash": payment_hash,
+                        "payment_request": payment_request,
+                        "asset_id": data.asset_id,
+                        "asset_amount": data.amount,
+                        "satoshi_amount": satoshi_amount,
+                        "memo": invoice.memo,
+                        "status": "pending",
+                        "created_at": invoice.created_at.isoformat() if hasattr(invoice.created_at, "isoformat") else str(invoice.created_at)
+                    }
+                    
+                    # Use NotificationService for WebSocket notification
+                    notification_sent = await NotificationService.notify_invoice_update(user_id, invoice_data)
+                    if not notification_sent:
+                        logger.warning(f"Failed to send WebSocket notification for invoice {invoice.id}")
+                except Exception as e:
+                    # Don't fail the whole operation if notification fails
+                    logger.warning(f"Failed to send notification for invoice {invoice.id}: {str(e)}")
 
             # Return response
             return InvoiceResponse(

@@ -8,6 +8,7 @@ from lnbits.helpers import urlsafe_short_hash
 
 from ..models import AssetBalance
 from ..db import db, get_table_name
+from ..db_utils import with_transaction
 
 async def get_asset_balance(wallet_id: str, asset_id: str, conn=None) -> Optional[AssetBalance]:
     """
@@ -55,6 +56,7 @@ async def get_wallet_asset_balances(wallet_id: str) -> List[AssetBalance]:
     )
 
 
+@with_transaction
 async def update_asset_balance(
     wallet_id: str,
     asset_id: str,
@@ -88,7 +90,7 @@ async def update_asset_balance(
         balance.updated_at = now
         
         # Update in database using standardized method
-        await (conn or db).update(
+        await conn.update(
             get_table_name("asset_balances"),
             balance,
             "WHERE wallet_id = :wallet_id AND asset_id = :asset_id"
@@ -107,7 +109,7 @@ async def update_asset_balance(
         )
         
         # Insert new balance using standardized method
-        await (conn or db).insert(get_table_name("asset_balances"), balance)
+        await conn.insert(get_table_name("asset_balances"), balance)
     
     # Return the updated balance
     return await get_asset_balance(wallet_id, asset_id, conn)

@@ -6,16 +6,21 @@ from lnbits.helpers import urlsafe_short_hash
 
 from ..models import TaprootSettings
 from ..db import db, get_table_name
+from ..db_utils import with_transaction
 from .utils import get_record_by_id
 
-async def get_or_create_settings() -> TaprootSettings:
+@with_transaction
+async def get_or_create_settings(conn=None) -> TaprootSettings:
     """
     Get or create Taproot Assets extension settings.
     
+    Args:
+        conn: Optional database connection to reuse
+        
     Returns:
         TaprootSettings: The settings object
     """
-    row = await db.fetchone(
+    row = await conn.fetchone(
         f"SELECT * FROM {get_table_name('settings')} LIMIT 1", 
         {}, 
         TaprootSettings
@@ -27,7 +32,7 @@ async def get_or_create_settings() -> TaprootSettings:
     settings_id = urlsafe_short_hash()
     
     # Insert using direct SQL to avoid the model issue
-    await db.execute(
+    await conn.execute(
         f"""
         INSERT INTO {get_table_name('settings')} (
             id, tapd_host, tapd_network, tapd_tls_cert_path,
@@ -54,25 +59,27 @@ async def get_or_create_settings() -> TaprootSettings:
     )
     
     # Fetch the newly created settings
-    return await db.fetchone(
+    return await conn.fetchone(
         f"SELECT * FROM {get_table_name('settings')} LIMIT 1", 
         {}, 
         TaprootSettings
     )
 
 
-async def update_settings(settings: TaprootSettings) -> TaprootSettings:
+@with_transaction
+async def update_settings(settings: TaprootSettings, conn=None) -> TaprootSettings:
     """
     Update Taproot Assets extension settings.
     
     Args:
         settings: The settings object to update
+        conn: Optional database connection to reuse
         
     Returns:
         TaprootSettings: The updated settings object
     """
     # Get existing settings ID or create a new one
-    row = await db.fetchone(
+    row = await conn.fetchone(
         f"SELECT id FROM {get_table_name('settings')} LIMIT 1",
         {},
         None
@@ -82,7 +89,7 @@ async def update_settings(settings: TaprootSettings) -> TaprootSettings:
         # Update existing settings
         # Set the ID from the existing record
         settings.id = row["id"]
-        await db.update(
+        await conn.update(
             get_table_name("settings"),
             settings,
             "WHERE id = :id"
@@ -90,10 +97,10 @@ async def update_settings(settings: TaprootSettings) -> TaprootSettings:
     else:
         # Create new settings with a generated ID
         settings.id = urlsafe_short_hash()
-        await db.insert(get_table_name("settings"), settings)
+        await conn.insert(get_table_name("settings"), settings)
     
     # Return the updated settings
-    return await db.fetchone(
+    return await conn.fetchone(
         f"SELECT * FROM {get_table_name('settings')} LIMIT 1", 
         {}, 
         TaprootSettings

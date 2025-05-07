@@ -1,12 +1,13 @@
 """
 Common database utilities for Taproot Assets CRUD operations.
 """
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union
+from typing import Any, Dict, List, Optional, Type, TypeVar, Union, Callable
 from datetime import datetime
 from pydantic import BaseModel
 
 from lnbits.db import Database
 from ..db import db, get_table_name
+from ..db_utils import transaction
 
 T = TypeVar('T', bound=BaseModel)
 
@@ -108,9 +109,12 @@ async def get_records_by_user(
     """
     return await get_records_by_field(table, "user_id", user_id, model_class, conn=conn)
 
-async def execute_transaction(operations):
+async def execute_transaction(operations: Callable):
     """
     Execute multiple operations in a transaction.
+    
+    This function is deprecated in favor of using the transaction context manager
+    or the with_transaction decorator from db_utils.py.
     
     Args:
         operations: A function that takes a database connection and performs operations
@@ -118,5 +122,5 @@ async def execute_transaction(operations):
     Returns:
         The result of the operations function
     """
-    async with db.connect() as conn:
+    async with transaction() as conn:
         return await operations(conn)

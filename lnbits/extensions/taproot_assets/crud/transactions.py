@@ -9,10 +9,11 @@ from lnbits.helpers import urlsafe_short_hash
 
 from ..models import AssetTransaction, TaprootInvoice, AssetBalance
 from ..db import db, get_table_name
-from .utils import execute_transaction
+from ..db_utils import transaction, with_transaction
 from .balances import get_asset_balance
 from .invoices import get_invoice_by_payment_hash, update_invoice_status
 
+@with_transaction
 async def record_asset_transaction(
     wallet_id: str,
     asset_id: str,
@@ -39,64 +40,62 @@ async def record_asset_transaction(
     Returns:
         AssetTransaction: The recorded transaction
     """
-    # Use a connection context manager to ensure atomicity
-    async with db.reuse_conn(conn) if conn else db.connect() as new_conn:
-        now = datetime.now()
-        tx_id = urlsafe_short_hash()
+    now = datetime.now()
+    tx_id = urlsafe_short_hash()
+    
+    # Create transaction record
+    tx = AssetTransaction(
+        id=tx_id,
+        wallet_id=wallet_id,
+        asset_id=asset_id,
+        payment_hash=payment_hash,
+        amount=amount,
+        fee=fee,
+        memo=memo,
+        type=tx_type,
+        created_at=now
+    )
+    
+    # Insert transaction record using standardized method
+    await conn.insert(get_table_name("asset_transactions"), tx)
+    
+    # Update balance
+    # For debit, amount should be negative for balance update
+    balance_change = amount if tx_type == 'credit' else -amount
+    
+    # Check if balance exists
+    balance = await get_asset_balance(wallet_id, asset_id, conn=conn)
+    
+    if balance:
+        # Update existing balance
+        balance.balance += balance_change
+        if payment_hash:
+            balance.last_payment_hash = payment_hash
+        balance.updated_at = now
         
-        # Create transaction record
-        transaction = AssetTransaction(
-            id=tx_id,
+        # Update in database using standardized method
+        await conn.update(
+            get_table_name("asset_balances"),
+            balance,
+            "WHERE wallet_id = :wallet_id AND asset_id = :asset_id"
+        )
+    else:
+        # Create new balance
+        balance_id = urlsafe_short_hash()
+        balance = AssetBalance(
+            id=balance_id,
             wallet_id=wallet_id,
             asset_id=asset_id,
-            payment_hash=payment_hash,
-            amount=amount,
-            fee=fee,
-            memo=memo,
-            type=tx_type,
-            created_at=now
+            balance=balance_change,
+            last_payment_hash=payment_hash,
+            created_at=now,
+            updated_at=now
         )
         
-        # Insert transaction record using standardized method
-        await new_conn.insert(get_table_name("asset_transactions"), transaction)
-        
-        # Update balance
-        # For debit, amount should be negative for balance update
-        balance_change = amount if tx_type == 'credit' else -amount
-        
-        # Check if balance exists
-        balance = await get_asset_balance(wallet_id, asset_id, conn=new_conn)
-        
-        if balance:
-            # Update existing balance
-            balance.balance += balance_change
-            if payment_hash:
-                balance.last_payment_hash = payment_hash
-            balance.updated_at = now
-            
-            # Update in database using standardized method
-            await new_conn.update(
-                get_table_name("asset_balances"),
-                balance,
-                "WHERE wallet_id = :wallet_id AND asset_id = :asset_id"
-            )
-        else:
-            # Create new balance
-            balance_id = urlsafe_short_hash()
-            balance = AssetBalance(
-                id=balance_id,
-                wallet_id=wallet_id,
-                asset_id=asset_id,
-                balance=balance_change,
-                last_payment_hash=payment_hash,
-                created_at=now,
-                updated_at=now
-            )
-            
-            # Insert new balance using standardized method
-            await new_conn.insert(get_table_name("asset_balances"), balance)
-        
-        return transaction
+        # Insert new balance using standardized method
+        await conn.insert(get_table_name("asset_balances"), balance)
+    
+    return tx
 
 
 async def get_asset_transactions(
@@ -137,6 +136,7 @@ async def get_asset_transactions(
     return await db.fetchall(query, params, AssetTransaction)
 
 
+@with_transaction
 async def record_settlement_transaction(
     invoice: TaprootInvoice, 
     payment_hash: str,
@@ -158,7 +158,7 @@ async def record_settlement_transaction(
     """
     try:
         # Use the memo directly from the invoice without setting a default
-        transaction = await record_asset_transaction(
+        tx = await record_asset_transaction(
             wallet_id=invoice.wallet_id,
             asset_id=invoice.asset_id,
             amount=invoice.asset_amount,
@@ -168,7 +168,7 @@ async def record_settlement_transaction(
             conn=conn
         )
         
-        return True, transaction, None
+        return True, tx, None
     except Exception as e:
         error_msg = f"Failed to record transaction: {str(e)}"
         logger.error(error_msg)
@@ -244,8 +244,8 @@ async def process_settlement_transaction(
         }
     
     try:
-        # Use a connection context manager to ensure atomicity for all operations
-        async with db.connect() as conn:
+        # Use our transaction context manager to ensure atomicity for all operations
+        async with transaction() as conn:
             # Step 2: Update invoice status if requested
             updated_invoice = invoice
             if update_status and invoice:
@@ -262,7 +262,7 @@ async def process_settlement_transaction(
             
             # Step 3: Record the asset transaction
             if updated_invoice:
-                tx_success, transaction, tx_error = await record_settlement_transaction(
+                tx_success, tx, tx_error = await record_settlement_transaction(
                     invoice=updated_invoice,
                     payment_hash=payment_hash,
                     conn=conn
@@ -294,7 +294,7 @@ async def process_settlement_transaction(
                     "asset_id": updated_invoice.asset_id if updated_invoice else None,
                     "asset_amount": updated_invoice.asset_amount if updated_invoice else None,
                     "payment_hash": payment_hash,
-                    "tx_id": transaction.id if transaction else None,
+                    "tx_id": tx.id if tx else None,
                     "status": "completed",
                     "processing_time": processing_time
                 }

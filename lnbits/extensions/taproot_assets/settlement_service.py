@@ -13,6 +13,7 @@ from loguru import logger
 from .wallets.taproot_adapter import invoices_pb2
 from .notification_service import NotificationService
 from .models import TaprootInvoice, TaprootPayment
+from .db_utils import transaction, with_transaction
 
 # Import database functions from crud re-exports
 from .crud import (
@@ -41,8 +42,11 @@ class SettlementService:
     # Class-level cache to track settled payment hashes
     _settled_payment_hashes = set()
     
-    # Lock for database operations to prevent race conditions
-    _db_lock = asyncio.Lock()
+    # Class-level lock for cache operations
+    _cache_lock = asyncio.Lock()
+    
+    # We're now using the global transaction lock from db_utils.py
+    # instead of a class-specific lock to prevent deadlocks
     
     @classmethod
     async def settle_invoice(
@@ -74,7 +78,11 @@ class SettlementService:
         with ErrorContext(f"settle_invoice_{log_context}", TRANSFER):
             with LogContext(TRANSFER, f"settling invoice {payment_hash[:8]}... ({log_context})", log_level="info"):
                 # First check if already settled
-                if payment_hash in cls._settled_payment_hashes:
+                is_settled = False
+                async with cls._cache_lock:
+                    is_settled = payment_hash in cls._settled_payment_hashes
+                    
+                if is_settled:
                     log_debug(TRANSFER, f"Invoice {payment_hash[:8]}... already marked as settled, skipping")
                     return True, {"already_settled": True}
                 
@@ -103,18 +111,20 @@ class SettlementService:
                 
                 # If successful, track settlement and update asset balance
                 if success:
-                    cls._settled_payment_hashes.add(payment_hash)
+                    async with cls._cache_lock:
+                        cls._settled_payment_hashes.add(payment_hash)
                     
                     # Update asset balance if invoice exists
                     if invoice:
-                        # Use DB lock to prevent race conditions
-                        async with cls._db_lock:
+                        # Use transaction context manager to ensure atomicity
+                        async with transaction() as conn:
                             await cls._update_asset_balance(
                                 invoice.wallet_id,
                                 invoice.asset_id,
                                 invoice.asset_amount,
                                 payment_hash,
-                                invoice.memo
+                                invoice.memo,
+                                conn=conn
                             )
                         
                         # Send WebSocket notifications
@@ -137,10 +147,11 @@ class SettlementService:
         memo: Optional[str] = None,
         preimage: Optional[str] = None,
         is_internal: bool = False,
-        is_self_payment: bool = False
+        is_self_payment: bool = False,
+        conn=None
     ) -> Tuple[bool, Optional[TaprootPayment]]:
         """
-        Record a payment in the database with proper locking to avoid race conditions.
+        Record a payment in the database with proper transaction handling to ensure atomicity.
         
         Args:
             payment_hash: Payment hash
@@ -154,6 +165,7 @@ class SettlementService:
             preimage: Optional preimage
             is_internal: Whether this is an internal payment
             is_self_payment: Whether this is a self-payment
+            conn: Optional database connection to reuse
             
         Returns:
             Tuple containing:
@@ -163,33 +175,81 @@ class SettlementService:
         with ErrorContext("record_payment", PAYMENT):
             log_info(PAYMENT, f"Recording payment: hash={payment_hash[:8]}..., asset_amount={asset_amount}, fee_sats={fee_sats}")
             
-            async with cls._db_lock:
-                # Record the payment with the correct asset amount, not the fee
-                payment_record = await create_payment_record(
-                    payment_hash=payment_hash,
-                    payment_request=payment_request,
-                    asset_id=asset_id,
-                    asset_amount=asset_amount,  # Ensure this is the actual asset amount
-                    fee_sats=fee_sats,  # This is the fee, separate from asset amount
-                    user_id=user_id,
-                    wallet_id=wallet_id,
-                    memo=memo or "",
-                    preimage=preimage or ""
-                )
+            # Check if we've already processed this payment hash to avoid duplicates
+            # This is critical for preventing race conditions with settle_invoice
+            is_processed = False
+            async with cls._cache_lock:
+                is_processed = payment_hash in cls._settled_payment_hashes
                 
-                # Also record the transaction with the correct asset amount
-                tx_type = "debit"  # Outgoing payment
-                await record_asset_transaction(
-                    wallet_id=wallet_id,
-                    asset_id=asset_id,
-                    amount=asset_amount,  # Use the correct asset amount here
-                    tx_type=tx_type,
-                    payment_hash=payment_hash,
-                    fee=fee_sats,  # Fee is separate
-                    memo=memo or ""
-                )
+            if is_processed:
+                log_info(PAYMENT, f"Payment {payment_hash[:8]}... already processed, skipping record creation")
+                return True, None
                 
-                # Send notifications
+            # Wait a short time to allow any in-progress settlements to complete
+            # This helps avoid race conditions between settle_invoice and record_payment
+            await asyncio.sleep(1.0)
+            
+            # Use our improved transaction context manager with retry capability
+            # If conn is provided, we'll reuse it, otherwise create a new one
+            async with transaction(conn=conn, max_retries=5, retry_delay=0.2) as tx_conn:
+                try:
+                    # Check again inside the transaction if this payment has already been recorded
+                    # This is a double-check to prevent race conditions
+                    existing_payment = None
+                    try:
+                        # We don't have a direct method to check for existing payments by hash,
+                        # but we can check if the invoice is already paid which would indicate
+                        # the payment was already processed
+                        invoice = await get_invoice_by_payment_hash(payment_hash, conn=tx_conn)
+                        if invoice and invoice.status == "paid":
+                            log_info(PAYMENT, f"Invoice for payment {payment_hash[:8]}... is already paid, skipping payment record")
+                            return True, None
+                    except Exception as check_err:
+                        # If we can't check, proceed with creating the payment record
+                        log_warning(PAYMENT, f"Failed to check for existing payment: {str(check_err)}")
+                    
+                    # Record the payment with the correct asset amount, not the fee
+                    payment_record = await create_payment_record(
+                        payment_hash=payment_hash,
+                        payment_request=payment_request,
+                        asset_id=asset_id,
+                        asset_amount=asset_amount,  # Ensure this is the actual asset amount
+                        fee_sats=fee_sats,  # This is the fee, separate from asset amount
+                        user_id=user_id,
+                        wallet_id=wallet_id,
+                        memo=memo or "",
+                        preimage=preimage or "",
+                        conn=tx_conn
+                    )
+                    
+                    # Also record the transaction with the correct asset amount
+                    tx_type = "debit"  # Outgoing payment
+                    await record_asset_transaction(
+                        wallet_id=wallet_id,
+                        asset_id=asset_id,
+                        amount=asset_amount,  # Use the correct asset amount here
+                        tx_type=tx_type,
+                        payment_hash=payment_hash,
+                        fee=fee_sats,  # Fee is separate
+                        memo=memo or "",
+                        conn=tx_conn
+                    )
+                    
+                    # Add to our settled payment hashes set to prevent duplicate processing
+                    async with cls._cache_lock:
+                        cls._settled_payment_hashes.add(payment_hash)
+                    
+                    # Transaction will be committed automatically when the context manager exits
+                    log_info(PAYMENT, f"Payment record created successfully for hash={payment_hash[:8]}...")
+                    
+                    # Send notifications outside the transaction to avoid holding the lock
+                    # during potentially slow network operations
+                except Exception as e:
+                    log_error(PAYMENT, f"Failed to record payment: {str(e)}")
+                    return False, None
+            
+            # Send notifications after the transaction is committed
+            try:
                 await NotificationService.notify_transaction_complete(
                     user_id=user_id,
                     wallet_id=wallet_id,
@@ -202,8 +262,11 @@ class SettlementService:
                     is_internal=is_internal,
                     is_self_payment=is_self_payment
                 )
-                
-                return True, payment_record
+            except Exception as e:
+                # Don't fail the whole operation if notifications fail
+                log_warning(PAYMENT, f"Payment recorded but notification failed: {str(e)}")
+            
+            return True, payment_record
     
     @classmethod
     async def _get_or_generate_preimage(cls, node, payment_hash: str) -> Optional[str]:
@@ -240,10 +303,10 @@ class SettlementService:
                 log_error(TRANSFER, f"No invoice found with payment_hash: {payment_hash}")
                 return False, {"error": "Invoice not found"}
             
-            # Use DB lock to prevent race conditions
-            async with cls._db_lock:
+            # Use transaction context manager to ensure atomicity
+            async with transaction() as conn:
                 # Update invoice status to paid
-                updated_invoice = await update_invoice_status(invoice.id, "paid")
+                updated_invoice = await update_invoice_status(invoice.id, "paid", conn=conn)
                 if not updated_invoice or updated_invoice.status != "paid":
                     log_error(TRANSFER, f"Failed to update invoice {invoice.id} status in database")
                     return False, {"error": "Failed to update invoice status"}
@@ -307,9 +370,9 @@ class SettlementService:
             # Update the invoice status in the database if we have an invoice record
             updated_invoice = None
             if invoice:
-                # Use DB lock to prevent race conditions
-                async with cls._db_lock:
-                    updated_invoice = await update_invoice_status(invoice.id, "paid")
+                # Use transaction context manager to ensure atomicity
+                async with transaction() as conn:
+                    updated_invoice = await update_invoice_status(invoice.id, "paid", conn=conn)
                 
                 if not updated_invoice or updated_invoice.status != "paid":
                     log_error(TRANSFER, f"Failed to update invoice {invoice.id} status in database")
@@ -327,13 +390,15 @@ class SettlementService:
             }
     
     @classmethod
+    @with_transaction
     async def _update_asset_balance(
         cls,
         wallet_id: str,
         asset_id: str,
         amount: int,
         payment_hash: str,
-        memo: Optional[str] = None
+        memo: Optional[str] = None,
+        conn=None
     ) -> bool:
         """
         Update the asset balance for a received payment.
@@ -344,20 +409,21 @@ class SettlementService:
             amount: Amount to credit
             payment_hash: Payment hash for reference
             memo: Optional memo for the transaction
+            conn: Optional database connection to reuse
             
         Returns:
             bool: Success status
         """
         with ErrorContext("update_asset_balance", TRANSFER):
             # Record the asset transaction as a credit
-            # Note: We already have a DB lock in the caller
             await record_asset_transaction(
                 wallet_id=wallet_id,
                 asset_id=asset_id,
                 amount=amount,
                 tx_type="credit",  # Incoming payment
                 payment_hash=payment_hash,
-                memo=memo or ""  # Use empty string if no memo provided
+                memo=memo or "",  # Use empty string if no memo provided
+                conn=conn
             )
             log_info(TRANSFER, f"Asset balance updated for asset_id={asset_id}, amount={amount}")
             return True

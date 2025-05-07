@@ -8,15 +8,18 @@ from lnbits.helpers import urlsafe_short_hash
 
 from ..models import TaprootAsset
 from ..db import db, get_table_name
+from ..db_utils import with_transaction
 from .utils import get_record_by_id, get_records_by_field
 
-async def create_asset(asset_data: Dict[str, Any], user_id: str) -> TaprootAsset:
+@with_transaction
+async def create_asset(asset_data: Dict[str, Any], user_id: str, conn=None) -> TaprootAsset:
     """
     Create a new Taproot Asset record.
     
     Args:
         asset_data: Dictionary containing asset data
         user_id: The ID of the user creating the asset
+        conn: Optional database connection to reuse
         
     Returns:
         TaprootAsset: The created asset
@@ -44,7 +47,7 @@ async def create_asset(asset_data: Dict[str, Any], user_id: str) -> TaprootAsset
     asset = TaprootAsset(**asset_dict)
     
     # Insert using standard pattern
-    await db.insert(get_table_name("assets"), asset)
+    await conn.insert(get_table_name("assets"), asset)
     
     return asset
 
