@@ -48,29 +48,6 @@ async def m001_initial(db):
     )
 
 
-async def m003_create_fee_transactions_table(db):
-    """
-    Migration to create a table for tracking sat fee transactions.
-    """
-    try:
-        await db.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {get_table_name("fee_transactions")} (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                wallet_id TEXT NOT NULL,
-                asset_payment_hash TEXT NOT NULL,
-                fee_amount_msat {db.big_int} NOT NULL,
-                status TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT {db.timestamp_now}
-            );
-            """
-        )
-        logger.info(f"Created fee_transactions table")
-    except Exception as e:
-        logger.warning(f"Error in migration m003_create_fee_transactions_table: {str(e)}")
-
-
 async def m004_create_payments_table(db):
     """
     Migration to create a table for tracking sent payments of Taproot Assets.

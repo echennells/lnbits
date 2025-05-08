@@ -14,7 +14,6 @@ from .models import TaprootInvoiceRequest, TaprootPaymentRequest
 from .services.asset_service import AssetService
 from .services.invoice_service import InvoiceService
 from .services.payment_service import PaymentService
-from .services.payment_record_service import PaymentRecordService
 
 # The parent router in __init__.py already adds the "/taproot_assets" prefix
 # So we only need to add the API path here
@@ -118,17 +117,7 @@ async def api_list_payments(
 ):
     """List all Taproot Asset payments for the current user."""
     log_debug(API, f"Listing payments for user {wallet.wallet.user}")
-    return await PaymentRecordService.get_user_payments(wallet.wallet.user)
-
-
-@taproot_assets_api_router.get("/fee-transactions", status_code=HTTPStatus.OK)
-@handle_api_error
-async def api_list_fee_transactions(
-    wallet: WalletTypeInfo = Depends(require_admin_key),
-):
-    """List all fee transactions for the current user."""
-    log_debug(API, f"Listing fee transactions for wallet {wallet.wallet.id}")
-    return await PaymentRecordService.get_fee_transactions(wallet)
+    return await PaymentService.get_user_payments(wallet.wallet.user)
 
 
 @taproot_assets_api_router.get("/invoices", status_code=HTTPStatus.OK)

@@ -13,7 +13,7 @@ import bolt11
 
 from lnbits.core.models import WalletTypeInfo
 
-from ..models import TaprootPaymentRequest, PaymentResponse, ParsedInvoice
+from ..models import TaprootPaymentRequest, PaymentResponse, ParsedInvoice, TaprootPayment
 from ..logging_utils import log_debug, log_info, log_warning, log_error, PAYMENT, API
 from ..wallets.taproot_factory import TaprootAssetsFactory
 from ..error_utils import raise_http_exception, ErrorContext
@@ -21,7 +21,8 @@ from ..error_utils import raise_http_exception, ErrorContext
 from ..crud import (
     get_invoice_by_payment_hash,
     is_internal_payment,
-    is_self_payment
+    is_self_payment,
+    get_user_payments
 )
 from ..settlement_service import SettlementService
 
@@ -407,4 +408,28 @@ class PaymentService:
                 error=error_message,
                 asset_amount=asset_amount,
                 asset_id=asset_id
+            )
+            
+    @staticmethod
+    async def get_user_payments(user_id: str) -> List[TaprootPayment]:
+        """
+        Get all Taproot Asset payments for a user.
+        
+        Args:
+            user_id: The user ID
+            
+        Returns:
+            List[TaprootPayment]: List of payments
+            
+        Raises:
+            HTTPException: If there's an error retrieving payments
+        """
+        try:
+            payments = await get_user_payments(user_id)
+            return payments
+        except Exception as e:
+            log_error(PAYMENT, f"Error retrieving payments: {str(e)}")
+            raise_http_exception(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail=f"Failed to retrieve payments: {str(e)}",
             )

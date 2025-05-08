@@ -14,7 +14,7 @@ from .invoices import (
     update_invoice_for_settlement
 )
 from .payments import (
-    create_payment_record, get_user_payments, create_fee_transaction, get_fee_transactions
+    create_payment_record, get_user_payments
 )
 from .balances import (
     get_asset_balance, get_wallet_asset_balances, update_asset_balance

@@ -75,17 +75,6 @@ class TaprootPayment(BaseModel):
     preimage: Optional[str] = None
 
 
-class FeeTransaction(BaseModel):
-    """Model for tracking satoshi fee transactions."""
-    id: str
-    user_id: str
-    wallet_id: str
-    asset_payment_hash: str
-    fee_amount_msat: int
-    status: str  # "deducted", "refunded", or "failed"
-    created_at: datetime
-
-
 class AssetBalance(BaseModel):
     """Model for a user's asset balance."""
     id: str
