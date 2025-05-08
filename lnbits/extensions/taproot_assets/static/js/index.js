@@ -94,6 +94,12 @@ window.app = Vue.createApp({
         connected: false,
         reconnecting: false,
         fallbackPolling: false
+      },
+      
+      // Camera for QR code scanning
+      camera: {
+        show: false,
+        camera: 'auto'
       }
     }
   },
@@ -694,6 +700,68 @@ window.app = Vue.createApp({
         clearInterval(this.refreshInterval);
         this.refreshInterval = null;
       }
+    },
+    
+    // Camera methods for QR code scanning
+    showCamera() {
+      this.camera.show = true;
+    },
+    
+    closeCamera() {
+      this.camera.show = false;
+    },
+    
+    async onInit(promise) {
+      try {
+        await promise;
+      } catch (error) {
+        const mapping = {
+          NotAllowedError: 'ERROR: you need to grant camera access permission',
+          NotFoundError: 'ERROR: no camera on this device',
+          NotSupportedError: 'ERROR: secure context required (HTTPS, localhost)',
+          NotReadableError: 'ERROR: is the camera already in use?',
+          OverconstrainedError: 'ERROR: installed cameras are not suitable',
+          StreamApiNotSupportedError: 'ERROR: Stream API is not supported in this browser',
+          InsecureContextError: 'ERROR: Camera access is only permitted in secure context. Use HTTPS or localhost rather than HTTP.'
+        }
+        const valid_error = Object.keys(mapping).filter(key => {
+          return error.name === key
+        })
+        const camera_error = valid_error
+          ? mapping[valid_error]
+          : `ERROR: Camera error (${error.name})`
+        this.camera.show = false;
+        
+        // Use Quasar notification to match main wallet
+        if (window.Quasar) {
+          window.Quasar.Notify.create({
+            message: camera_error,
+            type: 'negative'
+          });
+        } else {
+          NotificationService.showError(camera_error);
+        }
+      }
+    },
+    
+    onDecode(res) {
+      // Use the same format as the main LNbits wallet
+      const paymentRequest = res[0].rawValue;
+      
+      // Clean up the payment request (remove lightning: prefix if present)
+      let cleanRequest = paymentRequest;
+      if (cleanRequest.startsWith('lightning:')) {
+        cleanRequest = cleanRequest.slice(10);
+      }
+      
+      // Set the scanned result to the payment request field
+      this.paymentDialog.form.paymentRequest = cleanRequest;
+      
+      // Close the camera dialog
+      this.camera.show = false;
+      
+      // Parse the invoice
+      this.parseInvoice(cleanRequest);
     }
   },
   

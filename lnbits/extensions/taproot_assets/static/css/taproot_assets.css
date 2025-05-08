@@ -137,14 +137,31 @@
 .q-dialog lnbits-qrcode {
   display: inline-block;
   background-color: white;
-  padding: 15px;
+  padding: 16px;
   border-radius: 8px;
   margin: 0 auto;
+  max-width: 100%;
+  box-sizing: border-box;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
 }
 
 .q-dialog lnbits-qrcode svg {
   width: 100%;
   height: auto;
+  max-width: 350px;
+  display: block;
+}
+
+/* Ensure QR code is centered and properly sized on mobile */
+@media (max-width: 480px) {
+  .q-dialog lnbits-qrcode {
+    padding: 12px;
+  }
+  
+  /* Adjust the created invoice dialog padding for mobile */
+  .q-dialog .q-card {
+    padding: 12px !important;
+  }
 }
 
 .text-bold {
