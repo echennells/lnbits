@@ -24,7 +24,7 @@ from ..crud import (
     is_self_payment,
     get_user_payments
 )
-from ..settlement_service import SettlementService
+from .settlement_service import SettlementService
 
 
 class PaymentService:

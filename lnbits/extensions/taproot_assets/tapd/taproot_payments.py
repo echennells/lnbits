@@ -16,7 +16,7 @@ from .taproot_adapter import (
 )
 
 # Import Settlement Service
-from ..settlement_service import SettlementService
+from ..services.settlement_service import SettlementService
 
 # Import database functions from crud re-exports
 from ..crud import (

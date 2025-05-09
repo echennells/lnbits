@@ -10,13 +10,13 @@ import grpc
 import grpc.aio
 from loguru import logger
 
-from .tapd.taproot_adapter import invoices_pb2
+from ..tapd.taproot_adapter import invoices_pb2
 from .notification_service import NotificationService
-from .models import TaprootInvoice, TaprootPayment
-from .db_utils import transaction, with_transaction
+from ..models import TaprootInvoice, TaprootPayment
+from ..db_utils import transaction, with_transaction
 
 # Import database functions from crud re-exports
-from .crud import (
+from ..crud import (
     get_invoice_by_payment_hash,
     update_invoice_status,
     is_internal_payment,
@@ -26,11 +26,11 @@ from .crud import (
     create_payment_record
 )
 
-from .logging_utils import (
+from ..logging_utils import (
     log_debug, log_info, log_warning, log_error, 
     log_exception, PAYMENT, TRANSFER, LogContext
 )
-from .error_utils import ErrorContext
+from ..error_utils import ErrorContext
 
 class SettlementService:
     """

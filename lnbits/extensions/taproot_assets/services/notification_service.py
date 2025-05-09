@@ -7,7 +7,7 @@ from typing import Dict, Any, List, Optional, Union
 from loguru import logger
 
 from lnbits.core.services.websockets import websocket_manager
-from .logging_utils import (
+from ..logging_utils import (
     log_debug, log_info, log_warning, log_error, 
     WEBSOCKET, ASSET
 )
@@ -199,8 +199,8 @@ class NotificationService:
         Returns:
             Dict mapping update types to success status
         """
-        from .tapd.taproot_wallet import TaprootWalletExtension
-        from .crud.balances import get_asset_balance
+        from ..tapd.taproot_wallet import TaprootWalletExtension
+        from ..crud.balances import get_asset_balance
         
         log_info(WEBSOCKET, f"Preparing transaction complete notifications for user {user_id}")
         
@@ -224,7 +224,7 @@ class NotificationService:
         # Get updated assets for notification
         try:
             # Get assets directly from the database instead of using the wallet
-            from .crud.assets import get_assets
+            from ..crud.assets import get_assets
             
             log_debug(ASSET, f"Fetching assets for user {user_id} for notification")
             

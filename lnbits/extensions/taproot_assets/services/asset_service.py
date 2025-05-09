@@ -20,7 +20,7 @@ from ..crud import (
     get_wallet_asset_balances,
     get_asset_transactions
 )
-from ..notification_service import NotificationService
+from .notification_service import NotificationService
 
 
 class AssetService:

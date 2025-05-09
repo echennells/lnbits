@@ -19,8 +19,8 @@ from ..crud import (
     get_invoice_by_payment_hash,
     get_user_invoices
 )
-from ..notification_service import NotificationService
-from ..settlement_service import SettlementService
+from .notification_service import NotificationService
+from .settlement_service import SettlementService
 from ..tapd_settings import taproot_settings
 
 

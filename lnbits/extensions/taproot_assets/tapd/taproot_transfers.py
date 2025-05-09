@@ -19,7 +19,7 @@ from ..crud import (
 )
 
 # Import Settlement Service
-from ..settlement_service import SettlementService
+from ..services.settlement_service import SettlementService
 from ..logging_utils import (
     log_debug, log_info, log_warning, log_error, 
     log_exception, TRANSFER, LogContext
