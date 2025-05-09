@@ -199,7 +199,7 @@ class NotificationService:
         Returns:
             Dict mapping update types to success status
         """
-        from .wallets.taproot_wallet import TaprootWalletExtension
+        from .tapd.taproot_wallet import TaprootWalletExtension
         from .crud.balances import get_asset_balance
         
         log_info(WEBSOCKET, f"Preparing transaction complete notifications for user {user_id}")

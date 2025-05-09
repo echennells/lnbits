@@ -15,7 +15,7 @@ from lnbits.core.models import WalletTypeInfo
 
 from ..models import TaprootPaymentRequest, PaymentResponse, ParsedInvoice, TaprootPayment
 from ..logging_utils import log_debug, log_info, log_warning, log_error, PAYMENT, API
-from ..wallets.taproot_factory import TaprootAssetsFactory
+from ..tapd.taproot_factory import TaprootAssetsFactory
 from ..error_utils import raise_http_exception, ErrorContext
 # Import from crud re-exports
 from ..crud import (
@@ -61,8 +61,8 @@ class PaymentService:
             asset_amount = None
             
             # Import necessary modules and create a node connection
-            from ..wallets.taproot_factory import TaprootAssetsFactory
-            from ..wallets.taproot_adapter import tapchannel_pb2
+            from ..tapd.taproot_factory import TaprootAssetsFactory
+            from ..tapd.taproot_adapter import tapchannel_pb2
             from ..tapd_settings import taproot_settings
             
             # Create a temporary wallet/node instance to access the tapd server

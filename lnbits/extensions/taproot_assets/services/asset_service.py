@@ -10,7 +10,7 @@ from lnbits.core.models import WalletTypeInfo, User
 from lnbits.core.crud import get_user
 
 from ..models import TaprootAsset, AssetBalance, AssetTransaction
-from ..wallets.taproot_factory import TaprootAssetsFactory
+from ..tapd.taproot_factory import TaprootAssetsFactory
 from ..error_utils import raise_http_exception, ErrorContext
 from ..logging_utils import API, ASSET
 # Import from crud re-exports

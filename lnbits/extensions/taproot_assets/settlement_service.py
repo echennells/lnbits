@@ -10,7 +10,7 @@ import grpc
 import grpc.aio
 from loguru import logger
 
-from .wallets.taproot_adapter import invoices_pb2
+from .tapd.taproot_adapter import invoices_pb2
 from .notification_service import NotificationService
 from .models import TaprootInvoice, TaprootPayment
 from .db_utils import transaction, with_transaction

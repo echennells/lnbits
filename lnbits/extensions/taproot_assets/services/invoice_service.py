@@ -9,7 +9,7 @@ from loguru import logger
 from lnbits.core.models import WalletTypeInfo, User
 
 from ..models import TaprootInvoiceRequest, InvoiceResponse, TaprootInvoice
-from ..wallets.taproot_factory import TaprootAssetsFactory
+from ..tapd.taproot_factory import TaprootAssetsFactory
 from ..error_utils import raise_http_exception, ErrorContext
 from ..logging_utils import API
 # Import from crud re-exports
