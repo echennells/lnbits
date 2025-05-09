@@ -49,44 +49,6 @@ class ConnectionPoolManager:
         # We're just adding monitoring and management on top
         logger.info("Connection pool manager initialized")
     
-    async def get_stats(self) -> Dict[str, Any]:
-        """
-        Get current pool statistics.
-        
-        Returns:
-            Dict containing pool statistics
-        """
-        # Get SQLAlchemy pool stats if available
-        engine_stats = {}
-        if hasattr(self.db.engine, 'pool'):
-            pool = self.db.engine.pool
-            if hasattr(pool, 'size') and callable(pool.size):
-                engine_stats['pool_size'] = pool.size()
-            if hasattr(pool, 'checkedin') and callable(pool.checkedin):
-                engine_stats['checkedin'] = pool.checkedin()
-            if hasattr(pool, 'checkedout') and callable(pool.checkedout):
-                engine_stats['checkedout'] = pool.checkedout()
-            if hasattr(pool, 'overflow') and callable(pool.overflow):
-                engine_stats['overflow'] = pool.overflow()
-        
-        # Combine with our internal stats
-        return {
-            **self.stats,
-            **engine_stats,
-            'uptime': time.time() - self.stats['last_reset']
-        }
-    
-    def reset_stats(self) -> None:
-        """Reset the statistics counters."""
-        self.stats = {
-            'connections_created': 0,
-            'connections_reused': 0,
-            'transactions_started': 0,
-            'transactions_committed': 0,
-            'transactions_rolled_back': 0,
-            'last_reset': time.time()
-        }
-    
     def _increment_stat(self, stat_name: str) -> None:
         """Increment a specific statistic counter."""
         if stat_name in self.stats:

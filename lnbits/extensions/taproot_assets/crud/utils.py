@@ -108,19 +108,3 @@ async def get_records_by_user(
         List of model instances
     """
     return await get_records_by_field(table, "user_id", user_id, model_class, conn=conn)
-
-async def execute_transaction(operations: Callable):
-    """
-    Execute multiple operations in a transaction.
-    
-    This function is deprecated in favor of using the transaction context manager
-    or the with_transaction decorator from db_utils.py.
-    
-    Args:
-        operations: A function that takes a database connection and performs operations
-        
-    Returns:
-        The result of the operations function
-    """
-    async with transaction() as conn:
-        return await operations(conn)

@@ -49,49 +49,6 @@ class TaprootTransferManager:
         _monitoring_instances.add(self)
         logger.info("TaprootTransferManager initialized")
 
-    async def manually_settle_invoice(
-        self,
-        payment_hash: str,
-        script_key: Optional[str] = None
-    ) -> bool:
-        """
-        Manually settle a HODL invoice. Used as a fallback if automatic settlement fails.
-        This is now a thin wrapper around SettlementService.settle_invoice.
-
-        Args:
-            payment_hash: The payment hash of the invoice to settle
-            script_key: Optional script key to use for lookup if payment hash is not found directly
-
-        Returns:
-            bool: True if settlement was successful, False otherwise
-        """
-        with LogContext(TRANSFER, f"manually settling invoice {payment_hash[:8]}...", log_level="info"):
-            try:
-                # Check if this is an internal payment
-                is_internal = await is_internal_payment(payment_hash)
-                
-                # Get wallet info if available
-                user_id = None
-                wallet_id = None
-                if hasattr(self.node, 'wallet') and self.node.wallet:
-                    user_id = self.node.wallet.user
-                    wallet_id = self.node.wallet.id
-                
-                # Delegate to the settlement service
-                success, _ = await SettlementService.settle_invoice(
-                    payment_hash=payment_hash,
-                    node=self.node,
-                    is_internal=is_internal,
-                    user_id=user_id,
-                    wallet_id=wallet_id
-                )
-                
-                return success
-                    
-            except Exception as e:
-                log_error(TRANSFER, f"Failed to manually settle invoice: {str(e)}")
-                return False
-
     async def monitor_asset_transfers(self):
         """
         Monitor asset transfers and settle HODL invoices when transfers complete.

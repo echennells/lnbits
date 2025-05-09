@@ -194,7 +194,7 @@ class TaprootWalletExtension(Wallet):
                 error_message=f"Failed to create invoice: {str(e)}"
             )
         finally:
-            await self.cleanup()
+            pass  # No cleanup needed
 
     async def send_raw_payment(
         self,
@@ -300,4 +300,4 @@ class TaprootWalletExtension(Wallet):
                 error_message=f"Failed to pay invoice: {str(e)}"
             )
         finally:
-            await self.cleanup()
+            pass  # No cleanup needed

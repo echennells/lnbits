@@ -430,21 +430,6 @@ class TaprootAssetsNodeExtension(Node):
         with LogContext(NODE, f"monitoring invoice {payment_hash[:8]}...", log_level="debug"):
             return await self.transfer_manager.monitor_invoice(payment_hash)
 
-    async def manually_settle_invoice(self, payment_hash: str, script_key: Optional[str] = None):
-        """
-        Manually settle a HODL invoice using the stored preimage.
-        This can be used as a fallback if automatic settlement fails.
-
-        Args:
-            payment_hash: The payment hash of the invoice to settle
-            script_key: Optional script key to use for lookup if payment hash is not found directly
-
-        Returns:
-            bool: True if settlement was successful, False otherwise
-        """
-        with LogContext(NODE, f"manually settling invoice {payment_hash[:8]}...", log_level="info"):
-            return await self.transfer_manager.manually_settle_invoice(payment_hash, script_key)
-
     async def close(self):
         """Close the gRPC channels."""
         log_debug(NODE, "Closing gRPC channels")
