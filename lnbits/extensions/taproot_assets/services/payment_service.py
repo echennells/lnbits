@@ -38,6 +38,10 @@ class PaymentService:
         """
         Parse a BOLT11 payment request to extract invoice details.
         
+        This method uses the tapd server's DecodeAssetPayReq RPC to get the asset amount
+        for a given invoice. It tries all available assets in the user's wallet until it finds
+        a match.
+        
         Args:
             payment_request: BOLT11 payment request to parse
             
@@ -45,34 +49,23 @@ class PaymentService:
             ParsedInvoice: Parsed invoice data
             
         Raises:
-            Exception: If the invoice format is invalid
+            Exception: If the invoice format is invalid or the asset amount cannot be determined
         """
         with ErrorContext("parse_invoice", API):
             # Use the bolt11 library to decode the invoice
             decoded = bolt11.decode(payment_request)
             
-            # Extract the description to look for asset information
+            # Extract the description and initialize variables
             description = decoded.description if hasattr(decoded, "description") else ""
-            log_info(API, f"Invoice description: {description}")
-            
-            # Initialize with default values
             asset_id = None
             asset_amount = None
             
-            # Try to extract asset_id from description
-            if description and 'asset_id=' in description:
-                asset_id_match = re.search(r'asset_id=([a-fA-F0-9]{64})', description)
-                if asset_id_match:
-                    asset_id = asset_id_match.group(1)
-                    log_info(API, f"Extracted asset_id from description: {asset_id}")
-            
-            # Import the necessary modules
+            # Import necessary modules and create a node connection
             from ..wallets.taproot_factory import TaprootAssetsFactory
             from ..wallets.taproot_adapter import tapchannel_pb2
             from ..tapd_settings import taproot_settings
             
-            # Create a wallet instance without user_id and wallet_id
-            # This is just to get access to the tapd node for the RPC call
+            # Create a temporary wallet/node instance to access the tapd server
             wallet, node = await TaprootAssetsFactory.create_wallet_and_node(
                 host=taproot_settings.tapd_host,
                 network=taproot_settings.tapd_network,
@@ -83,63 +76,41 @@ class PaymentService:
                 ln_macaroon_hex=taproot_settings.lnd_macaroon_hex
             )
             
-            # If we have an asset_id, try to use it directly
-            if asset_id:
-                try:
-                    if node and node.tapchannel_stub:
+            # Try to get the asset amount by checking all available assets
+            try:
+                # Get all available assets
+                assets = await node.asset_manager.list_assets()
+                log_info(API, f"Trying with {len(assets)} available assets")
+                
+                # Try each asset ID
+                for asset in assets:
+                    try:
+                        asset_id_to_try = asset.get("asset_id")
+                        if not asset_id_to_try:
+                            continue
+                            
+                        log_info(API, f"Trying with asset_id: {asset_id_to_try}")
+                        
                         # Create the request
                         request = tapchannel_pb2.AssetPayReq(
-                            asset_id=bytes.fromhex(asset_id),
+                            asset_id=bytes.fromhex(asset_id_to_try),
                             pay_req_string=payment_request
                         )
                         
                         # Call the DecodeAssetPayReq RPC
-                        log_info(API, f"Calling DecodeAssetPayReq for asset_id={asset_id}")
                         response = await node.tapchannel_stub.DecodeAssetPayReq(request)
                         
-                        # Extract the asset amount
+                        # If we get here without an exception, we found a matching asset
                         if hasattr(response, 'asset_amount'):
                             asset_amount = float(response.asset_amount)
-                            log_info(API, f"Got asset amount from DecodeAssetPayReq: {asset_amount}")
-                except Exception as e:
-                    log_warning(API, f"Failed to get asset amount with provided asset_id: {e}")
-            
-            # If we still don't have an asset amount, try with all available assets
-            if asset_amount is None:
-                try:
-                    # Get all available assets
-                    assets = await node.asset_manager.list_assets()
-                    log_info(API, f"Trying with {len(assets)} available assets")
-                    
-                    # Try each asset ID
-                    for asset in assets:
-                        try:
-                            asset_id_to_try = asset.get("asset_id")
-                            if not asset_id_to_try:
-                                continue
-                                
-                            log_info(API, f"Trying with asset_id: {asset_id_to_try}")
-                            
-                            # Create the request
-                            request = tapchannel_pb2.AssetPayReq(
-                                asset_id=bytes.fromhex(asset_id_to_try),
-                                pay_req_string=payment_request
-                            )
-                            
-                            # Call the DecodeAssetPayReq RPC
-                            response = await node.tapchannel_stub.DecodeAssetPayReq(request)
-                            
-                            # If we get here without an exception, we found a matching asset
-                            if hasattr(response, 'asset_amount'):
-                                asset_amount = float(response.asset_amount)
-                                asset_id = asset_id_to_try
-                                log_info(API, f"Found matching asset_id={asset_id} with amount={asset_amount}")
-                                break
-                        except Exception as e:
-                            # This asset ID didn't work, try the next one
-                            log_debug(API, f"Asset {asset_id_to_try} didn't match: {str(e)}")
-                except Exception as e:
-                    log_warning(API, f"Failed to get assets or try them: {str(e)}")
+                            asset_id = asset_id_to_try
+                            log_info(API, f"Found matching asset_id={asset_id} with amount={asset_amount}")
+                            break
+                    except Exception as e:
+                        # This asset ID didn't work, try the next one
+                        log_debug(API, f"Asset {asset_id_to_try} didn't match: {str(e)}")
+            except Exception as e:
+                log_warning(API, f"Failed to get assets or try them: {str(e)}")
             
             # If we still don't have an asset amount, try to extract it from the description
             if asset_amount is None and description:
