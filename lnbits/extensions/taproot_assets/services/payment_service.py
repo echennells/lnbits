@@ -373,8 +373,7 @@ class PaymentService:
                 asset_amount=invoice.asset_amount,
                 asset_id=invoice.asset_id,
                 memo=invoice.memo,
-                internal_payment=True,  # Flag to indicate this was an internal payment
-                self_payment=is_self  # Flag to indicate if this was a self-payment
+                internal_payment=True  # Flag to indicate this was an internal payment
             )
     
     @staticmethod

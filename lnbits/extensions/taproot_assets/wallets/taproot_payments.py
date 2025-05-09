@@ -264,8 +264,6 @@ class TaprootPaymentManager:
                     detail = "Multiple channels found for this asset. Please select a specific channel."
                 elif "no asset channel balance found" in error_details:
                     detail = "Insufficient channel balance for this asset."
-                elif "self-payments not allowed" in error_details:
-                    detail = "Self-payments are not allowed. This invoice belongs to you and needs to be processed through the self-payment flow."
                 else:
                     detail = f"gRPC error: {e.details()}"
                     
@@ -372,10 +370,6 @@ class TaprootPaymentManager:
                     "asset_amount": invoice.asset_amount,
                     "internal_payment": True
                 }
-                
-                # Add self_payment flag if it's a self-payment
-                if is_self_pay:
-                    response["self_payment"] = True
                 
                 return response
 

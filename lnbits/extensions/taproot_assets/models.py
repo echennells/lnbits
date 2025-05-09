@@ -169,7 +169,6 @@ class PaymentResponse(BaseModel):
     asset_id: Optional[str] = None
     memo: Optional[str] = None
     internal_payment: Optional[bool] = False
-    self_payment: Optional[bool] = False
     status: str = "success"  # Can be "success" or "failed"
     error: Optional[str] = None  # Error message if payment failed
 
