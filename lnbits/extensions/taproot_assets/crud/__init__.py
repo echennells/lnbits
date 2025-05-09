@@ -7,7 +7,7 @@ Re-exports all CRUD functions to maintain backward compatibility.
 from ..db import db, get_table_name
 
 # Import all functions from the modules
-from .assets import create_asset, get_assets, get_asset
+from .assets import create_asset, get_assets
 from .invoices import (
     create_invoice, get_invoice, get_invoice_by_payment_hash, update_invoice_status,
     get_user_invoices, is_self_payment, is_internal_payment, validate_invoice_for_settlement,

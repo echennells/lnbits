@@ -44,17 +44,6 @@ async def api_list_assets(
     return await AssetService.list_assets(wallet)
 
 
-@taproot_assets_api_router.get("/assets/{asset_id}", status_code=HTTPStatus.OK)
-@handle_api_error
-async def api_get_asset(
-    asset_id: str,
-    wallet: WalletTypeInfo = Depends(require_admin_key),
-):
-    """Get a specific Taproot Asset by ID with user balance."""
-    log_debug(API, f"Getting asset {asset_id} for wallet {wallet.wallet.id}")
-    return await AssetService.get_asset(asset_id, wallet)
-
-
 @taproot_assets_api_router.post("/invoice", status_code=HTTPStatus.CREATED)
 @handle_api_error
 async def api_create_invoice(

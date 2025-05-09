@@ -64,17 +64,3 @@ async def get_assets(user_id: str, conn=None) -> List[TaprootAsset]:
         List[TaprootAsset]: List of assets owned by the user
     """
     return await get_records_by_field("assets", "user_id", user_id, TaprootAsset, conn=conn)
-
-
-async def get_asset(asset_id: str, conn=None) -> Optional[TaprootAsset]:
-    """
-    Get a specific Taproot Asset by ID.
-    
-    Args:
-        asset_id: The asset ID to look up
-        conn: Optional database connection to reuse
-        
-    Returns:
-        Optional[TaprootAsset]: The asset if found, None otherwise
-    """
-    return await get_record_by_id("assets", asset_id, TaprootAsset, conn)

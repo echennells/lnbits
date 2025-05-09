@@ -16,7 +16,6 @@ from ..logging_utils import API, ASSET
 # Import from crud re-exports
 from ..crud import (
     get_assets,
-    get_asset,
     get_asset_balance,
     get_wallet_asset_balances,
     get_asset_transactions
@@ -76,53 +75,6 @@ class AssetService:
                 await NotificationService.notify_assets_update(wallet.wallet.user, assets_data)
                 
             return assets_data
-    
-    @staticmethod
-    async def get_asset(asset_id: str, wallet: WalletTypeInfo) -> Dict[str, Any]:
-        """
-        Get a specific Taproot Asset by ID with user balance.
-        
-        Args:
-            asset_id: The asset ID
-            wallet: The wallet information
-            
-        Returns:
-            Dict[str, Any]: Asset information with balance
-            
-        Raises:
-            HTTPException: If the asset is not found or doesn't belong to the user
-        """
-        with ErrorContext("get_asset", ASSET):
-            # Get user for permission check
-            user = await get_user(wallet.wallet.user)
-            if not user:
-                raise_http_exception(
-                    status_code=HTTPStatus.NOT_FOUND,
-                    detail="User not found",
-                )
-                
-            asset = await get_asset(asset_id)
-
-            if not asset:
-                raise_http_exception(
-                    status_code=HTTPStatus.NOT_FOUND,
-                    detail="Asset not found",
-                )
-
-            if asset.user_id != user.id:
-                raise_http_exception(
-                    status_code=HTTPStatus.FORBIDDEN,
-                    detail="Not your asset",
-                )
-            
-            # Get user's balance for this asset
-            balance = await get_asset_balance(wallet.wallet.id, asset.asset_id)
-            
-            # Add user balance to the response
-            asset_dict = asset.dict()
-            asset_dict["user_balance"] = balance.balance if balance else 0
-            
-            return asset_dict
     
     @staticmethod
     async def get_asset_balances(wallet: WalletTypeInfo) -> List[AssetBalance]:
