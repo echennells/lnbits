@@ -91,7 +91,7 @@ class TaprootWalletExtension(Wallet):
 
     async def get_raw_node_invoice(
         self,
-        memo: str,
+        description: str,
         asset_id: str,
         asset_amount: int,
         expiry: Optional[int] = None,
@@ -102,7 +102,7 @@ class TaprootWalletExtension(Wallet):
         This is a low-level operation that directly interacts with the node.
 
         Args:
-            memo: Description for the invoice
+            description: Description for the invoice
             asset_id: The ID of the Taproot Asset
             asset_amount: The amount of the asset to transfer
             expiry: Optional expiry time in seconds
@@ -119,7 +119,7 @@ class TaprootWalletExtension(Wallet):
             log_debug(WALLET, f"Creating raw node invoice for {asset_id[:8]}..., amount={asset_amount}{peer_info}")
             
             result = await self.node.create_asset_invoice(
-                memo=memo,
+                description=description,  # Now using description parameter
                 asset_id=asset_id,
                 asset_amount=asset_amount,
                 expiry=expiry,
@@ -168,7 +168,7 @@ class TaprootWalletExtension(Wallet):
         try:
             # Create the invoice using the low-level method
             invoice_result = await self.get_raw_node_invoice(
-                memo=memo or "Taproot Asset Transfer",
+                description=memo or "Taproot Asset Transfer",
                 asset_id=asset_id,
                 asset_amount=amount,
                 expiry=expiry,

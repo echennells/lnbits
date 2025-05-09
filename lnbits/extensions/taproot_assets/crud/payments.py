@@ -20,7 +20,7 @@ async def create_payment_record(
     fee_sats: int,
     user_id: str,
     wallet_id: str,
-    memo: Optional[str] = None,
+    description: Optional[str] = None,
     preimage: Optional[str] = None,
     conn=None
 ) -> TaprootPayment:
@@ -35,7 +35,7 @@ async def create_payment_record(
         fee_sats: The fee in satoshis
         user_id: The user ID
         wallet_id: The wallet ID
-        memo: Optional memo
+        description: Optional description
         preimage: Optional payment preimage
         conn: Optional database connection to reuse
         
@@ -53,7 +53,7 @@ async def create_payment_record(
         asset_id=asset_id,
         asset_amount=asset_amount,
         fee_sats=fee_sats,
-        memo=memo,
+        description=description,
         status="completed",
         user_id=user_id,
         wallet_id=wallet_id,

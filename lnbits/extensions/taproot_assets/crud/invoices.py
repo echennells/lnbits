@@ -20,7 +20,7 @@ async def create_invoice(
     payment_request: str,
     user_id: str,
     wallet_id: str,
-    memo: Optional[str] = None,
+    description: Optional[str] = None,
     expiry: Optional[int] = None,
     conn=None
 ) -> TaprootInvoice:
@@ -35,7 +35,7 @@ async def create_invoice(
         payment_request: The payment request string
         user_id: The ID of the user creating the invoice
         wallet_id: The ID of the wallet for the invoice
-        memo: Optional memo for the invoice
+        description: Optional description for the invoice
         expiry: Optional expiry time in seconds
         conn: Optional database connection to reuse
         
@@ -54,7 +54,7 @@ async def create_invoice(
         asset_id=asset_id,
         asset_amount=asset_amount,
         satoshi_amount=satoshi_amount,
-        memo=memo,
+        description=description,
         status="pending",
         user_id=user_id,
         wallet_id=wallet_id,

@@ -30,7 +30,7 @@ class TaprootInvoiceRequest(BaseModel):
     """Request model for creating a Taproot Asset invoice."""
     asset_id: str
     amount: int
-    memo: Optional[str] = None
+    description: Optional[str] = None
     expiry: Optional[int] = None
     peer_pubkey: Optional[str] = None  # Add peer_pubkey parameter for multi-channel support
 
@@ -50,7 +50,7 @@ class TaprootInvoice(BaseModel):
     asset_id: str
     asset_amount: int
     satoshi_amount: int  # Satoshi amount for protocol requirements (from settings)
-    memo: Optional[str] = None
+    description: Optional[str] = None
     status: str = "pending"
     user_id: str
     wallet_id: str
@@ -67,7 +67,7 @@ class TaprootPayment(BaseModel):
     asset_id: str
     asset_amount: int
     fee_sats: int
-    memo: Optional[str] = None
+    description: Optional[str] = None
     status: str = "completed"
     user_id: str
     wallet_id: str
@@ -94,7 +94,7 @@ class AssetTransaction(BaseModel):
     payment_hash: Optional[str] = None
     amount: int
     fee: int = 0
-    memo: Optional[str] = None
+    description: Optional[str] = None
     type: str  # 'credit', 'debit'
     created_at: datetime
 
@@ -167,7 +167,7 @@ class PaymentResponse(BaseModel):
     routing_fees_sats: Optional[int] = None
     asset_amount: int
     asset_id: Optional[str] = None
-    memo: Optional[str] = None
+    description: Optional[str] = None
     internal_payment: Optional[bool] = False
     status: str = "success"  # Can be "success" or "failed"
     error: Optional[str] = None  # Error message if payment failed

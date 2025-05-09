@@ -223,8 +223,8 @@ class PaymentService:
                 asset_id = parsed_invoice.asset_id or ""
                 log_info(PAYMENT, f"Using asset_id from parsed invoice: {asset_id}")
             
-            # Extract memo from the invoice description if available
-            memo = parsed_invoice.description if parsed_invoice.description else None
+            # Extract description from the parsed invoice
+            description = parsed_invoice.description if parsed_invoice.description else None
             
             # Use the centralized SettlementService to record the payment
             # IMPORTANT: Make sure to use the correct asset amount (parsed_invoice.amount) and not the fee_limit
@@ -239,7 +239,7 @@ class PaymentService:
                 fee_sats=routing_fees_sats,         # Use the actual fee paid, not the limit
                 user_id=wallet.wallet.user,
                 wallet_id=wallet.wallet.id,
-                memo=memo,
+                description=description,
                 preimage=preimage,
                 is_internal=False,
                 is_self_payment=False
@@ -258,7 +258,7 @@ class PaymentService:
                 routing_fees_sats=routing_fees_sats,
                 asset_amount=parsed_invoice.amount,  # Use the correct asset amount from the invoice
                 asset_id=asset_id,
-                memo=memo
+                description=description
             )
     
     @staticmethod
@@ -354,7 +354,7 @@ class PaymentService:
                     fee_sats=0,  # No fee for internal payments
                     user_id=wallet.wallet.user,
                     wallet_id=wallet.wallet.id,
-                    memo=invoice.memo or "",
+                    description=invoice.description or "",
                     preimage=settlement_result.get('preimage', ''),
                     is_internal=True,  # Mark as internal so it won't create another transaction
                     is_self_payment=is_self
@@ -372,7 +372,7 @@ class PaymentService:
                 routing_fees_sats=0,
                 asset_amount=invoice.asset_amount,
                 asset_id=invoice.asset_id,
-                memo=invoice.memo,
+                description=invoice.description,
                 internal_payment=True  # Flag to indicate this was an internal payment
             )
     

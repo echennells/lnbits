@@ -175,7 +175,7 @@ class NotificationService:
         asset_id: str,
         asset_amount: int,
         tx_type: str,
-        memo: Optional[str] = None,
+        description: Optional[str] = None,
         fee_sats: int = 0,
         is_internal: bool = False,
         is_self_payment: bool = False
@@ -191,7 +191,7 @@ class NotificationService:
             asset_id: Asset ID involved in the transaction
             asset_amount: Amount of the asset
             tx_type: Transaction type ("credit" or "debit")
-            memo: Optional memo for the transaction
+            description: Optional description for the transaction
             fee_sats: Fee in satoshis
             is_internal: Whether this is an internal payment
             is_self_payment: Whether this is a self-payment
@@ -212,7 +212,7 @@ class NotificationService:
             "asset_id": asset_id,
             "asset_amount": asset_amount,
             "fee_sats": fee_sats,
-            "memo": memo or "",  # Use empty string if no memo provided
+            "description": description or "",  # Use empty string if no description provided
             "status": "completed",
             "internal_payment": is_internal,
             "self_payment": is_self_payment

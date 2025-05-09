@@ -21,7 +21,7 @@ async def record_asset_transaction(
     tx_type: str,  # 'credit' or 'debit'
     payment_hash: Optional[str] = None,
     fee: int = 0,
-    memo: Optional[str] = None,
+    description: Optional[str] = None,
     conn=None
 ) -> AssetTransaction:
     """
@@ -34,7 +34,7 @@ async def record_asset_transaction(
         tx_type: The type of transaction ('credit' or 'debit')
         payment_hash: Optional payment hash for the transaction
         fee: Optional fee amount
-        memo: Optional memo for the transaction
+        description: Optional description for the transaction
         conn: Optional database connection to reuse
         
     Returns:
@@ -51,7 +51,7 @@ async def record_asset_transaction(
         payment_hash=payment_hash,
         amount=amount,
         fee=fee,
-        memo=memo,
+        description=description,
         type=tx_type,
         created_at=now
     )
@@ -157,14 +157,14 @@ async def record_settlement_transaction(
         - error_message (Optional[str]): Error message if recording fails
     """
     try:
-        # Use the memo directly from the invoice without setting a default
+        # Use the description directly from the invoice without setting a default
         tx = await record_asset_transaction(
             wallet_id=invoice.wallet_id,
             asset_id=invoice.asset_id,
             amount=invoice.asset_amount,
             tx_type="credit",
             payment_hash=payment_hash,
-            memo=invoice.memo,
+            description=invoice.description,
             conn=conn
         )
         

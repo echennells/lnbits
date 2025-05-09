@@ -36,7 +36,7 @@ async def m001_initial(db):
             asset_id TEXT NOT NULL,
             asset_amount {db.big_int} NOT NULL,
             satoshi_amount {db.big_int} NOT NULL DEFAULT 1,
-            memo TEXT,
+            description TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
             user_id TEXT NOT NULL,
             wallet_id TEXT NOT NULL,
@@ -65,7 +65,7 @@ async def m004_create_payments_table(db):
                 asset_id TEXT NOT NULL,
                 asset_amount {db.big_int} NOT NULL,
                 fee_sats {db.big_int} NOT NULL DEFAULT 0,
-                memo TEXT,
+                description TEXT,
                 status TEXT NOT NULL DEFAULT 'completed',
                 user_id TEXT NOT NULL,
                 wallet_id TEXT NOT NULL,
@@ -153,7 +153,7 @@ async def m005_create_asset_balances_table(db):
                 payment_hash TEXT,
                 amount {db.big_int} NOT NULL,
                 fee {db.big_int} DEFAULT 0,
-                memo TEXT,
+                description TEXT,
                 type TEXT NOT NULL,  -- 'credit', 'debit'
                 created_at TIMESTAMP NOT NULL DEFAULT {db.timestamp_now}
             );
@@ -249,3 +249,6 @@ async def m006_add_asset_indexes(db):
         logger.info("Added performance indexes for Taproot Assets tables")
     except Exception as e:
         logger.warning(f"Error in migration m006_add_asset_indexes: {str(e)}")
+
+
+# No migration needed to rename memo to description since we're using description from the start

@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS invoices (
     asset_id TEXT NOT NULL,
     asset_amount INTEGER NOT NULL,
     satoshi_amount INTEGER NOT NULL,
-    memo TEXT,
+    description TEXT,
     status TEXT NOT NULL,
     user_id TEXT NOT NULL,
     wallet_id TEXT NOT NULL,

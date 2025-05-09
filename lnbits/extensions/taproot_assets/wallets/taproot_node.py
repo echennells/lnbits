@@ -382,7 +382,7 @@ class TaprootAssetsNodeExtension(Node):
 
     async def create_asset_invoice(
         self,
-        memo: str,
+        description: str,
         asset_id: str,
         asset_amount: int,
         expiry: Optional[int] = None,
@@ -391,7 +391,7 @@ class TaprootAssetsNodeExtension(Node):
         """Create an invoice for a Taproot Asset transfer."""
         with LogContext(NODE, f"creating asset invoice for {asset_id[:8]}...", log_level="info"):
             return await self.invoice_manager.create_asset_invoice(
-                memo, asset_id, asset_amount, expiry, peer_pubkey
+                description, asset_id, asset_amount, expiry, peer_pubkey
             )
 
     async def pay_asset_invoice(

@@ -60,7 +60,7 @@ class InvoiceService:
             
             # Get raw node invoice using the wallet's low-level method
             invoice_result = await taproot_wallet.get_raw_node_invoice(
-                memo=data.memo or "",
+                description=data.description or "",
                 asset_id=data.asset_id,
                 asset_amount=data.amount,
                 expiry=data.expiry,
@@ -94,7 +94,7 @@ class InvoiceService:
                     payment_request=payment_request,
                     user_id=user_id,
                     wallet_id=wallet_id,
-                    memo=data.memo or "",
+                    description=data.description or "",
                     expiry=data.expiry,
                     conn=conn
                 )
@@ -109,7 +109,7 @@ class InvoiceService:
                         "asset_id": data.asset_id,
                         "asset_amount": data.amount,
                         "satoshi_amount": satoshi_amount,
-                        "memo": invoice.memo,
+                        "description": invoice.description,
                         "status": "pending",
                         "created_at": invoice.created_at.isoformat() if hasattr(invoice.created_at, "isoformat") else str(invoice.created_at)
                     }

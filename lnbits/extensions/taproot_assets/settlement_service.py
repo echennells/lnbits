@@ -133,7 +133,7 @@ class SettlementService:
                                 invoice.asset_id,
                                 invoice.asset_amount,
                                 payment_hash,
-                                invoice.memo,
+                                invoice.description,
                                 conn=conn
                             )
                     
@@ -186,7 +186,7 @@ class SettlementService:
                     amount=invoice.asset_amount,
                     tx_type="credit",
                     payment_hash=payment_hash,
-                    memo=invoice.memo or "",
+                    description=invoice.description or "",
                     conn=conn
                 )
                 
@@ -197,7 +197,7 @@ class SettlementService:
                     amount=invoice.asset_amount,
                     tx_type="debit",
                     payment_hash=payment_hash,
-                    memo=invoice.memo or "",
+                    description=invoice.description or "",
                     conn=conn
                 )
             
@@ -225,7 +225,7 @@ class SettlementService:
         fee_sats: int,
         user_id: str,
         wallet_id: str,
-        memo: Optional[str] = None,
+        description: Optional[str] = None,
         preimage: Optional[str] = None,
         is_internal: bool = False,
         is_self_payment: bool = False,
@@ -274,7 +274,7 @@ class SettlementService:
                         fee_sats=fee_sats,
                         user_id=user_id,
                         wallet_id=wallet_id,
-                        memo=memo or "",
+                        description=description or "",
                         preimage=preimage or "",
                         conn=conn
                     )
@@ -320,7 +320,7 @@ class SettlementService:
                         fee_sats=fee_sats,  # This is the fee, separate from asset amount
                         user_id=user_id,
                         wallet_id=wallet_id,
-                        memo=memo or "",
+                        description=description or "",
                         preimage=preimage or "",
                         conn=tx_conn
                     )
@@ -337,7 +337,7 @@ class SettlementService:
                             tx_type=tx_type,
                             payment_hash=payment_hash,
                             fee=fee_sats,  # Fee is separate
-                            memo=memo or "",
+                            description=description or "",
                             conn=tx_conn
                         )
                     
@@ -363,7 +363,7 @@ class SettlementService:
                     asset_id=asset_id,
                     asset_amount=asset_amount,  # Use correct asset amount in notification
                     tx_type="debit",
-                    memo=memo,
+                    description=description,
                     fee_sats=fee_sats,
                     is_internal=is_internal,
                     is_self_payment=is_self_payment
@@ -425,7 +425,7 @@ class SettlementService:
                     amount=invoice.asset_amount,
                     tx_type="credit",
                     payment_hash=payment_hash,
-                    memo=invoice.memo or "",
+                    description=invoice.description or "",
                     conn=conn
                 )
             
@@ -515,7 +515,7 @@ class SettlementService:
         asset_id: str,
         amount: int,
         payment_hash: str,
-        memo: Optional[str] = None,
+        description: Optional[str] = None,
         conn=None
     ) -> bool:
         """
@@ -540,7 +540,7 @@ class SettlementService:
                 amount=amount,
                 tx_type="credit",  # Incoming payment
                 payment_hash=payment_hash,
-                memo=memo or "",  # Use empty string if no memo provided
+                description=description or "",  # Use empty string if no description provided
                 conn=conn
             )
             log_info(TRANSFER, f"Asset balance updated for asset_id={asset_id}, amount={amount}")

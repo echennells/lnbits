@@ -36,7 +36,7 @@ class TaprootInvoiceManager:
             logger.debug(f"No payment hash found for script key {script_key}")
         return payment_hash
 
-    async def create_asset_invoice(self, memo: str, asset_id: str, asset_amount: int,
+    async def create_asset_invoice(self, description: str, asset_id: str, asset_amount: int,
                                expiry: Optional[int] = None, peer_pubkey: Optional[str] = None) -> Dict[str, Any]:
         """Create an invoice for a Taproot Asset transfer."""
         try:
@@ -99,7 +99,7 @@ class TaprootInvoiceManager:
             
             # Add invoice details
             invoice = lightning_pb2.Invoice(
-                memo=memo or "Taproot Asset Transfer",
+                memo=description or "Taproot Asset Transfer",  # Still using memo in the Lightning Invoice object
                 value=0,  # No Bitcoin value
                 private=True,
                 expiry=expiry or 3600
