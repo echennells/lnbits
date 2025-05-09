@@ -549,7 +549,7 @@ window.app = Vue.createApp({
         // Format the invoice data for display
         this.parseDialog.invoice = {
           amount: parsedInvoice.amount || 0,
-          description: parsedInvoice.memo || 'No description',
+          description: parsedInvoice.description || 'No description',
           hash: parsedInvoice.payment_hash || '',
           bolt11: this.parseDialog.data.request,
           createdDate: DataUtils.formatDate(parsedInvoice.timestamp * 1000),
