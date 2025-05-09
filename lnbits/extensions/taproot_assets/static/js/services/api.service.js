@@ -126,53 +126,9 @@ const ApiService = {
         console.error('API Error getting asset balances:', error);
         throw error;
       });
-  },
-
-  /**
-   * Get balance for a specific asset
-   * @param {string} adminkey - Admin key for authentication
-   * @param {string} assetId - Asset ID to get balance for
-   * @returns {Promise} - Promise that resolves with asset balance
-   */
-  getAssetBalance(adminkey, assetId) {
-    return LNbits.api
-      .request('GET', `/taproot_assets/api/v1/taproot/asset-balance/${encodeURIComponent(assetId)}`, adminkey)
-      .catch(error => {
-        console.error('API Error getting asset balance:', error);
-        throw error;
-      });
-  },
-
-  /**
-   * Get asset transactions
-   * @param {string} adminkey - Admin key for authentication
-   * @param {string|null} assetId - Asset ID to get transactions for (null for all)
-   * @param {number} limit - Maximum number of transactions to return
-   * @returns {Promise} - Promise that resolves with asset transactions
-   */
-  getAssetTransactions(adminkey, assetId = null, limit = 100) {
-    let url = '/taproot_assets/api/v1/taproot/asset-transactions';
-    const params = [];
-    
-    if (assetId) {
-      params.push(`asset_id=${encodeURIComponent(assetId)}`);
-    }
-    
-    if (limit) {
-      params.push(`limit=${limit}`);
-    }
-    
-    if (params.length > 0) {
-      url += `?${params.join('&')}`;
-    }
-    
-    return LNbits.api
-      .request('GET', url, adminkey)
-      .catch(error => {
-        console.error('API Error getting asset transactions:', error);
-        throw error;
-      });
   }
+
+  // Removed unused functions: getAssetBalance and getAssetTransactions
 };
 
 // Export the service
