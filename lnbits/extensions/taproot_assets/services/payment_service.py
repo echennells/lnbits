@@ -53,24 +53,107 @@ class PaymentService:
             
             # Extract the description to look for asset information
             description = decoded.description if hasattr(decoded, "description") else ""
+            log_info(API, f"Invoice description: {description}")
             
             # Initialize with default values
             asset_id = None
-            asset_amount = 1  # Default to 1 for Taproot Asset invoices
+            asset_amount = None
             
             # Try to extract asset_id from description
             if description and 'asset_id=' in description:
                 asset_id_match = re.search(r'asset_id=([a-fA-F0-9]{64})', description)
                 if asset_id_match:
                     asset_id = asset_id_match.group(1)
+                    log_info(API, f"Extracted asset_id from description: {asset_id}")
             
-            # For Taproot Asset invoices, we need to ignore the Bitcoin amount
-            # and use the asset amount from the description or default to 1
-            if description:
+            # Import the necessary modules
+            from ..wallets.taproot_factory import TaprootAssetsFactory
+            from ..wallets.taproot_adapter import tapchannel_pb2
+            from ..tapd_settings import taproot_settings
+            
+            # Create a wallet instance without user_id and wallet_id
+            # This is just to get access to the tapd node for the RPC call
+            wallet, node = await TaprootAssetsFactory.create_wallet_and_node(
+                host=taproot_settings.tapd_host,
+                network=taproot_settings.tapd_network,
+                tls_cert_path=taproot_settings.tapd_tls_cert_path,
+                macaroon_path=taproot_settings.tapd_macaroon_path,
+                ln_macaroon_path=taproot_settings.lnd_macaroon_path,
+                tapd_macaroon_hex=taproot_settings.tapd_macaroon_hex,
+                ln_macaroon_hex=taproot_settings.lnd_macaroon_hex
+            )
+            
+            # If we have an asset_id, try to use it directly
+            if asset_id:
+                try:
+                    if node and node.tapchannel_stub:
+                        # Create the request
+                        request = tapchannel_pb2.AssetPayReq(
+                            asset_id=bytes.fromhex(asset_id),
+                            pay_req_string=payment_request
+                        )
+                        
+                        # Call the DecodeAssetPayReq RPC
+                        log_info(API, f"Calling DecodeAssetPayReq for asset_id={asset_id}")
+                        response = await node.tapchannel_stub.DecodeAssetPayReq(request)
+                        
+                        # Extract the asset amount
+                        if hasattr(response, 'asset_amount'):
+                            asset_amount = float(response.asset_amount)
+                            log_info(API, f"Got asset amount from DecodeAssetPayReq: {asset_amount}")
+                except Exception as e:
+                    log_warning(API, f"Failed to get asset amount with provided asset_id: {e}")
+            
+            # If we still don't have an asset amount, try with all available assets
+            if asset_amount is None:
+                try:
+                    # Get all available assets
+                    assets = await node.asset_manager.list_assets()
+                    log_info(API, f"Trying with {len(assets)} available assets")
+                    
+                    # Try each asset ID
+                    for asset in assets:
+                        try:
+                            asset_id_to_try = asset.get("asset_id")
+                            if not asset_id_to_try:
+                                continue
+                                
+                            log_info(API, f"Trying with asset_id: {asset_id_to_try}")
+                            
+                            # Create the request
+                            request = tapchannel_pb2.AssetPayReq(
+                                asset_id=bytes.fromhex(asset_id_to_try),
+                                pay_req_string=payment_request
+                            )
+                            
+                            # Call the DecodeAssetPayReq RPC
+                            response = await node.tapchannel_stub.DecodeAssetPayReq(request)
+                            
+                            # If we get here without an exception, we found a matching asset
+                            if hasattr(response, 'asset_amount'):
+                                asset_amount = float(response.asset_amount)
+                                asset_id = asset_id_to_try
+                                log_info(API, f"Found matching asset_id={asset_id} with amount={asset_amount}")
+                                break
+                        except Exception as e:
+                            # This asset ID didn't work, try the next one
+                            log_debug(API, f"Asset {asset_id_to_try} didn't match: {str(e)}")
+                except Exception as e:
+                    log_warning(API, f"Failed to get assets or try them: {str(e)}")
+            
+            # If we still don't have an asset amount, try to extract it from the description
+            if asset_amount is None and description:
                 # Try to extract asset amount if present
                 amount_match = re.search(r'amount=(\d+(\.\d+)?)', description) 
                 if amount_match:
                     asset_amount = float(amount_match.group(1))
+                    log_info(API, f"Extracted asset amount from description: {asset_amount}")
+            
+            # If we still couldn't extract the amount, raise an error
+            if asset_amount is None:
+                error_msg = "Could not extract asset amount from invoice"
+                log_error(API, error_msg)
+                raise Exception(error_msg)
             
             # Create and return the parsed invoice
             return ParsedInvoice(
