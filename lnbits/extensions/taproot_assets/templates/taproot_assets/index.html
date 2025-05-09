@@ -346,7 +346,157 @@
   </q-card>
 </q-dialog>
 
-<!-- Send payment modal - MOBILE RESPONSIVE -->
+<!-- Read invoice dialog - Step 1 -->
+<q-dialog v-model="parseDialog.show" position="top">
+  <q-card class="q-pa-lg q-pt-xl" style="width: 100%; max-width: 500px">
+    <div v-if="!parseDialog.invoice">
+      <q-form @submit="decodeInvoice" class="q-gutter-md">
+        <q-input
+          filled
+          dense
+          v-model.trim="parseDialog.data.request"
+          type="textarea"
+          label="Paste invoice"
+          ref="invoiceTextArea"
+        >
+        </q-input>
+        <div class="row q-mt-lg">
+          <q-btn
+            unelevated
+            color="primary"
+            :disable="parseDialog.data.request == ''"
+            type="submit"
+            label="Read"
+          ></q-btn>
+          <q-icon
+            name="content_paste"
+            color="grey"
+            class="q-mt-xs q-ml-sm q-mr-auto"
+            v-if="parseDialog.copy.show"
+            @click="pasteToTextArea"
+          >
+            <q-tooltip>
+              <span>Paste from clipboard</span>
+            </q-tooltip>
+          </q-icon>
+          <q-btn
+            v-close-popup
+            flat
+            color="grey"
+            class="q-ml-auto"
+            label="Cancel"
+          ></q-btn>
+        </div>
+      </q-form>
+    </div>
+    <div v-else>
+      <div class="column content-center text-center q-mb-md">
+        <h4 class="q-my-none text-bold">
+          <span>{% raw %}{{ parseDialog.invoice.amount }}{% endraw %}</span>
+        </h4>
+      </div>
+      <q-separator></q-separator>
+      <h6 class="text-center">{% raw %}{{ parseDialog.invoice.description }}{% endraw %}</h6>
+      <q-list separator bordered dense class="q-mb-md">
+        <q-expansion-item expand-separator icon="info" label="Details">
+          <q-list separator>
+            <q-item>
+              <q-item-section>
+                <q-item-label>Created</q-item-label>
+                <q-item-label caption>{% raw %}{{ parseDialog.invoice.createdDate }}{% endraw %}</q-item-label>
+              </q-item-section>
+              <q-item-section side top>
+                <q-item-label caption>{% raw %}{{ parseDialog.invoice.createdDateFrom }}{% endraw %}</q-item-label>
+              </q-item-section>
+            </q-item>
+            <q-item>
+              <q-item-section>
+                <q-item-label>Expire date</q-item-label>
+                <q-item-label caption>{% raw %}{{ parseDialog.invoice.expireDate }}{% endraw %}</q-item-label>
+              </q-item-section>
+              <q-item-section side top>
+                <q-item-label caption>{% raw %}{{ parseDialog.invoice.expireDateFrom }}{% endraw %}</q-item-label>
+              </q-item-section>
+            </q-item>
+            <q-item>
+              <q-item-section>
+                <q-item-label>Payment hash</q-item-label>
+                <q-item-label caption>{% raw %}{{ `${parseDialog.invoice.hash.slice(0, 12)}...${parseDialog.invoice.hash.slice(-12)}` }}{% endraw %}</q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <q-item-label>
+                  <q-icon
+                    name="content_copy"
+                    @click="copyText(parseDialog.invoice.hash)"
+                    size="1em"
+                    color="grey"
+                    class="cursor-pointer"
+                  />
+                </q-item-label>
+                <q-tooltip>
+                  <span>{% raw %}{{ parseDialog.invoice.hash }}{% endraw %}</span>
+                </q-tooltip>
+              </q-item-section>
+            </q-item>
+            <q-item>
+              <q-item-section>
+                <q-item-label>Invoice</q-item-label>
+                <q-item-label caption>{% raw %}{{ `${parseDialog.invoice.bolt11.slice(0, 12)}...${parseDialog.invoice.bolt11.slice(-12)}` }}{% endraw %}</q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <q-item-label>
+                  <q-icon
+                    name="content_copy"
+                    @click="copyText(parseDialog.invoice.bolt11)"
+                    size="1em"
+                    color="grey"
+                    class="cursor-pointer"
+                  />
+                </q-item-label>
+                <q-tooltip>
+                  <span>{% raw %}{{ parseDialog.invoice.bolt11 }}{% endraw %}</span>
+                </q-tooltip>
+              </q-item-section>
+            </q-item>
+          </q-list>
+        </q-expansion-item>
+      </q-list>
+      <div v-if="canPay" class="row q-mt-lg">
+        <q-btn
+          unelevated
+          color="primary"
+          @click="payInvoice"
+          label="Pay"
+        ></q-btn>
+        <q-btn
+          v-close-popup
+          flat
+          color="grey"
+          class="q-ml-auto"
+          label="Cancel"
+        ></q-btn>
+      </div>
+      <div v-else class="row q-mt-lg">
+        <q-btn
+          label="Not enough funds"
+          unelevated
+          disabled
+          color="yellow"
+          text-color="black"
+        ></q-btn>
+        <q-btn
+          v-close-popup
+          flat
+          color="grey"
+          class="q-ml-auto"
+          label="Cancel"
+        ></q-btn>
+      </div>
+    </div>
+  </q-card>
+</q-dialog>
+
+<!-- Send payment modal - Step 2 (now only used for asset selection) -->
 <q-dialog v-model="paymentDialog.show">
   <q-card class="q-pa-md q-pt-lg" style="width: 100%; max-width: 500px">
     <q-card-section>
@@ -364,72 +514,38 @@
         </div>
       </div>
 
-      <q-form @submit="submitPaymentForm" class="q-gutter-md">
-        <q-input
-          filled
-          v-model="paymentDialog.form.paymentRequest"
-          label="Paste invoice"
-          :rules="[val => !!val || 'Invoice is required']"
-          :error="paymentDialog.invoiceDecodeError"
-          error-message="Invalid invoice format"
-        >
-          <template v-slot:append>
-            <q-btn round dense flat icon="camera_alt" @click="showCamera">
-              <q-tooltip>Scan QR Code</q-tooltip>
-            </q-btn>
-          </template>
-        </q-input>
-
-        <!-- Read-only amount field from parsed invoice -->
-        <q-input
-          filled
-          v-model.number="paymentDialog.form.amount"
-          type="number"
-          label="Amount (from invoice)"
-          readonly
-          :rules="[val => !val || val <= (paymentDialog.selectedAsset?.user_balance || 0) || 'Amount exceeds your available balance']"
-        ></q-input>
-
-        <q-input
-          filled
-          v-model.number="paymentDialog.form.feeLimit"
-          type="number"
-          label="Fee limit (sats)"
-          :rules="[val => val > 0 || 'Fee limit must be greater than 0']"
-        ></q-input>
-
-        <div v-if="paymentDialog.form.amount > (paymentDialog.selectedAsset?.user_balance || 0)" 
-             class="text-negative q-mb-md">
-          Warning: Payment amount exceeds your available balance.
-        </div>
-
+      <div class="text-center q-pa-md">
+        <p>Click the button below to paste or scan an invoice</p>
         <div class="row q-col-gutter-sm q-mt-md">
-          <div class="col-6">
+          <div class="col-12">
             <q-btn
-              flat
-              color="grey"
-              @click="closePaymentDialog"
-              class="full-width"
-              style="height: 40px;"
-            >
-              Cancel
-            </q-btn>
-          </div>
-          <div class="col-6">
-            <q-btn
-              :loading="paymentDialog.inProgress"
-              :disable="paymentDialog.form.amount > (paymentDialog.selectedAsset?.user_balance || 0) || paymentDialog.invoiceDecodeError"
+              unelevated
               color="primary"
-              type="submit"
+              @click="showParseDialog"
+              class="full-width q-mb-md"
+              style="height: 40px;"
+            >
+              <q-icon left name="file_upload"></q-icon>
+              Paste Invoice
+            </q-btn>
+            <q-btn
+              unelevated
+              color="secondary"
+              @click="showCamera"
               class="full-width"
               style="height: 40px;"
             >
-              Pay Invoice
+              <q-icon left name="qr_code_scanner"></q-icon>
+              Scan QR Code
             </q-btn>
           </div>
         </div>
-      </q-form>
+      </div>
     </q-card-section>
+    
+    <q-card-actions align="right">
+      <q-btn flat label="Cancel" color="grey" v-close-popup />
+    </q-card-actions>
   </q-card>
 </q-dialog>
 

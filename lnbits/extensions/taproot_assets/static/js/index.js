@@ -58,7 +58,20 @@ window.app = Vue.createApp({
       // Created invoice data
       createdInvoice: null,
 
-      // For sending payments
+      // For sending payments - Step 1: Parse invoice
+      parseDialog: {
+        show: false,
+        invoice: null,
+        data: {
+          request: ''
+        },
+        copy: {
+          show: false
+        },
+        paymentChecker: null
+      },
+      
+      // For sending payments - Step 2: Select asset and pay
       paymentDialog: {
         show: false,
         selectedAsset: null,
@@ -133,6 +146,12 @@ window.app = Vue.createApp({
     isInvoiceAmountValid() {
       if (!this.invoiceDialog.selectedAsset) return false;
       return parseFloat(this.invoiceDialog.form.amount) <= this.maxInvoiceAmount;
+    },
+    
+    // Check if we can pay the invoice (have enough funds)
+    canPay() {
+      if (!this.parseDialog.invoice || !this.paymentDialog.selectedAsset) return false;
+      return this.parseDialog.invoice.amount <= this.paymentDialog.selectedAsset.user_balance;
     },
     
     // Pagination label (X-Y of Z format like LNbits)
@@ -432,7 +451,7 @@ window.app = Vue.createApp({
       }
     },
     
-    // Payment dialog methods
+    // Payment dialog methods - Step 1: Select asset
     openPaymentDialog(asset) {
       // Refresh assets first to ensure we have the latest channel status and balance
       this.getAssets();
@@ -450,6 +469,7 @@ window.app = Vue.createApp({
       }
       
       this.resetPaymentForm();
+      this.resetParseDialog();
       this.paymentDialog.selectedAsset = asset;
       this.paymentDialog.show = true;
     },
@@ -469,7 +489,174 @@ window.app = Vue.createApp({
       this.resetPaymentForm();
     },
     
-    // Use PaymentService to parse invoice
+    // Parse dialog methods
+    resetParseDialog() {
+      this.parseDialog = {
+        show: false,
+        invoice: null,
+        data: {
+          request: ''
+        },
+        copy: {
+          show: true
+        },
+        paymentChecker: null
+      };
+    },
+    
+    showParseDialog() {
+      this.resetParseDialog();
+      this.parseDialog.show = true;
+      
+      // Focus on the input field after dialog is shown
+      this.$nextTick(() => {
+        if (this.$refs.invoiceTextArea) {
+          this.$refs.invoiceTextArea.focus();
+        }
+      });
+    },
+    
+    // Copy text to clipboard
+    copyText(text) {
+      DataUtils.copyText(text, 'Copied to clipboard!');
+    },
+    
+    // Paste from clipboard to textarea
+    async pasteToTextArea() {
+      try {
+        const text = await navigator.clipboard.readText();
+        this.parseDialog.data.request = text;
+      } catch (error) {
+        console.error('Failed to read clipboard:', error);
+        NotificationService.showError('Failed to read clipboard');
+      }
+    },
+    
+    // Decode invoice in parse dialog
+    async decodeInvoice() {
+      if (!this.parseDialog.data.request || this.parseDialog.data.request.trim() === '') {
+        NotificationService.showError('Please enter an invoice');
+        return;
+      }
+      
+      if (!this.g.user.wallets || !this.g.user.wallets.length) return;
+      const wallet = this.g.user.wallets[0];
+      
+      try {
+        // Use PaymentService to parse invoice
+        const parsedInvoice = await PaymentService.parseInvoice(wallet, this.parseDialog.data.request);
+        
+        // Format the invoice data for display
+        this.parseDialog.invoice = {
+          amount: parsedInvoice.amount || 0,
+          description: parsedInvoice.memo || 'No description',
+          hash: parsedInvoice.payment_hash || '',
+          bolt11: this.parseDialog.data.request,
+          createdDate: DataUtils.formatDate(parsedInvoice.timestamp * 1000),
+          createdDateFrom: DataUtils.getRelativeTime(parsedInvoice.timestamp * 1000),
+          expireDate: DataUtils.formatDate((parsedInvoice.timestamp + parsedInvoice.expiry) * 1000),
+          expireDateFrom: DataUtils.getRelativeTime((parsedInvoice.timestamp + parsedInvoice.expiry) * 1000),
+          asset_id: parsedInvoice.asset_id || ''
+        };
+        
+        // Store the payment request for later use
+        this.paymentDialog.form.paymentRequest = this.parseDialog.data.request;
+        this.paymentDialog.form.amount = parsedInvoice.amount || 0;
+        
+        // If amount is 0, warn the user
+        if (parsedInvoice.amount === 0) {
+          NotificationService.showWarning('Warning: Invoice has no specified amount');
+        }
+      } catch (error) {
+        console.error('Failed to parse invoice:', error);
+        NotificationService.showError('Invalid invoice format');
+        this.parseDialog.invoice = null;
+      }
+    },
+    
+    // Pay invoice from parse dialog
+    async payInvoice() {
+      if (!this.parseDialog.invoice || !this.paymentDialog.selectedAsset) {
+        NotificationService.showError('Missing invoice or asset information');
+        return;
+      }
+      
+      if (!this.g.user.wallets || !this.g.user.wallets.length) return;
+      
+      try {
+        const wallet = this.g.user.wallets[0];
+        
+        // Close the parse dialog
+        this.parseDialog.show = false;
+        
+        // Use PaymentService to pay invoice
+        const paymentResult = await PaymentService.payInvoice(
+          wallet,
+          this.paymentDialog.selectedAsset,
+          {
+            paymentRequest: this.parseDialog.invoice.bolt11,
+            feeLimit: this.paymentDialog.form.feeLimit
+          }
+        );
+        
+        // Close payment dialog
+        this.paymentDialog.show = false;
+        
+        // Get notification message and title
+        const {title, message} = NotificationService.notifyPaymentSent(paymentResult);
+        
+        // Set success dialog content
+        this.successDialog.title = title;
+        this.successDialog.message = message;
+        
+        // Show success dialog
+        this.successDialog.show = true;
+        
+        // Immediately refresh assets to get updated balances
+        this.getAssets();
+        
+        // Also refresh transactions
+        this.refreshTransactions();
+      } catch (error) {
+        // Check for special internal payment case
+        if (error.isInternalPayment) {
+          // Try to process as internal payment automatically
+          try {
+            NotificationService.showInfo(error.message);
+            const success = await this.processInternalPayment(
+              this.parseDialog.invoice.bolt11, 
+              this.paymentDialog.form.feeLimit
+            );
+            if (success) return; // Exit early as we're handling it
+          } catch (internalPayError) {
+            NotificationService.processApiError(
+              internalPayError, 
+              'Failed to process internal payment. Please try again.'
+            );
+          }
+        } else {
+          // Process standard error
+          const errorMessage = NotificationService.processApiError(
+            error,
+            'Payment failed'
+          );
+          
+          // Special handling for channel-related errors
+          if (errorMessage.toLowerCase().includes('channel') && 
+              (errorMessage.toLowerCase().includes('offline') || 
+               errorMessage.toLowerCase().includes('unavailable'))) {
+            // Automatically refresh assets to get updated channel status
+            this.getAssets();
+            
+            // Close the dialog
+            this.parseDialog.show = false;
+            this.paymentDialog.show = false;
+          }
+        }
+      }
+    },
+    
+    // Use PaymentService to parse invoice (legacy method for compatibility)
     async parseInvoice(paymentRequest) {
       if (!paymentRequest || paymentRequest.trim() === '') {
         this.paymentDialog.invoiceDecodeError = false;
@@ -754,14 +941,19 @@ window.app = Vue.createApp({
         cleanRequest = cleanRequest.slice(10);
       }
       
-      // Set the scanned result to the payment request field
-      this.paymentDialog.form.paymentRequest = cleanRequest;
-      
       // Close the camera dialog
       this.camera.show = false;
       
-      // Parse the invoice
-      this.parseInvoice(cleanRequest);
+      // Set the request in the parse dialog
+      this.parseDialog.data.request = cleanRequest;
+      
+      // Show the parse dialog if not already shown
+      if (!this.parseDialog.show) {
+        this.parseDialog.show = true;
+      }
+      
+      // Automatically decode the invoice
+      this.decodeInvoice();
     }
   },
   
