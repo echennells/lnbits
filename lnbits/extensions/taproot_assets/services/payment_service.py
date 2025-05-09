@@ -55,7 +55,7 @@ class PaymentService:
             # Use the bolt11 library to decode the invoice
             decoded = bolt11.decode(payment_request)
             
-            # Extract the description and initialize variables
+            #Extract the description and initialize variables
             description = decoded.description if hasattr(decoded, "description") else ""
             asset_id = None
             asset_amount = None
@@ -112,15 +112,7 @@ class PaymentService:
             except Exception as e:
                 log_warning(API, f"Failed to get assets or try them: {str(e)}")
             
-            # If we still don't have an asset amount, try to extract it from the description
-            if asset_amount is None and description:
-                # Try to extract asset amount if present
-                amount_match = re.search(r'amount=(\d+(\.\d+)?)', description) 
-                if amount_match:
-                    asset_amount = float(amount_match.group(1))
-                    log_info(API, f"Extracted asset amount from description: {asset_amount}")
-            
-            # If we still couldn't extract the amount, raise an error
+            # If we couldn't extract the amount, raise an error
             if asset_amount is None:
                 error_msg = "Could not extract asset amount from invoice"
                 log_error(API, error_msg)
