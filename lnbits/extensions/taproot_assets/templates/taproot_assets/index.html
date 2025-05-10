@@ -253,7 +253,7 @@
             <label class="text-white q-mb-sm block">Amount</label>
             <input v-model.number="invoiceDialog.form.amount" type="number" min="0.000001" step="0.000001" 
                   class="invoice-input full-width" required :max="maxInvoiceAmount" 
-                  style="height: 40px; font-size: 16px;" />
+                  style="height: 40px; font-size: 16px;" inputmode="numeric" />
             <div class="text-negative" v-if="!isInvoiceAmountValid">
               <small>Amount exceeds maximum receivable</small>
             </div>
