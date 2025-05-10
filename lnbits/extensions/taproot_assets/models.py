@@ -40,6 +40,7 @@ class TaprootPaymentRequest(BaseModel):
     payment_request: str
     fee_limit_sats: Optional[int] = 10  # Default to 10 sats fee limit
     peer_pubkey: Optional[str] = None  # Add peer_pubkey for multi-channel support
+    asset_id: Optional[str] = None  # Add asset_id to specify which asset to use for payment
 
 
 class TaprootInvoice(BaseModel):

@@ -58,6 +58,9 @@ class InvoiceService:
                 wallet_id=wallet_id
             )
             
+            # Add detailed logging before creating invoice
+            logger.info(f"[{API}] Creating raw invoice with: asset_id={data.asset_id}, amount={data.amount}, peer={data.peer_pubkey}")
+            
             # Get raw node invoice using the wallet's low-level method
             invoice_result = await taproot_wallet.get_raw_node_invoice(
                 description=data.description or "",
@@ -66,6 +69,9 @@ class InvoiceService:
                 expiry=data.expiry,
                 peer_pubkey=data.peer_pubkey
             )
+            
+            # Log the result
+            logger.info(f"[{API}] Raw invoice result: {invoice_result}")
 
             if not invoice_result or "invoice_result" not in invoice_result:
                 raise_http_exception(

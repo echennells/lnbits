@@ -118,6 +118,9 @@ class TaprootWalletExtension(Wallet):
             peer_info = f" with peer {peer_pubkey[:8]}..." if peer_pubkey else ""
             log_debug(WALLET, f"Creating raw node invoice for {asset_id[:8]}..., amount={asset_amount}{peer_info}")
             
+            # Add additional debugging for zero balance case
+            log_debug(WALLET, f"Creating invoice with asset_amount={asset_amount}, checking if this is a zero balance case")
+            
             result = await self.node.create_asset_invoice(
                 description=description,  # Now using description parameter
                 asset_id=asset_id,
@@ -126,7 +129,7 @@ class TaprootWalletExtension(Wallet):
                 peer_pubkey=peer_pubkey
             )
             
-            log_debug(WALLET, f"Raw node invoice created successfully")
+            log_debug(WALLET, f"Raw node invoice created successfully: {result}")
             return result
 
     async def create_invoice(

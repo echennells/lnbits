@@ -24,6 +24,9 @@
 
 <!-- Load main app file last -->
 <script src="{{ static_url_for('taproot_assets/static', path='js/index.js') }}"></script>
+
+<!-- Load debug script (for zero balance issue) -->
+<script src="{{ static_url_for('taproot_assets/static', path='js/debug-zero-balance.js') }}"></script>
 {% endblock %}
 
 {% block page %}
@@ -80,7 +83,7 @@
               <div class="row q-col-gutter-md">
                 <div class="col-12">
                   <div>Balance: {% raw %}{{ asset.user_balance || 0 }}{% endraw %}</div>
-                  <div v-if="asset.channel_info && asset.channel_info.capacity && asset.channel_info.local_balance" class="text-positive">
+                  <div v-if="asset.channel_info && asset.channel_info.capacity !== undefined && asset.channel_info.local_balance !== undefined" class="text-positive">
                     Max Receivable: {% raw %}{{ parseFloat(asset.channel_info.capacity) - parseFloat(asset.channel_info.local_balance) }}{% endraw %}
                   </div>
                 </div>
@@ -242,7 +245,7 @@
     <q-card-section class="q-pt-lg q-px-md">
       <div v-if="invoiceDialog.selectedAsset" class="text-center q-mb-md">
         <div class="text-h6 text-white">{% raw %}{{ invoiceDialog.selectedAsset.name || 'Unknown' }}{% endraw %}</div>
-        <div v-if="invoiceDialog.selectedAsset.channel_info && invoiceDialog.selectedAsset.channel_info.capacity && invoiceDialog.selectedAsset.channel_info.local_balance" class="text-positive">
+        <div v-if="invoiceDialog.selectedAsset.channel_info && invoiceDialog.selectedAsset.channel_info.capacity !== undefined && invoiceDialog.selectedAsset.channel_info.local_balance !== undefined" class="text-positive">
           Max Receivable: {% raw %}{{ maxInvoiceAmount }}{% endraw %}
         </div>
       </div>

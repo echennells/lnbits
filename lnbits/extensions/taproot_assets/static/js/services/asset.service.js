@@ -175,7 +175,8 @@ const AssetService = {
     if (!asset || !asset.channel_info) return 0;
     
     const channelInfo = asset.channel_info;
-    if (channelInfo.capacity && channelInfo.local_balance) {
+    // Fix for zero balance channels - check if capacity and local_balance are defined (not just truthy)
+    if (channelInfo.capacity !== undefined && channelInfo.local_balance !== undefined) {
       const totalCapacity = parseFloat(channelInfo.capacity);
       const localBalance = parseFloat(channelInfo.local_balance);
       return totalCapacity - localBalance;

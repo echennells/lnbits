@@ -41,7 +41,11 @@ class TaprootInvoiceManager:
         """Create an invoice for a Taproot Asset transfer."""
         try:
             logger.info(f"Creating asset invoice for asset_id={asset_id}, amount={asset_amount}")
-
+            
+            # Add debugging for zero balance case
+            if asset_amount == 0:
+                logger.warning(f"Attempting to create invoice with zero amount for asset_id={asset_id}")
+            
             # Convert parameters to expected types
             asset_id_bytes = bytes.fromhex(asset_id)
             expiry_time = int(time.time()) + (expiry or 3600)

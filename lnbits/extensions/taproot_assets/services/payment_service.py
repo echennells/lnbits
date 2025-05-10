@@ -182,13 +182,22 @@ class PaymentService:
             from ..tapd_settings import taproot_settings
             fee_limit_sats = max(data.fee_limit_sats or taproot_settings.default_sat_fee, 10)
             
+            # Use the client-provided asset ID if available
+            if data.asset_id:
+                log_info(PAYMENT, f"Using client-provided asset_id={data.asset_id} for payment")
+                asset_id_to_use = data.asset_id
+            else:
+                # For backward compatibility, use the parsed invoice asset ID
+                log_info(PAYMENT, f"No client-provided asset_id, using parsed invoice asset_id={parsed_invoice.asset_id}")
+                asset_id_to_use = parsed_invoice.asset_id
+            
             # Make the payment using the low-level wallet method
             # This only handles the direct node communication
             log_info(PAYMENT, f"Making external payment, fee_limit_sats={fee_limit_sats}")
             payment_result = await taproot_wallet.send_raw_payment(
                 payment_request=data.payment_request,
                 fee_limit_sats=fee_limit_sats,
-                asset_id=parsed_invoice.asset_id,
+                asset_id=asset_id_to_use,
                 peer_pubkey=data.peer_pubkey
             )
 
@@ -210,18 +219,9 @@ class PaymentService:
             preimage = payment_result.get("payment_preimage", "")
             routing_fees_sats = payment_result.get("fee_sats", 0)
             
-            # Get asset_id from the node's cache if available, otherwise use the parsed invoice
-            asset_id = ""
-            if taproot_wallet.node:
-                cached_asset_id = taproot_wallet.node._get_asset_id(payment_hash)
-                if cached_asset_id:
-                    asset_id = cached_asset_id
-                    log_info(PAYMENT, f"Using asset_id from cache: {asset_id}")
-            
-            # If no cached asset_id, use the one from the parsed invoice
-            if not asset_id:
-                asset_id = parsed_invoice.asset_id or ""
-                log_info(PAYMENT, f"Using asset_id from parsed invoice: {asset_id}")
+            # Use the client-provided asset_id for recording the payment
+            asset_id = data.asset_id if data.asset_id else ""
+            log_info(PAYMENT, f"Using asset_id={asset_id} for recording payment")
             
             # Extract description from the parsed invoice
             description = parsed_invoice.description if parsed_invoice.description else None
@@ -305,7 +305,8 @@ class PaymentService:
             sender_info = {
                 "wallet_id": wallet.wallet.id,
                 "user_id": wallet.wallet.user,
-                "payment_request": data.payment_request
+                "payment_request": data.payment_request,
+                "asset_id": data.asset_id  # Pass the client-provided asset_id if available
             }
             
             # Use SettlementService to settle the invoice with sender information

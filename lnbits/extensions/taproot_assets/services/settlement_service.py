@@ -171,6 +171,15 @@ class SettlementService:
                 log_error(TRANSFER, f"Missing sender information for payment: {payment_hash}")
                 return False, {"error": "Incomplete sender information"}
             
+            # Use the client-provided asset_id if available, otherwise use the invoice's asset_id
+            sender_asset_id = sender_info.get("asset_id")
+            if sender_asset_id:
+                log_info(TRANSFER, f"Using client-provided asset_id={sender_asset_id} for internal payment")
+                debit_asset_id = sender_asset_id
+            else:
+                log_info(TRANSFER, f"Using invoice asset_id={invoice.asset_id} for internal payment")
+                debit_asset_id = invoice.asset_id
+            
             # Use transaction context manager to ensure atomicity
             async with transaction() as conn:
                 # 1. Update invoice status to paid
@@ -191,9 +200,10 @@ class SettlementService:
                 )
                 
                 # 3. Debit the sender (record transaction and update balance)
+                # Use the client-provided asset_id for the debit transaction
                 await record_asset_transaction(
                     wallet_id=sender_wallet_id,
-                    asset_id=invoice.asset_id,
+                    asset_id=debit_asset_id,
                     amount=invoice.asset_amount,
                     tx_type="debit",
                     payment_hash=payment_hash,

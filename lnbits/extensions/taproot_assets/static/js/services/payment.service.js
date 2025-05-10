@@ -140,7 +140,8 @@ const PaymentService = {
       // Create payload
       const payload = {
         payment_request: paymentData.paymentRequest,
-        fee_limit_sats: paymentData.feeLimit || 1000
+        fee_limit_sats: paymentData.feeLimit || 1000,
+        asset_id: assetData.asset_id  // Explicitly send the selected asset ID
       };
       
       // Add peer_pubkey if available
@@ -243,7 +244,8 @@ const PaymentService = {
       // Create payload
       const payload = {
         payment_request: paymentData.paymentRequest,
-        fee_limit_sats: paymentData.feeLimit || 10
+        fee_limit_sats: paymentData.feeLimit || 10,
+        asset_id: paymentData.assetId  // Include the selected asset ID
       };
       
       // Call the internal payment endpoint

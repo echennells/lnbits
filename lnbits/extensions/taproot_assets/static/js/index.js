@@ -139,7 +139,9 @@ window.app = Vue.createApp({
     // Maximum invoice amount
     maxInvoiceAmount() {
       if (!this.invoiceDialog.selectedAsset) return 0;
-      return AssetService.getMaxReceivableAmount(this.invoiceDialog.selectedAsset);
+      const maxAmount = AssetService.getMaxReceivableAmount(this.invoiceDialog.selectedAsset);
+      console.log("maxInvoiceAmount computed:", maxAmount);
+      return maxAmount;
     },
     
     // Check if invoice amount is valid
@@ -378,6 +380,12 @@ window.app = Vue.createApp({
     
     // Invoice dialog methods
     openInvoiceDialog(asset) {
+      // Add debugging logs
+      console.log("Opening invoice dialog with asset:", asset);
+      console.log("Channel info:", asset.channel_info);
+      console.log("Max receivable calculation:", 
+          parseFloat(asset.channel_info.capacity) - parseFloat(asset.channel_info.local_balance));
+      
       // Refresh assets first to ensure we have the latest channel status
       this.getAssets();
       
@@ -782,11 +790,15 @@ window.app = Vue.createApp({
         this.paymentDialog.inProgress = true;
         const wallet = this.g.user.wallets[0];
         
+        // Get the selected asset ID from the payment dialog
+        const assetId = this.paymentDialog.selectedAsset ? this.paymentDialog.selectedAsset.asset_id : null;
+        
         const paymentResult = await PaymentService.processInternalPayment(
           wallet,
           {
             paymentRequest: paymentRequest,
-            feeLimit: feeLimit || 10
+            feeLimit: feeLimit || 10,
+            assetId: assetId  // Pass the selected asset ID
           }
         );
         
