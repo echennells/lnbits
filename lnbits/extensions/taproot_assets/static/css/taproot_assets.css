@@ -372,6 +372,37 @@
   .lnbits-transactions-table .date-col {
     display: none;
   }
+  
+  /* Adjust the asset card padding on mobile */
+  .asset-card {
+    padding-right: 0 !important;
+  }
+  
+  /* Push the buttons container to the right edge */
+  .asset-card .row.items-center {
+    justify-content: space-between;
+  }
+  
+  /* Ensure the asset name has room to display */
+  .asset-card .col {
+    max-width: 40%;
+  }
+  
+  /* Make the buttons more compact on mobile */
+  .asset-card .q-btn {
+    min-width: 0;
+    padding: 0 4px;
+  }
+  
+  /* Adjust the right margin of the RECEIVE button */
+  .asset-card .q-btn.q-mr-sm {
+    margin-right: 8px !important;
+  }
+  
+  /* Push the SEND button to the extreme right */
+  .asset-card .col-auto {
+    padding-right: 0;
+  }
 }
 
 /* Custom pagination styling to match LNbits */
