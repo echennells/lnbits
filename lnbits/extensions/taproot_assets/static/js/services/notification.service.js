@@ -118,11 +118,7 @@ const NotificationService = {
    * @param {Object} invoice - Created invoice data
    */
   notifyInvoiceCreated(invoice) {
-    const assetName = invoice.asset_name || 'Asset';
-    const amount = invoice.asset_amount || 0;
-    
-    this.showSuccess(`${assetName} invoice created successfully for ${amount} units`);
-    
+    // Notification removed as requested
     // No need to update store as the InvoiceService already did this
   },
   

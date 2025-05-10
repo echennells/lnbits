@@ -241,10 +241,7 @@
   <q-card style="width: 100%; max-width: 500px; background-color: #1d1e42;">
     <q-card-section class="q-pt-lg q-px-md">
       <div v-if="invoiceDialog.selectedAsset" class="text-center q-mb-md">
-        <div class="text-h6 text-white">{% raw %}{{ invoiceDialog.selectedAsset.name || 'Unknown' }}{% endraw %}</div>
-        <div v-if="invoiceDialog.selectedAsset.channel_info && invoiceDialog.selectedAsset.channel_info.capacity !== undefined && invoiceDialog.selectedAsset.channel_info.local_balance !== undefined" class="text-positive">
-          Max Receivable: {% raw %}{{ maxInvoiceAmount }}{% endraw %}
-        </div>
+        <div class="text-h5 text-white" style="font-size: 1.5rem; font-weight: 500;">{% raw %}{{ invoiceDialog.selectedAsset.name || 'Unknown' }}{% endraw %}</div>
       </div>
 
       <form @submit.prevent="submitInvoiceForm" class="q-mt-md">
@@ -254,6 +251,9 @@
             <input v-model.number="invoiceDialog.form.amount" type="number" min="0.000001" step="0.000001" 
                   class="invoice-input full-width" required :max="maxInvoiceAmount" 
                   style="height: 40px; font-size: 16px;" inputmode="numeric" />
+            <div v-if="invoiceDialog.selectedAsset.channel_info && invoiceDialog.selectedAsset.channel_info.capacity !== undefined && invoiceDialog.selectedAsset.channel_info.local_balance !== undefined" class="text-positive q-mt-xs">
+              Max Receivable: {% raw %}{{ maxInvoiceAmount }}{% endraw %}
+            </div>
             <div class="text-negative" v-if="!isInvoiceAmountValid">
               <small>Amount exceeds maximum receivable</small>
             </div>
