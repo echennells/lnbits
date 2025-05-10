@@ -63,7 +63,7 @@ const InvoiceService = {
       const payload = {
         asset_id: assetData.asset_id,
         amount: parseFloat(invoiceData.amount),
-        memo: invoiceData.memo || '',
+        description: invoiceData.memo || '', // Backend expects 'description' not 'memo'
         expiry: invoiceData.expiry || 3600
       };
       

@@ -237,6 +237,12 @@ const DataUtils = {
       }
     }
     
+    // Map description to memo for frontend consistency
+    // The backend uses 'description' but frontend expects 'memo'
+    if (mapped.description && !mapped.memo) {
+      mapped.memo = mapped.description;
+    }
+    
     // Ensure extra exists and contains asset info
     mapped.extra = mapped.extra || {};
     

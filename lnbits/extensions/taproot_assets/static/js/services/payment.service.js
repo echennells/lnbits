@@ -193,7 +193,7 @@ const PaymentService = {
           asset_id: response.data.asset_id || assetData.asset_id,
           asset_amount: response.data.asset_amount,
           fee_sats: response.data.fee_msat ? Math.ceil(response.data.fee_msat / 1000) : 0,
-          memo: response.data.memo || '', // Use memo from backend response
+          memo: response.data.description || '', // Use description from backend response
           status: 'completed',
           user_id: wallet.user,
           wallet_id: wallet.id,
@@ -289,7 +289,7 @@ const PaymentService = {
         asset_id: response.data.asset_id,
         asset_amount: response.data.asset_amount,
         fee_sats: 0, // Internal payments have zero fee
-        memo: response.data.memo || '', // Use memo from backend response
+        memo: response.data.description || '', // Use description from backend response
         status: 'completed',
         user_id: wallet.user,
         wallet_id: wallet.id,
