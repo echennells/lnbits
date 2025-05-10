@@ -72,10 +72,6 @@ const InvoiceService = {
         payload.peer_pubkey = assetData.channel_info.peer_pubkey;
       }
       
-      // Add debugging logs
-      console.log("Creating invoice for asset:", assetData);
-      console.log("Payload being sent to API:", payload);
-      
       // Request creation from the API
       const response = await ApiService.createInvoice(wallet.adminkey, payload);
       

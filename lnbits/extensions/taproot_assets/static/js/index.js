@@ -582,33 +582,31 @@ window.app = Vue.createApp({
       }
     },
     
-    // Pay invoice from parse dialog
-    async payInvoice() {
-      if (!this.parseDialog.invoice || !this.paymentDialog.selectedAsset) {
-        NotificationService.showError('Missing invoice or asset information');
-        return;
-      }
+  // Pay invoice from parse dialog
+  async payInvoice() {
+    if (!this.parseDialog.invoice || !this.paymentDialog.selectedAsset) {
+      NotificationService.showError('Missing invoice or asset information');
+      return;
+    }
+    
+    if (!this.g.user.wallets || !this.g.user.wallets.length) return;
+    
+    try {
+      const wallet = this.g.user.wallets[0];
       
-      if (!this.g.user.wallets || !this.g.user.wallets.length) return;
+      // Close both dialogs immediately
+      this.parseDialog.show = false;
+      this.paymentDialog.show = false;
       
-      try {
-        const wallet = this.g.user.wallets[0];
-        
-        // Close the parse dialog
-        this.parseDialog.show = false;
-        
-        // Use PaymentService to pay invoice
-        const paymentResult = await PaymentService.payInvoice(
-          wallet,
-          this.paymentDialog.selectedAsset,
-          {
-            paymentRequest: this.parseDialog.invoice.bolt11,
-            feeLimit: this.paymentDialog.form.feeLimit
-          }
-        );
-        
-        // Close payment dialog
-        this.paymentDialog.show = false;
+      // Use PaymentService to pay invoice
+      const paymentResult = await PaymentService.payInvoice(
+        wallet,
+        this.paymentDialog.selectedAsset,
+        {
+          paymentRequest: this.parseDialog.invoice.bolt11,
+          feeLimit: this.paymentDialog.form.feeLimit
+        }
+      );
         
         // Get notification message and title
         const {title, message} = NotificationService.notifyPaymentSent(paymentResult);
@@ -713,6 +711,9 @@ window.app = Vue.createApp({
       try {
         this.paymentDialog.inProgress = true;
         const wallet = this.g.user.wallets[0];
+        
+        // Close payment dialog immediately
+        this.paymentDialog.show = false;
 
         // Use PaymentService to pay invoice
         const paymentResult = await PaymentService.payInvoice(
@@ -723,9 +724,6 @@ window.app = Vue.createApp({
             feeLimit: this.paymentDialog.form.feeLimit
           }
         );
-        
-        // Close payment dialog
-        this.paymentDialog.show = false;
         
         // Get notification message and title
         const {title, message} = NotificationService.notifyPaymentSent(paymentResult);
@@ -790,6 +788,9 @@ window.app = Vue.createApp({
         this.paymentDialog.inProgress = true;
         const wallet = this.g.user.wallets[0];
         
+        // Close payment dialog immediately
+        this.paymentDialog.show = false;
+        
         // Get the selected asset ID from the payment dialog
         const assetId = this.paymentDialog.selectedAsset ? this.paymentDialog.selectedAsset.asset_id : null;
         
@@ -801,9 +802,6 @@ window.app = Vue.createApp({
             assetId: assetId  // Pass the selected asset ID
           }
         );
-        
-        // Close payment dialog
-        this.paymentDialog.show = false;
         
         // Get notification message and title
         const {title, message} = NotificationService.notifyPaymentSent(paymentResult);
