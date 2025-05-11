@@ -38,15 +38,15 @@ class PaymentService:
         """
         Parse a BOLT11 payment request to extract invoice details.
         
-        This method uses the tapd server's DecodeAssetPayReq RPC to get the asset amount
-        for a given invoice. It tries all available assets in the user's wallet until it finds
-        a match.
+        NOTE: The tapd implementation allows decoding invoices with any asset ID.
+        We use the first available asset ID for decoding to extract the amount,
+        but the actual payment will use the client-provided asset ID.
         
         Args:
             payment_request: BOLT11 payment request to parse
             
         Returns:
-            ParsedInvoice: Parsed invoice data
+            ParsedInvoice: Parsed invoice data with amount
             
         Raises:
             Exception: If the invoice format is invalid or the asset amount cannot be determined
@@ -76,20 +76,17 @@ class PaymentService:
                 ln_macaroon_hex=taproot_settings.lnd_macaroon_hex
             )
             
-            # Try to get the asset amount by checking all available assets
+            # Get the asset amount using the first available asset
             try:
                 # Get all available assets
                 assets = await node.asset_manager.list_assets()
-                log_info(API, f"Trying with {len(assets)} available assets")
+                log_info(API, f"Found {len(assets)} available assets")
                 
-                # Try each asset ID
-                for asset in assets:
-                    try:
-                        asset_id_to_try = asset.get("asset_id")
-                        if not asset_id_to_try:
-                            continue
-                            
-                        log_info(API, f"Trying with asset_id: {asset_id_to_try}")
+                # Use the first available asset for decoding
+                if assets and len(assets) > 0:
+                    asset_id_to_try = assets[0].get("asset_id")
+                    if asset_id_to_try:
+                        log_info(API, f"Using first available asset_id: {asset_id_to_try} for decoding")
                         
                         # Create the request
                         request = tapchannel_pb2.AssetPayReq(
@@ -100,15 +97,17 @@ class PaymentService:
                         # Call the DecodeAssetPayReq RPC
                         response = await node.tapchannel_stub.DecodeAssetPayReq(request)
                         
-                        # If we get here without an exception, we found a matching asset
+                        # Extract the asset amount
                         if hasattr(response, 'asset_amount'):
                             asset_amount = float(response.asset_amount)
-                            asset_id = asset_id_to_try
-                            log_info(API, f"Found matching asset_id={asset_id} with amount={asset_amount}")
-                            break
-                    except Exception as e:
-                        # This asset ID didn't work, try the next one
-                        log_debug(API, f"Asset {asset_id_to_try} didn't match: {str(e)}")
+                            asset_id = asset_id_to_try  # Note: This is just for reference, actual payment will use client-provided asset_id
+                            log_info(API, f"Extracted invoice amount={asset_amount} using first available asset")
+                        else:
+                            raise Exception("Response does not contain asset_amount")
+                    else:
+                        raise Exception("First asset has no asset_id")
+                else:
+                    raise Exception("No assets available for decoding invoice")
             except Exception as e:
                 log_warning(API, f"Failed to get assets or try them: {str(e)}")
             

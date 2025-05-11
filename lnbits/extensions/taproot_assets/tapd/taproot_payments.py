@@ -72,29 +72,19 @@ class TaprootPaymentManager:
                 fee_limit_sats = max(fee_limit_sats or 10, 1)
                 log_info(PAYMENT, f"Using fee_limit_sats={fee_limit_sats} for payment")
 
-                # Decode invoice to get payment hash and extract asset ID if needed
+                # Decode invoice to get payment hash
                 try:
                     decoded = bolt11.decode(payment_request)
                     payment_hash = decoded.payment_hash
                     log_info(PAYMENT, f"Payment hash: {payment_hash}")
-                    
-                    # Extract asset ID from invoice description if not provided
-                    if not asset_id and hasattr(decoded, 'description'):
-                        desc = decoded.description
-                        log_info(PAYMENT, f"Checking description: {desc}")
-                        if desc and 'asset_id=' in desc:
-                            asset_id_match = re.search(r'asset_id=([a-fA-F0-9]{64})', desc)
-                            if asset_id_match:
-                                asset_id = asset_id_match.group(1)
-                                log_info(PAYMENT, f"Extracted asset_id from description: {asset_id}")
                 except Exception as e:
                     log_error(PAYMENT, f"Failed to decode invoice: {str(e)}")
                     raise Exception(f"Invalid invoice format: {str(e)}")
 
-                # If asset_id is still not available, try to get it from available assets
+                # If asset_id is not available, try to get it from available assets
                 if not asset_id:
                     try:
-                        log_debug(PAYMENT, "Asset ID not found in invoice, checking available assets")
+                        log_debug(PAYMENT, "Asset ID not provided, checking available assets")
                         assets = await self.node.asset_manager.list_assets()
                         if assets and len(assets) > 0:
                             asset_id = assets[0]["asset_id"]
