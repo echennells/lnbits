@@ -50,10 +50,7 @@ class TaprootTransferManager:
         logger.info("TaprootTransferManager initialized")
 
     async def monitor_asset_transfers(self):
-        """
-        Monitor asset transfers and settle HODL invoices when transfers complete.
-        """
-        # Use class-level flag to prevent duplicate monitoring
+        """Monitor asset transfers and settle HODL invoices when transfers complete."""
         if TaprootTransferManager._is_monitoring:
             logger.info("Monitoring already active, ignoring duplicate call")
             return
@@ -61,8 +58,7 @@ class TaprootTransferManager:
         TaprootTransferManager._is_monitoring = True
         logger.info("Starting asset transfer monitoring")
 
-        RETRY_DELAY = 5  # seconds
-        MAX_RETRIES = 3  # number of retries before giving up
+        # Define heartbeat interval
         HEARTBEAT_INTERVAL = 60  # 1 minute between heartbeats
 
         # Set up last cache size for efficient logging
@@ -128,7 +124,7 @@ class TaprootTransferManager:
                 logger.error(f"Error checking unprocessed payments: {str(e)}")
                 return 0
 
-        async def log_heartbeat():
+        async def _heartbeat_loop():
             """
             Periodically check for unprocessed payments and clean up expired preimages.
             Only logs when there's something meaningful to report.
@@ -168,57 +164,28 @@ class TaprootTransferManager:
                     logger.error(f"Error in heartbeat: {str(e)}")
                     await asyncio.sleep(10)
 
+        # Start heartbeat task
+        heartbeat_task = asyncio.create_task(_heartbeat_loop())
 
-        for retry in range(MAX_RETRIES):
-            try:
-                logger.info(f"Starting asset transfer monitoring (attempt {retry + 1}/{MAX_RETRIES})")
+        try:
+            # Subscribe to send events - simpler without multiple retries
+            request = taprootassets_pb2.SubscribeSendEventsRequest()
+            send_events = self.node.stub.SubscribeSendEvents(request)
+            logger.info("Successfully subscribed to send events")
 
-                # Start heartbeat task
-                heartbeat_task = asyncio.create_task(log_heartbeat())
-
-                # Subscribe to send events
-                request = taprootassets_pb2.SubscribeSendEventsRequest()
-                
-                try:
-                    send_events = self.node.stub.SubscribeSendEvents(request)
-                    logger.info("Successfully subscribed to send events")
-                except Exception as e:
-                    logger.error(f"Error creating subscription: {str(e)}")
-                    raise
-
-                # Process incoming events
-                async for event in send_events:
-                    logger.debug("Received send event")
-                    # Asset transfer happens through the Lightning layer
-                    # We only monitor these events for informational purposes
-
-            except grpc.aio.AioRpcError as grpc_error:
-                logger.error(f"gRPC error in subscription: {grpc_error.code()}: {grpc_error.details()}")
-
-            except Exception as e:
-                logger.error(f"Error in asset transfer monitoring: {str(e)}")
-
-            finally:
-                # Cancel heartbeat task
-                if 'heartbeat_task' in locals():
-                    heartbeat_task.cancel()
-                    try:
-                        await heartbeat_task
-                    except asyncio.CancelledError:
-                        pass
-
-            # Wait before retrying
-            if retry < MAX_RETRIES - 1:
-                logger.info(f"Retrying in {RETRY_DELAY} seconds")
-                await asyncio.sleep(RETRY_DELAY)
-
-        logger.warning("Max retries reached for monitoring")
-        
-        # Reset monitoring state to allow future attempts
-        TaprootTransferManager._is_monitoring = False
-        
-        # Create a new monitoring task
-        asyncio.create_task(self.monitor_asset_transfers())
+            # Process incoming events
+            async for event in send_events:
+                logger.debug("Received send event")
+                # Process event logic here
+        except Exception as e:
+            logger.error(f"Error in asset transfer monitoring: {str(e)}")
+        finally:
+            # Cancel heartbeat task
+            if 'heartbeat_task' in locals():
+                heartbeat_task.cancel()
+            
+            # Reset monitoring state to allow future attempts
+            TaprootTransferManager._is_monitoring = False
 
     async def monitor_invoice(self, payment_hash: str):
         """
