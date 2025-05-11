@@ -50,28 +50,15 @@ class TaprootAssetsNodeExtension(Node):
     Implementation of Taproot Assets node functionality for the extension.
     This mirrors the core TaprootAssetsNode class.
     """
-    # Class-level cache to store preimages with expiry times
+    # Class-level cache to store preimages
     _preimage_cache = {}
     
     # Class-level cache to store asset_ids for payment hashes
     _asset_id_cache = {}
-    
-    # Default expiry time for preimages (24 hours)
-    DEFAULT_PREIMAGE_EXPIRY = 86400
 
     def _store_preimage(self, payment_hash: str, preimage: str):
-        """
-        Store a preimage for a given payment hash with expiry time.
-        
-        Args:
-            payment_hash: The payment hash
-            preimage: The preimage corresponding to the payment hash
-        """
-        expiry = int(time.time()) + self.DEFAULT_PREIMAGE_EXPIRY
-        self.__class__._preimage_cache[payment_hash] = {
-            "preimage": preimage,
-            "expiry": expiry
-        }
+        """Store a preimage for a given payment hash."""
+        self.__class__._preimage_cache[payment_hash] = preimage
         log_debug(NODE, f"Stored preimage for payment hash: {payment_hash[:8]}...")
 
     def _store_asset_id(self, payment_hash: str, asset_id: str):
@@ -103,42 +90,13 @@ class TaprootAssetsNodeExtension(Node):
         return asset_id
 
     def _get_preimage(self, payment_hash: str) -> Optional[str]:
-        """
-        Retrieve a preimage for a given payment hash, checking expiry.
-        
-        Args:
-            payment_hash: The payment hash to look up
-            
-        Returns:
-            str: The preimage if found and not expired, None otherwise
-        """
-        entry = self.__class__._preimage_cache.get(payment_hash)
-        
-        # No entry found
-        if not entry:
+        """Retrieve a preimage for a given payment hash."""
+        preimage = self.__class__._preimage_cache.get(payment_hash)
+        if preimage:
+            log_debug(NODE, f"Found preimage for payment hash: {payment_hash[:8]}...")
+        else:
             log_debug(NODE, f"No preimage found for payment hash: {payment_hash[:8]}...")
-            return None
-            
-        # Handle legacy plain preimage strings (backward compatibility)
-        if isinstance(entry, str):
-            log_debug(NODE, f"Found legacy preimage for payment hash: {payment_hash[:8]}...")
-            return entry
-            
-        # Check for expiry if it's a dict with expiry
-        if isinstance(entry, dict):
-            # If expired, remove and return None
-            if entry.get("expiry") and entry["expiry"] < int(time.time()):
-                log_debug(NODE, f"Preimage expired for payment hash: {payment_hash[:8]}...")
-                del self.__class__._preimage_cache[payment_hash]
-                return None
-                
-            # Return the preimage
-            log_debug(NODE, f"Found valid preimage for payment hash: {payment_hash[:8]}...")
-            return entry.get("preimage")
-            
-        # Unexpected entry type
-        log_warning(NODE, f"Unexpected preimage cache entry type for payment hash: {payment_hash[:8]}...")
-        return None
+        return preimage
 
     def __init__(
         self,
