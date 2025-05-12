@@ -130,21 +130,24 @@ class TaprootParserClient:
             log_debug(PARSER, "Fetching assets list from tapd")
             try:
                 from .taproot_adapter import taprootassets_pb2
-                request = taprootassets_pb2.ListAssetsRequest()
+                request = taprootassets_pb2.ListAssetRequest(
+                    with_witness=False,
+                    include_spent=False,
+                    include_leased=True,
+                    include_unconfirmed_mints=True
+                )
                 response = await self.stub.ListAssets(request)
                 
-                # Convert to list of dicts
+                # Convert response assets to dictionary format
                 self.assets = []
                 for asset in response.assets:
-                    asset_dict = {}
-                    for field in ['asset_id', 'name', 'asset_type', 'amount', 'version']:
-                        if hasattr(asset, field):
-                            value = getattr(asset, field)
-                            if isinstance(value, bytes):
-                                asset_dict[field] = value.hex()
-                            else:
-                                asset_dict[field] = value
-                    self.assets.append(asset_dict)
+                    self.assets.append({
+                        "name": asset.asset_genesis.name.decode('utf-8') if isinstance(asset.asset_genesis.name, bytes) else asset.asset_genesis.name,
+                        "asset_id": asset.asset_genesis.asset_id.hex() if isinstance(asset.asset_genesis.asset_id, bytes) else asset.asset_genesis.asset_id,
+                        "type": str(asset.asset_genesis.asset_type),
+                        "amount": str(asset.amount),
+                        "version": str(asset.version)
+                    })
                 
                 self.last_assets_fetch = current_time
                 log_debug(PARSER, f"Fetched {len(self.assets)} assets")

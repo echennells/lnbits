@@ -96,7 +96,8 @@ class TaprootTransferManager:
                     payment_hash = self.node.invoice_manager._get_payment_hash_from_script_key(script_key)
                     
                     # Skip payments without preimage
-                    if not payment_hash or payment_hash not in self.node._preimage_cache:
+                    preimage = self.node._get_preimage(payment_hash)
+                    if not payment_hash or not preimage:
                         continue
                     
                     # Check if already settled in database
@@ -172,15 +173,14 @@ class TaprootTransferManager:
                         # Check for and process unprocessed payments
                         processed_count = await check_unprocessed_payments()
                         
-                        # Get current cache size
-                        current_cache_size = len(self.node._preimage_cache)
+                        # Get current cache size - we can't directly access the cache size anymore
+                        # Just log the processed and expired counts
+                        current_cache_size = 0  # Placeholder, not used for logging
                         
-                        # Only log if something changed or action was taken
-                        if (current_cache_size != last_cache_size or 
-                            expired_count > 0 or processed_count > 0):
-                            logger.info(f"Heartbeat: Preimage cache size: {current_cache_size}, " +
-                                       f"Expired: {expired_count}, Newly processed: {processed_count}")
-                            last_cache_size = current_cache_size
+                        # Only log if action was taken
+                        if expired_count > 0 or processed_count > 0:
+                            logger.info(f"Heartbeat: Expired preimages: {expired_count}, " +
+                                       f"Newly processed: {processed_count}")
 
                     # Sleep for a shorter period to allow cancellation
                     await asyncio.sleep(10)
@@ -329,25 +329,15 @@ class TaprootTransferManager:
         """
         Clean up expired preimages from the cache.
         
+        Note: We can't directly access the cache anymore, so this is a no-op.
+        The cache utility handles expiration automatically.
+        
         Returns:
-            int: Number of expired entries removed
+            int: Number of expired entries removed (always 0 now)
         """
-        now = time.time()
-        expired_count = 0
-        
-        # Get a list of expired payment hashes
-        expired_hashes = []
-        for payment_hash, entry in self.node._preimage_cache.items():
-            if isinstance(entry, dict) and 'expiry' in entry:
-                if entry['expiry'] < now:
-                    expired_hashes.append(payment_hash)
-        
-        # Remove expired entries
-        for payment_hash in expired_hashes:
-            del self.node._preimage_cache[payment_hash]
-            expired_count += 1
-            
-        return expired_count
+        # The cache utility handles expiration automatically
+        # This method is kept for compatibility but doesn't do anything now
+        return 0
         
     async def _extract_script_key_from_invoice(self, invoice) -> Optional[str]:
         """Extract script key from invoice HTLCs."""
