@@ -74,126 +74,6 @@ class TaprootTransferManager:
         TaprootTransferManager._is_monitoring = True
         logger.info("Starting asset transfer monitoring")
 
-        # Define heartbeat interval
-        HEARTBEAT_INTERVAL = 60  # 1 minute between heartbeats
-
-        # Set up last cache size for efficient logging
-        last_cache_size = 0
-        last_heartbeat_time = time.time()
-
-        async def check_unprocessed_payments():
-            """Check for unprocessed payments and attempt to settle them."""
-            try:
-                # Get all script key mappings
-                script_key_mappings = list(self.node.invoice_manager._script_key_to_payment_hash.keys())
-                if not script_key_mappings:
-                    return 0
-                    
-                # Count of newly processed payments
-                newly_processed = 0
-                    
-                for script_key in script_key_mappings:
-                    payment_hash = self.node.invoice_manager._get_payment_hash_from_script_key(script_key)
-                    
-                    # Skip payments without preimage
-                    preimage = self.node._get_preimage(payment_hash)
-                    if not payment_hash or not preimage:
-                        continue
-                    
-                    # Check if already settled in database
-                    invoice = await get_invoice_by_payment_hash(payment_hash)
-                    if invoice and invoice.status == "paid":
-                        continue
-                    
-                    # Check if this is an internal payment
-                    is_internal = await is_internal_payment(payment_hash)
-                    
-                    # Check if this is a self-payment if we have wallet info
-                    is_self_payment = False
-                    user_id = None
-                    wallet_id = None
-                    
-                    if hasattr(self.node, 'wallet') and self.node.wallet:
-                        user_id = self.node.wallet.user
-                        wallet_id = self.node.wallet.id
-                        if user_id and invoice:
-                            is_self_payment = await is_self_payment(payment_hash, user_id)
-                    
-                    # Attempt settlement with Settlement Service
-                    logger.info(f"Found unprocessed payment, attempting settlement")
-                    
-                    try:
-                        success, result = await SettlementService.settle_invoice(
-                            payment_hash=payment_hash,
-                            node=self.node,
-                            is_internal=is_internal,
-                            is_self_payment=is_self_payment,
-                            user_id=user_id,
-                            wallet_id=wallet_id
-                        )
-                        
-                        if not success:
-                            from ..error_utils import handle_error
-                            error_msg = result.get('error', 'Unknown error')
-                            error_result = handle_error("settle_payment", Exception(error_msg), payment_hash)
-                    except Exception as e:
-                        from ..error_utils import handle_error
-                        error_result = handle_error("check_unprocessed_payments", e, payment_hash)
-                        logger.error(f"Exception during settlement: {error_result['error']}")
-                        continue
-                    
-                    # Track newly processed payments
-                    if success:
-                        newly_processed += 1
-                
-                # Return the number of newly processed payments
-                return newly_processed
-            except Exception as e:
-                logger.error(f"Error checking unprocessed payments: {str(e)}")
-                return 0
-
-        async def _heartbeat_loop():
-            """
-            Periodically check for unprocessed payments and clean up expired preimages.
-            Only logs when there's something meaningful to report.
-            """
-            nonlocal last_cache_size, last_heartbeat_time
-            
-            while True:
-                try:
-                    current_time = time.time()
-                    
-                    # Perform cleanup and settlement at each heartbeat interval
-                    if current_time - last_heartbeat_time >= HEARTBEAT_INTERVAL:
-                        last_heartbeat_time = current_time
-                        
-                        # Clean up expired preimages
-                        expired_count = await self._cleanup_preimage_cache()
-                        
-                        # Check for and process unprocessed payments
-                        processed_count = await check_unprocessed_payments()
-                        
-                        # Get current cache size - we can't directly access the cache size anymore
-                        # Just log the processed and expired counts
-                        current_cache_size = 0  # Placeholder, not used for logging
-                        
-                        # Only log if action was taken
-                        if expired_count > 0 or processed_count > 0:
-                            logger.info(f"Heartbeat: Expired preimages: {expired_count}, " +
-                                       f"Newly processed: {processed_count}")
-
-                    # Sleep for a shorter period to allow cancellation
-                    await asyncio.sleep(10)
-                except asyncio.CancelledError:
-                    logger.info("Heartbeat task cancelled")
-                    break
-                except Exception as e:
-                    logger.error(f"Error in heartbeat: {str(e)}")
-                    await asyncio.sleep(10)
-
-        # Start heartbeat task
-        heartbeat_task = asyncio.create_task(_heartbeat_loop())
-
         try:
             # Subscribe to send events - simpler without multiple retries
             request = taprootassets_pb2.SubscribeSendEventsRequest()
@@ -207,10 +87,6 @@ class TaprootTransferManager:
         except Exception as e:
             logger.error(f"Error in asset transfer monitoring: {str(e)}")
         finally:
-            # Cancel heartbeat task
-            if 'heartbeat_task' in locals():
-                heartbeat_task.cancel()
-            
             # Reset monitoring state to allow future attempts
             TaprootTransferManager._is_monitoring = False
 
@@ -325,20 +201,6 @@ class TaprootTransferManager:
             from ..error_utils import handle_error
             error_result = handle_error("monitor_invoice", e, payment_hash)
 
-    async def _cleanup_preimage_cache(self) -> int:
-        """
-        Clean up expired preimages from the cache.
-        
-        Note: We can't directly access the cache anymore, so this is a no-op.
-        The cache utility handles expiration automatically.
-        
-        Returns:
-            int: Number of expired entries removed (always 0 now)
-        """
-        # The cache utility handles expiration automatically
-        # This method is kept for compatibility but doesn't do anything now
-        return 0
-        
     async def _extract_script_key_from_invoice(self, invoice) -> Optional[str]:
         """Extract script key from invoice HTLCs."""
         if not hasattr(invoice, 'htlcs') or not invoice.htlcs:
