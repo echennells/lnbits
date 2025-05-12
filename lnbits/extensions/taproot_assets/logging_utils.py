@@ -18,6 +18,7 @@ API = "API"
 DB = "DB"
 GENERAL = "GENERAL"
 FACTORY = "FACTORY"  # Added for the TaprootAssetsFactory
+PARSER = "PARSER"   # Added for the TaprootParserClient
 
 # Log level mapping for reference
 LOG_LEVELS = {

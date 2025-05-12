@@ -340,31 +340,21 @@ class PaymentService:
             # Use the bolt11 library to decode the invoice
             decoded = bolt11.decode(payment_request)
             
-            #Extract the description and initialize variables
+            # Extract the description and initialize variables
             description = decoded.description if hasattr(decoded, "description") else ""
             asset_id = None
             asset_amount = None
             
-            # Import necessary modules and create a node connection
-            from ..tapd.taproot_factory import TaprootAssetsFactory
-            from ..tapd.taproot_adapter import tapchannel_pb2
-            from ..tapd_settings import taproot_settings
+            # Import the parser client
+            from ..tapd.taproot_parser import TaprootParserClient
             
-            # Create a temporary wallet/node instance to access the tapd server
-            wallet, node = await TaprootAssetsFactory.create_wallet_and_node(
-                host=taproot_settings.tapd_host,
-                network=taproot_settings.tapd_network,
-                tls_cert_path=taproot_settings.tapd_tls_cert_path,
-                macaroon_path=taproot_settings.tapd_macaroon_path,
-                ln_macaroon_path=taproot_settings.lnd_macaroon_path,
-                tapd_macaroon_hex=taproot_settings.tapd_macaroon_hex,
-                ln_macaroon_hex=taproot_settings.lnd_macaroon_hex
-            )
+            # Get the singleton parser client instance
+            parser_client = TaprootParserClient.get_instance()
             
             # Get the asset amount using the first available asset
             try:
                 # Get all available assets
-                assets = await node.asset_manager.list_assets()
+                assets = await parser_client.list_assets()
                 log_info(API, f"Found {len(assets)} available assets")
                 
                 # Use the first available asset for decoding
@@ -373,18 +363,15 @@ class PaymentService:
                     if asset_id_to_try:
                         log_info(API, f"Using first available asset_id: {asset_id_to_try} for decoding")
                         
-                        # Create the request
-                        request = tapchannel_pb2.AssetPayReq(
-                            asset_id=bytes.fromhex(asset_id_to_try),
-                            pay_req_string=payment_request
+                        # Decode the payment request using the parser client
+                        decoded_result = await parser_client.decode_asset_pay_req(
+                            asset_id=asset_id_to_try,
+                            payment_request=payment_request
                         )
                         
-                        # Call the DecodeAssetPayReq RPC
-                        response = await node.tapchannel_stub.DecodeAssetPayReq(request)
-                        
                         # Extract the asset amount
-                        if hasattr(response, 'asset_amount'):
-                            asset_amount = float(response.asset_amount)
+                        if 'asset_amount' in decoded_result:
+                            asset_amount = float(decoded_result['asset_amount'])
                             asset_id = asset_id_to_try  # Note: This is just for reference, actual payment will use client-provided asset_id
                             log_info(API, f"Extracted invoice amount={asset_amount} using first available asset")
                         else:

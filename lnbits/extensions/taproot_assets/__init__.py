@@ -34,12 +34,35 @@ def taproot_assets_start():
     logger.info("Taproot Assets extension started")
 
 def taproot_assets_stop():
-    """Stop any scheduled tasks."""
+    """Stop any scheduled tasks and close connections."""
+    # Cancel scheduled tasks
     for task in scheduled_tasks:
         try:
             task.cancel()
         except Exception as ex:
             logger.warning(ex)
+    
+    # Close the parser client connection if it exists
+    async def close_parser_client():
+        try:
+            from .tapd.taproot_parser import TaprootParserClient
+            parser_client = TaprootParserClient.get_instance()
+            if parser_client._initialized:
+                logger.info("Closing TaprootParserClient connection")
+                await parser_client.close()
+                logger.info("TaprootParserClient connection closed")
+        except Exception as ex:
+            logger.warning(f"Error closing TaprootParserClient: {ex}")
+    
+    # Run the async close function in a new event loop
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(close_parser_client())
+        else:
+            asyncio.run(close_parser_client())
+    except Exception as ex:
+        logger.warning(f"Error in shutdown hook: {ex}")
 
 # Make sure db is properly exposed
 def taproot_assets_createdb():
