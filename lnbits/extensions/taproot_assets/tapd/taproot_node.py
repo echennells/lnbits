@@ -14,6 +14,7 @@ from lnbits.nodes.base import (
     NodeChannel, NodePeerInfo, NodeInfoResponse, NodeInvoice, 
     NodePayment, NodeInvoiceFilters, NodePaymentsFilters, ChannelPoint
 )
+from lnbits.utils.cache import cache
 
 # Import the adapter module for Taproot Asset gRPC interfaces
 from .taproot_adapter import (
@@ -50,15 +51,13 @@ class TaprootAssetsNodeExtension(Node):
     Implementation of Taproot Assets node functionality for the extension.
     This mirrors the core TaprootAssetsNode class.
     """
-    # Class-level cache to store preimages
-    _preimage_cache = {}
-    
-    # Class-level cache to store asset_ids for payment hashes
-    _asset_id_cache = {}
+    # Cache expiry times in seconds
+    PREIMAGE_CACHE_EXPIRY = 86400  # 24 hours
+    ASSET_ID_CACHE_EXPIRY = 86400  # 24 hours
 
     def _store_preimage(self, payment_hash: str, preimage: str):
         """Store a preimage for a given payment hash."""
-        self.__class__._preimage_cache[payment_hash] = preimage
+        cache.set(f"taproot:preimage:{payment_hash}", preimage, expiry=self.PREIMAGE_CACHE_EXPIRY)
         log_debug(NODE, f"Stored preimage for payment hash: {payment_hash[:8]}...")
 
     def _store_asset_id(self, payment_hash: str, asset_id: str):
@@ -69,7 +68,7 @@ class TaprootAssetsNodeExtension(Node):
             payment_hash: The payment hash
             asset_id: The asset_id corresponding to the payment hash
         """
-        self.__class__._asset_id_cache[payment_hash] = asset_id
+        cache.set(f"taproot:asset_id:{payment_hash}", asset_id, expiry=self.ASSET_ID_CACHE_EXPIRY)
         log_debug(NODE, f"Stored asset_id {asset_id[:8]}... for payment hash: {payment_hash[:8]}...")
 
     def _get_asset_id(self, payment_hash: str) -> Optional[str]:
@@ -82,7 +81,7 @@ class TaprootAssetsNodeExtension(Node):
         Returns:
             str: The asset_id if found, None otherwise
         """
-        asset_id = self.__class__._asset_id_cache.get(payment_hash)
+        asset_id = cache.get(f"taproot:asset_id:{payment_hash}")
         if asset_id:
             log_debug(NODE, f"Found asset_id {asset_id[:8]}... for payment hash: {payment_hash[:8]}...")
         else:
@@ -91,7 +90,7 @@ class TaprootAssetsNodeExtension(Node):
 
     def _get_preimage(self, payment_hash: str) -> Optional[str]:
         """Retrieve a preimage for a given payment hash."""
-        preimage = self.__class__._preimage_cache.get(payment_hash)
+        preimage = cache.get(f"taproot:preimage:{payment_hash}")
         if preimage:
             log_debug(NODE, f"Found preimage for payment hash: {payment_hash[:8]}...")
         else:

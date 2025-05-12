@@ -1,6 +1,7 @@
 from typing import Optional, Tuple, Dict, Any, cast
 import asyncio
 
+from lnbits.utils.cache import cache
 from .taproot_wallet import TaprootWalletExtension
 from .taproot_node import TaprootAssetsNodeExtension
 from ..logging_utils import log_info, log_debug, log_warning, FACTORY, LogContext
@@ -15,9 +16,8 @@ class TaprootAssetsFactory:
     This factory also implements a caching mechanism to avoid creating multiple wallet
     instances for the same user and wallet ID.
     """
-    # Cache of wallet instances, keyed by (user_id, wallet_id)
-    _wallet_cache: Dict[Tuple[str, str], TaprootWalletExtension] = {}
-    _cache_lock = asyncio.Lock()
+    # Cache expiry time in seconds
+    WALLET_CACHE_EXPIRY = 3600  # 1 hour
     
     @classmethod
     async def create_wallet_and_node(
@@ -51,20 +51,17 @@ class TaprootAssetsFactory:
         """
         # Check if we have valid user_id and wallet_id for caching
         if user_id and wallet_id:
-            cache_key = (user_id, wallet_id)
+            cache_key = f"taproot:wallet:{user_id}:{wallet_id}"
             
-            # Use a lock to prevent race conditions when accessing the cache
-            async with cls._cache_lock:
-                # Check if we already have a wallet instance for this user and wallet
-                if cache_key in cls._wallet_cache:
-                    wallet = cls._wallet_cache[cache_key]
-                    if wallet.initialized and wallet.node:
-                        log_debug(FACTORY, f"Using cached wallet instance for user {user_id}, wallet {wallet_id}")
-                        return wallet, wallet.node
-                    else:
-                        # If the wallet exists but isn't properly initialized, remove it from cache
-                        log_warning(FACTORY, f"Found uninitialized wallet in cache for {user_id}, {wallet_id}. Recreating.")
-                        cls._wallet_cache.pop(cache_key, None)
+            # Check if we already have a wallet instance for this user and wallet
+            wallet = cache.get(cache_key)
+            if wallet and wallet.initialized and wallet.node:
+                log_debug(FACTORY, f"Using cached wallet instance for user {user_id}, wallet {wallet_id}")
+                return wallet, wallet.node
+            elif wallet:
+                # If the wallet exists but isn't properly initialized, remove it from cache
+                log_warning(FACTORY, f"Found uninitialized wallet in cache for {user_id}, {wallet_id}. Recreating.")
+                cache.pop(cache_key)
         
         with LogContext(FACTORY, f"Creating wallet and node for user {user_id}, wallet {wallet_id}"):
             # Create wallet
@@ -93,9 +90,8 @@ class TaprootAssetsFactory:
             
             # Add to cache if we have a valid user_id and wallet_id
             if user_id and wallet_id:
-                cache_key = (user_id, wallet_id)
-                async with cls._cache_lock:
-                    cls._wallet_cache[cache_key] = wallet
+                cache_key = f"taproot:wallet:{user_id}:{wallet_id}"
+                cache.set(cache_key, wallet, expiry=cls.WALLET_CACHE_EXPIRY)
             
             log_info(FACTORY, f"Successfully created wallet and node for user {user_id}, wallet {wallet_id}")
             return wallet, node

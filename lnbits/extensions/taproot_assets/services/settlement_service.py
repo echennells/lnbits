@@ -11,6 +11,7 @@ import grpc.aio
 from abc import ABC, abstractmethod
 from loguru import logger
 
+from lnbits.utils.cache import cache
 from ..tapd.taproot_adapter import invoices_pb2
 from .notification_service import NotificationService
 from ..models import TaprootInvoice, TaprootPayment
@@ -413,11 +414,8 @@ class SettlementService:
     preserving the unique aspects of each.
     """
     
-    # Class-level cache to track settled payment hashes
-    _settled_payment_hashes = set()
-    
-    # Class-level lock for cache operations
-    _cache_lock = asyncio.Lock()
+    # Cache expiry time in seconds
+    SETTLED_PAYMENT_CACHE_EXPIRY = 86400  # 24 hours
     
     # Strategy instances
     _internal_strategy = InternalPaymentStrategy()
@@ -495,11 +493,8 @@ class SettlementService:
         log_context = "internal payment" if is_internal else "Lightning payment"
         with ErrorContext(f"settle_invoice_{log_context}", TRANSFER):
             with LogContext(TRANSFER, f"settling invoice {payment_hash[:8]}... ({log_context})", log_level="info"):
-                # Check if already settled in memory cache
-                is_settled = False
-                async with cls._cache_lock:
-                    is_settled = payment_hash in cls._settled_payment_hashes
-                    
+                # Check if already settled in cache
+                is_settled = cache.get(f"taproot:settled:{payment_hash}")
                 if is_settled:
                     log_info(TRANSFER, f"Invoice {payment_hash[:8]}... already marked as settled in memory, skipping")
                     return True, {"already_settled": True}
@@ -508,9 +503,8 @@ class SettlementService:
                 invoice = await get_invoice_by_payment_hash(payment_hash)
                 if invoice and invoice.status == "paid":
                     log_info(TRANSFER, f"Invoice {payment_hash[:8]}... already paid in database, skipping")
-                    # Add to memory cache to avoid future DB lookups
-                    async with cls._cache_lock:
-                        cls._settled_payment_hashes.add(payment_hash)
+                    # Add to cache to avoid future DB lookups
+                    cache.set(f"taproot:settled:{payment_hash}", True, expiry=cls.SETTLED_PAYMENT_CACHE_EXPIRY)
                     return True, {"already_settled": True}
                 
                 # Get or generate preimage
@@ -542,8 +536,7 @@ class SettlementService:
                 
                 # If successful, track settlement
                 if success:
-                    async with cls._cache_lock:
-                        cls._settled_payment_hashes.add(payment_hash)
+                    cache.set(f"taproot:settled:{payment_hash}", True, expiry=cls.SETTLED_PAYMENT_CACHE_EXPIRY)
                     
                     # For Lightning payments, update asset balance if invoice exists
                     if not is_internal and invoice:
@@ -718,10 +711,7 @@ class SettlementService:
             log_info(PAYMENT, f"Recording payment: hash={payment_hash[:8]}..., asset_amount={asset_amount}, fee_sats={fee_sats}")
             
             # Check if we've already processed this payment hash to avoid duplicates
-            is_processed = False
-            async with cls._cache_lock:
-                is_processed = payment_hash in cls._settled_payment_hashes
-                
+            is_processed = cache.get(f"taproot:settled:{payment_hash}")
             if is_processed and is_internal:
                 # For internal payments, we already handled both sides in settle_invoice
                 # Just create the payment record for notification purposes
@@ -790,9 +780,8 @@ class SettlementService:
                             conn=tx_conn
                         )
                     
-                    # Add to settled payment hashes set
-                    async with cls._cache_lock:
-                        cls._settled_payment_hashes.add(payment_hash)
+                    # Add to settled payment hashes cache
+                    cache.set(f"taproot:settled:{payment_hash}", True, expiry=cls.SETTLED_PAYMENT_CACHE_EXPIRY)
                     
                     log_info(PAYMENT, f"Payment record created successfully for hash={payment_hash[:8]}...")
                 except Exception as e:
