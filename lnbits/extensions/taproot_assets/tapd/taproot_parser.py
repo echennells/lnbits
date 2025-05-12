@@ -133,8 +133,8 @@ class TaprootParserClient:
                 request = taprootassets_pb2.ListAssetRequest(
                     with_witness=False,
                     include_spent=False,
-                    include_leased=True,
-                    include_unconfirmed_mints=True
+                    include_leased=False,  # Changed to False to exclude leased assets
+                    include_unconfirmed_mints=False  # Changed to False to exclude unconfirmed mints
                 )
                 response = await self.stub.ListAssets(request)
                 
