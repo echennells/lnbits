@@ -568,6 +568,115 @@ class SettlementService:
                 return success, result
     
     @classmethod
+    async def process_payment_settlement(
+        cls,
+        payment_hash: str,
+        payment_request: str,
+        asset_id: str,
+        asset_amount: int,
+        fee_sats: int,
+        user_id: str,
+        wallet_id: str,
+        node=None,
+        is_internal: bool = False,
+        is_self_payment: bool = False,
+        description: Optional[str] = None,
+        preimage: Optional[str] = None,
+        sender_info: Optional[Dict[str, Any]] = None
+    ) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Unified method to handle all payment settlement operations.
+        Combines the logic from settle_invoice and record_payment.
+        
+        Args:
+            payment_hash: Payment hash
+            payment_request: Original payment request
+            asset_id: Asset ID
+            asset_amount: Amount of the asset (not the fee)
+            fee_sats: Fee in satoshis (actual fee, not the limit)
+            user_id: User ID
+            wallet_id: Wallet ID
+            node: Optional node instance for Lightning settlement
+            is_internal: Whether this is an internal payment
+            is_self_payment: Whether this is a self-payment
+            description: Optional description
+            preimage: Optional preimage
+            sender_info: Optional sender information for internal payments
+            
+        Returns:
+            Tuple containing:
+                - Success status (bool)
+                - Result dictionary with payment details
+        """
+        with ErrorContext("process_payment_settlement", PAYMENT):
+            log_info(PAYMENT, f"Processing payment settlement: hash={payment_hash[:8]}..., type={'internal' if is_internal else 'external'}")
+            
+            # Step 1: Settle the invoice if this is an internal payment
+            settlement_result = {}
+            if is_internal and node:
+                # Determine if we have sender info
+                has_sender = sender_info is not None and len(sender_info) > 0
+                
+                # Settle the invoice
+                settle_success, settle_result = await cls.settle_invoice(
+                    payment_hash=payment_hash,
+                    node=node,
+                    is_internal=True,
+                    is_self_payment=is_self_payment,
+                    user_id=user_id,
+                    wallet_id=wallet_id,
+                    sender_info=sender_info
+                )
+                
+                if not settle_success:
+                    log_error(PAYMENT, f"Failed to settle invoice: {settle_result.get('error', 'Unknown error')}")
+                    return False, {"error": f"Failed to settle invoice: {settle_result.get('error', 'Unknown error')}"}
+                
+                settlement_result = settle_result
+                
+                # If we have a preimage from settlement, use it
+                if not preimage and 'preimage' in settle_result:
+                    preimage = settle_result['preimage']
+            
+            # Step 2: Record the payment
+            payment_success, payment_record = await cls.record_payment(
+                payment_hash=payment_hash,
+                payment_request=payment_request,
+                asset_id=asset_id,
+                asset_amount=asset_amount,
+                fee_sats=fee_sats,
+                user_id=user_id,
+                wallet_id=wallet_id,
+                description=description,
+                preimage=preimage,
+                is_internal=is_internal,
+                is_self_payment=is_self_payment
+            )
+            
+            if not payment_success:
+                log_warning(PAYMENT, "Payment settlement was successful but failed to record in database")
+            
+            # Combine results
+            result = {
+                "success": True,
+                "payment_hash": payment_hash,
+                "preimage": preimage or "",
+                "asset_id": asset_id,
+                "asset_amount": asset_amount,
+                "fee_sats": fee_sats,
+                "is_internal": is_internal,
+                "is_self_payment": is_self_payment
+            }
+            
+            # Add any additional data from settlement
+            if settlement_result:
+                for key, value in settlement_result.items():
+                    if key not in result and key != "success":
+                        result[key] = value
+            
+            return True, result
+    
+    @classmethod
     async def record_payment(
         cls,
         payment_hash: str,

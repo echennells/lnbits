@@ -1,8 +1,9 @@
 """
 Payment service for Taproot Assets extension.
-Handles payment-related business logic.
+Handles payment-related business logic using a strategy pattern.
 """
-from typing import Dict, Any, Optional, List, Tuple, Union
+from typing import Dict, Any, Optional, List, Tuple, Union, Type
+from abc import ABC, abstractmethod
 import re
 import grpc
 import asyncio
@@ -28,11 +29,258 @@ from ..crud import (
 from .settlement_service import SettlementService
 
 
+class PaymentStrategy(ABC):
+    """
+    Abstract base class for payment strategies.
+    Each concrete strategy implements a specific payment type.
+    """
+    
+    @abstractmethod
+    async def execute(
+        self,
+        data: TaprootPaymentRequest,
+        wallet: WalletTypeInfo,
+        parsed_invoice: ParsedInvoice,
+        **kwargs
+    ) -> PaymentResponse:
+        """
+        Execute the payment strategy.
+        
+        Args:
+            data: The payment request data
+            wallet: The wallet information
+            parsed_invoice: The parsed invoice data
+            **kwargs: Additional parameters specific to the strategy
+            
+        Returns:
+            PaymentResponse: The payment result
+        """
+        pass
+
+
+class InternalPaymentStrategy(PaymentStrategy):
+    """Strategy for processing internal payments (between users on the same node)."""
+    
+    async def execute(
+        self,
+        data: TaprootPaymentRequest,
+        wallet: WalletTypeInfo,
+        parsed_invoice: ParsedInvoice,
+        **kwargs
+    ) -> PaymentResponse:
+        """
+        Execute the internal payment strategy.
+        
+        Args:
+            data: The payment request data
+            wallet: The wallet information
+            parsed_invoice: The parsed invoice data
+            **kwargs: Additional parameters
+            
+        Returns:
+            PaymentResponse: The payment result
+        """
+        with ErrorContext("process_internal_payment", PAYMENT):
+            # Get the invoice to retrieve asset_id
+            invoice = await get_invoice_by_payment_hash(parsed_invoice.payment_hash)
+            if not invoice:
+                log_error(PAYMENT, f"Invoice not found for payment hash: {parsed_invoice.payment_hash}")
+                return PaymentResponse(
+                    success=False,
+                    payment_hash=parsed_invoice.payment_hash,
+                    status="failed",
+                    error="Invoice not found",
+                    asset_amount=parsed_invoice.amount,
+                    asset_id=parsed_invoice.asset_id or ""
+                )
+                
+            # Initialize wallet using the factory
+            taproot_wallet = await TaprootAssetsFactory.create_wallet(
+                user_id=wallet.wallet.user,
+                wallet_id=wallet.wallet.id
+            )
+            
+            # Check if this is a self-payment
+            is_self = await is_self_payment(parsed_invoice.payment_hash, wallet.wallet.user)
+            
+            # Create sender information dictionary
+            sender_info = {
+                "wallet_id": wallet.wallet.id,
+                "user_id": wallet.wallet.user,
+                "payment_request": data.payment_request,
+                "asset_id": data.asset_id  # Pass the client-provided asset_id if available
+            }
+            
+            # Use the unified process_payment_settlement method
+            try:
+                success, settlement_result = await SettlementService.process_payment_settlement(
+                    payment_hash=parsed_invoice.payment_hash,
+                    payment_request=data.payment_request,
+                    asset_id=invoice.asset_id,
+                    asset_amount=invoice.asset_amount,
+                    fee_sats=0,  # No fee for internal payments
+                    user_id=wallet.wallet.user,
+                    wallet_id=wallet.wallet.id,
+                    node=taproot_wallet.node,
+                    is_internal=True,
+                    is_self_payment=is_self,
+                    description=invoice.description or "",
+                    sender_info=sender_info
+                )
+                
+                if not success:
+                    error_msg = f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}"
+                    log_error(PAYMENT, error_msg)
+                    return PaymentResponse(
+                        success=False,
+                        payment_hash=parsed_invoice.payment_hash,
+                        status="failed",
+                        error=error_msg,
+                        asset_amount=parsed_invoice.amount,
+                        asset_id=parsed_invoice.asset_id or ""
+                    )
+            except Exception as e:
+                error_msg = f"Error during internal payment settlement: {str(e)}"
+                log_error(PAYMENT, error_msg)
+                return PaymentResponse(
+                    success=False,
+                    payment_hash=parsed_invoice.payment_hash,
+                    status="failed",
+                    error=error_msg,
+                    asset_amount=parsed_invoice.amount,
+                    asset_id=parsed_invoice.asset_id or ""
+                )
+            
+            # Return success response for internal payment
+            return PaymentResponse(
+                success=True,
+                payment_hash=parsed_invoice.payment_hash,
+                preimage=settlement_result.get('preimage', ''),
+                fee_msat=0,  # No routing fee for internal payment
+                sat_fee_paid=0,
+                routing_fees_sats=0,
+                asset_amount=invoice.asset_amount,
+                asset_id=invoice.asset_id,
+                description=invoice.description,
+                internal_payment=True  # Flag to indicate this was an internal payment
+            )
+
+
+class ExternalPaymentStrategy(PaymentStrategy):
+    """Strategy for processing external payments (to different nodes)."""
+    
+    async def execute(
+        self,
+        data: TaprootPaymentRequest,
+        wallet: WalletTypeInfo,
+        parsed_invoice: ParsedInvoice,
+        **kwargs
+    ) -> PaymentResponse:
+        """
+        Execute the external payment strategy.
+        
+        Args:
+            data: The payment request data
+            wallet: The wallet information
+            parsed_invoice: The parsed invoice data
+            **kwargs: Additional parameters
+            
+        Returns:
+            PaymentResponse: The payment result
+        """
+        with ErrorContext("process_external_payment", PAYMENT):
+            # Initialize wallet using the factory
+            taproot_wallet = await TaprootAssetsFactory.create_wallet(
+                user_id=wallet.wallet.user,
+                wallet_id=wallet.wallet.id
+            )
+            
+            # Set fee limit
+            from ..tapd_settings import taproot_settings
+            fee_limit_sats = max(data.fee_limit_sats or taproot_settings.default_sat_fee, 10)
+            
+            # Use our standardized asset ID resolution function
+            asset_id_to_use = resolve_asset_id(data.asset_id, parsed_invoice.asset_id)
+            
+            # Make the payment using the low-level wallet method
+            # This only handles the direct node communication
+            log_info(PAYMENT, f"Making external payment, fee_limit_sats={fee_limit_sats}")
+            payment_result = await taproot_wallet.send_raw_payment(
+                payment_request=data.payment_request,
+                fee_limit_sats=fee_limit_sats,
+                asset_id=asset_id_to_use,
+                peer_pubkey=data.peer_pubkey
+            )
+
+            # Verify payment success
+            if "status" in payment_result and payment_result["status"] != "success":
+                error_msg = f"Payment failed: {payment_result.get('error', 'Unknown error')}"
+                log_error(PAYMENT, error_msg)
+                return PaymentResponse(
+                    success=False,
+                    payment_hash=payment_result.get("payment_hash", ""),
+                    status="failed",
+                    error=error_msg,
+                    asset_amount=parsed_invoice.amount,
+                    asset_id=parsed_invoice.asset_id or ""
+                )
+                
+            # Get payment details
+            payment_hash = payment_result.get("payment_hash", "")
+            preimage = payment_result.get("payment_preimage", "")
+            routing_fees_sats = payment_result.get("fee_sats", 0)
+            
+            # Use the client-provided asset_id for recording the payment
+            asset_id = data.asset_id if data.asset_id else ""
+            log_info(PAYMENT, f"Using asset_id={asset_id} for recording payment")
+            
+            # Extract description from the parsed invoice
+            description = parsed_invoice.description if parsed_invoice.description else None
+            
+            # Use the unified process_payment_settlement method
+            # Add a small delay to allow any pending transactions to complete
+            await asyncio.sleep(0.5)
+            
+            success, settlement_result = await SettlementService.process_payment_settlement(
+                payment_hash=payment_hash,
+                payment_request=data.payment_request,
+                asset_id=asset_id,
+                asset_amount=parsed_invoice.amount,  # Use the correct asset amount from the invoice
+                fee_sats=routing_fees_sats,         # Use the actual fee paid, not the limit
+                user_id=wallet.wallet.user,
+                wallet_id=wallet.wallet.id,
+                description=description,
+                preimage=preimage,
+                is_internal=False,
+                is_self_payment=False
+            )
+            
+            if not success:
+                log_warning(PAYMENT, "Payment was successful but failed to record in database")
+            
+            # Return success response
+            return PaymentResponse(
+                success=True,
+                payment_hash=payment_hash,
+                preimage=preimage,
+                fee_msat=routing_fees_sats * 1000,  # Convert sats to msats
+                sat_fee_paid=0,  # No service fee
+                routing_fees_sats=routing_fees_sats,
+                asset_amount=parsed_invoice.amount,  # Use the correct asset amount from the invoice
+                asset_id=asset_id,
+                description=description
+            )
+
+
 class PaymentService:
     """
     Service for handling Taproot Asset payments.
-    This service encapsulates all payment-related business logic.
+    This service encapsulates all payment-related business logic using a strategy pattern.
     """
+    
+    # Strategy instances
+    _internal_strategy = InternalPaymentStrategy()
+    _external_strategy = ExternalPaymentStrategy()
     
     @staticmethod
     async def parse_invoice(payment_request: str) -> ParsedInvoice:
@@ -154,225 +402,10 @@ class PaymentService:
         
         return "external"
     
-    @staticmethod
-    async def process_external_payment(
-        data: TaprootPaymentRequest,
-        wallet: WalletTypeInfo,
-        parsed_invoice: ParsedInvoice
-    ) -> PaymentResponse:
-        """
-        Process an external payment (to a different node).
-        
-        Args:
-            data: The payment request data
-            wallet: The wallet information
-            parsed_invoice: The parsed invoice data
-            
-        Returns:
-            PaymentResponse: The payment result
-        """
-        with ErrorContext("process_external_payment", PAYMENT):
-            # Initialize wallet using the factory
-            taproot_wallet = await TaprootAssetsFactory.create_wallet(
-                user_id=wallet.wallet.user,
-                wallet_id=wallet.wallet.id
-            )
-            
-            # Set fee limit
-            from ..tapd_settings import taproot_settings
-            fee_limit_sats = max(data.fee_limit_sats or taproot_settings.default_sat_fee, 10)
-            
-            # Use our standardized asset ID resolution function
-            asset_id_to_use = resolve_asset_id(data.asset_id, parsed_invoice.asset_id)
-            
-            # Make the payment using the low-level wallet method
-            # This only handles the direct node communication
-            log_info(PAYMENT, f"Making external payment, fee_limit_sats={fee_limit_sats}")
-            payment_result = await taproot_wallet.send_raw_payment(
-                payment_request=data.payment_request,
-                fee_limit_sats=fee_limit_sats,
-                asset_id=asset_id_to_use,
-                peer_pubkey=data.peer_pubkey
-            )
-
-            # Verify payment success
-            if "status" in payment_result and payment_result["status"] != "success":
-                error_msg = f"Payment failed: {payment_result.get('error', 'Unknown error')}"
-                log_error(PAYMENT, error_msg)
-                return PaymentResponse(
-                    success=False,
-                    payment_hash=payment_result.get("payment_hash", ""),
-                    status="failed",
-                    error=error_msg,
-                    asset_amount=parsed_invoice.amount,
-                    asset_id=parsed_invoice.asset_id or ""
-                )
-                
-            # Get payment details
-            payment_hash = payment_result.get("payment_hash", "")
-            preimage = payment_result.get("payment_preimage", "")
-            routing_fees_sats = payment_result.get("fee_sats", 0)
-            
-            # Use the client-provided asset_id for recording the payment
-            asset_id = data.asset_id if data.asset_id else ""
-            log_info(PAYMENT, f"Using asset_id={asset_id} for recording payment")
-            
-            # Extract description from the parsed invoice
-            description = parsed_invoice.description if parsed_invoice.description else None
-            
-            # Use the centralized SettlementService to record the payment
-            # IMPORTANT: Make sure to use the correct asset amount (parsed_invoice.amount) and not the fee_limit
-            # Add a small delay to allow any pending transactions to complete
-            await asyncio.sleep(0.5)
-            
-            payment_success, payment_record = await SettlementService.record_payment(
-                payment_hash=payment_hash,
-                payment_request=data.payment_request,
-                asset_id=asset_id,
-                asset_amount=parsed_invoice.amount,  # Use the correct asset amount from the invoice
-                fee_sats=routing_fees_sats,         # Use the actual fee paid, not the limit
-                user_id=wallet.wallet.user,
-                wallet_id=wallet.wallet.id,
-                description=description,
-                preimage=preimage,
-                is_internal=False,
-                is_self_payment=False
-            )
-            
-            if not payment_success:
-                log_warning(PAYMENT, "Payment was successful but failed to record in database")
-            
-            # Return success response
-            return PaymentResponse(
-                success=True,
-                payment_hash=payment_hash,
-                preimage=preimage,
-                fee_msat=routing_fees_sats * 1000,  # Convert sats to msats
-                sat_fee_paid=0,  # No service fee
-                routing_fees_sats=routing_fees_sats,
-                asset_amount=parsed_invoice.amount,  # Use the correct asset amount from the invoice
-                asset_id=asset_id,
-                description=description
-            )
     
-    @staticmethod
-    async def process_internal_payment(
-        data: TaprootPaymentRequest,
-        wallet: WalletTypeInfo,
-        parsed_invoice: ParsedInvoice
-    ) -> PaymentResponse:
-        """
-        Process an internal payment (to another user on the same node).
-        
-        Args:
-            data: The payment request data
-            wallet: The wallet information
-            parsed_invoice: The parsed invoice data
-            
-        Returns:
-            PaymentResponse: The payment result
-        """
-        with ErrorContext("process_internal_payment", PAYMENT):
-            # Get the invoice to retrieve asset_id
-            invoice = await get_invoice_by_payment_hash(parsed_invoice.payment_hash)
-            if not invoice:
-                log_error(PAYMENT, f"Invoice not found for payment hash: {parsed_invoice.payment_hash}")
-                return PaymentResponse(
-                    success=False,
-                    payment_hash=parsed_invoice.payment_hash,
-                    status="failed",
-                    error="Invoice not found",
-                    asset_amount=parsed_invoice.amount,
-                    asset_id=parsed_invoice.asset_id or ""
-                )
-                
-            # Initialize wallet using the factory
-            taproot_wallet = await TaprootAssetsFactory.create_wallet(
-                user_id=wallet.wallet.user,
-                wallet_id=wallet.wallet.id
-            )
-            
-            # Check if this is a self-payment
-            is_self = await is_self_payment(parsed_invoice.payment_hash, wallet.wallet.user)
-            
-            # Create sender information dictionary
-            sender_info = {
-                "wallet_id": wallet.wallet.id,
-                "user_id": wallet.wallet.user,
-                "payment_request": data.payment_request,
-                "asset_id": data.asset_id  # Pass the client-provided asset_id if available
-            }
-            
-            # Use SettlementService to settle the invoice with sender information
-            try:
-                success, settlement_result = await SettlementService.settle_invoice(
-                    payment_hash=parsed_invoice.payment_hash,
-                    node=taproot_wallet.node,
-                    is_internal=True,
-                    is_self_payment=is_self,
-                    user_id=wallet.wallet.user,
-                    wallet_id=wallet.wallet.id,
-                    sender_info=sender_info  # Pass sender info to handle both sides of the transaction
-                )
-                
-                if not success:
-                    error_msg = f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}"
-                    log_error(PAYMENT, error_msg)
-                    return PaymentResponse(
-                        success=False,
-                        payment_hash=parsed_invoice.payment_hash,
-                        status="failed",
-                        error=error_msg,
-                        asset_amount=parsed_invoice.amount,
-                        asset_id=parsed_invoice.asset_id or ""
-                    )
-            except Exception as e:
-                error_msg = f"Error during internal payment settlement: {str(e)}"
-                log_error(PAYMENT, error_msg)
-                return PaymentResponse(
-                    success=False,
-                    payment_hash=parsed_invoice.payment_hash,
-                    status="failed",
-                    error=error_msg,
-                    asset_amount=parsed_invoice.amount,
-                    asset_id=parsed_invoice.asset_id or ""
-                )
-            
-            # Create payment record for notification purposes
-            # This doesn't change the balance again since it was already handled in settle_invoice
-            try:
-                await SettlementService.record_payment(
-                    payment_hash=parsed_invoice.payment_hash,
-                    payment_request=data.payment_request,
-                    asset_id=invoice.asset_id,
-                    asset_amount=invoice.asset_amount,
-                    fee_sats=0,  # No fee for internal payments
-                    user_id=wallet.wallet.user,
-                    wallet_id=wallet.wallet.id,
-                    description=invoice.description or "",
-                    preimage=settlement_result.get('preimage', ''),
-                    is_internal=True,  # Mark as internal so it won't create another transaction
-                    is_self_payment=is_self
-                )
-            except Exception as e:
-                log_warning(PAYMENT, f"Internal payment notification failed: {str(e)}")
-            
-            # Return success response for internal payment
-            return PaymentResponse(
-                success=True,
-                payment_hash=parsed_invoice.payment_hash,
-                preimage=settlement_result.get('preimage', ''),
-                fee_msat=0,  # No routing fee for internal payment
-                sat_fee_paid=0,
-                routing_fees_sats=0,
-                asset_amount=invoice.asset_amount,
-                asset_id=invoice.asset_id,
-                description=invoice.description,
-                internal_payment=True  # Flag to indicate this was an internal payment
-            )
-    
-    @staticmethod
+    @classmethod
     async def process_payment(
+        cls,
         data: TaprootPaymentRequest,
         wallet: WalletTypeInfo,
         force_payment_type: Optional[str] = None
@@ -393,14 +426,14 @@ class PaymentService:
         try:
             with ErrorContext("process_payment", PAYMENT):
                 # Parse the invoice to get payment details
-                parsed_invoice = await PaymentService.parse_invoice(data.payment_request)
+                parsed_invoice = await cls.parse_invoice(data.payment_request)
                 
                 # Determine the payment type if not forced
                 if force_payment_type:
                     payment_type = force_payment_type
                     log_info(PAYMENT, f"Using forced payment type: {payment_type}")
                 else:
-                    payment_type = await PaymentService.determine_payment_type(
+                    payment_type = await cls.determine_payment_type(
                         parsed_invoice.payment_hash, wallet.wallet.user
                     )
                     log_info(PAYMENT, f"Payment type determined: {payment_type}")
@@ -417,11 +450,11 @@ class PaymentService:
                         asset_id=parsed_invoice.asset_id
                     )
                 
-                # Process the payment based on its type
-                if payment_type == "internal":
-                    return await PaymentService.process_internal_payment(data, wallet, parsed_invoice)
-                else:
-                    return await PaymentService.process_external_payment(data, wallet, parsed_invoice)
+                # Select the appropriate strategy based on payment type
+                strategy = cls._internal_strategy if payment_type == "internal" else cls._external_strategy
+                
+                # Execute the selected strategy
+                return await strategy.execute(data, wallet, parsed_invoice)
         except Exception as e:
             # Handle any exceptions and return a failed payment response
             error_message = str(e)

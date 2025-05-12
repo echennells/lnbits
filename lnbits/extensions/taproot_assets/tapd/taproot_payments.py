@@ -292,72 +292,50 @@ class TaprootPaymentManager:
                 log_info(PAYMENT, f"Payment hash: {payment_hash}")
                 log_info(PAYMENT, f"Asset ID: {asset_id or 'Not specified'}")
 
-                # Verify this is actually an internal payment
-                invoice = await get_invoice_by_payment_hash(payment_hash)
-                if not invoice:
-                    log_error(PAYMENT, f"No invoice found for payment hash: {payment_hash}")
-                    raise Exception(f"Invoice not found for payment hash: {payment_hash}")
-                    
                 # Get the wallet information from the node
                 if not hasattr(self.node, 'wallet') or not self.node.wallet:
                     log_error(PAYMENT, "Node has no wallet information")
                     raise Exception("Wallet information missing from node")
                 
-                # Ensure we have asset_id (either provided or from the invoice)
-                if not asset_id:
-                    asset_id = invoice.asset_id
-                    log_info(PAYMENT, f"Using asset_id from invoice: {asset_id}")
-
-                # Check if this is a self-payment
-                user_id = self.node.wallet.user
-                wallet_id = self.node.wallet.id
-                is_self_pay = await is_self_payment(payment_hash, user_id)
+                # Import PaymentService to use the strategy pattern
+                from ..services.payment_service import PaymentService
+                from ..models import TaprootPaymentRequest
+                from lnbits.core.models import WalletTypeInfo
                 
-                # Process using the Settlement Service
-                success, settlement_result = await SettlementService.settle_invoice(
-                    payment_hash=payment_hash,
-                    node=self.node,
-                    is_internal=True,
-                    is_self_payment=is_self_pay,
-                    user_id=user_id,
-                    wallet_id=wallet_id
+                # Create wallet info object
+                wallet_info = WalletTypeInfo(
+                    wallet=self.node.wallet,
+                    wallet_type="taproot"
                 )
                 
-                if not success:
-                    log_error(PAYMENT, f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}")
-                    raise Exception(f"Failed to settle internal payment: {settlement_result.get('error', 'Unknown error')}")
-                    
-                # Use memo from invoice
-                memo = invoice.memo or ""
-                
-                # Record the payment using SettlementService
-                payment_success, payment_record = await SettlementService.record_payment(
-                    payment_hash=payment_hash,
+                # Create payment request object
+                payment_data = TaprootPaymentRequest(
                     payment_request=payment_request,
-                    asset_id=asset_id,
-                    asset_amount=invoice.asset_amount,
-                    fee_sats=0,  # No fee for internal payments
-                    user_id=user_id,
-                    wallet_id=wallet_id,
-                    memo=memo,
-                    preimage=settlement_result.get('preimage', ''),
-                    is_internal=True,
-                    is_self_payment=is_self_pay
+                    fee_limit_sats=fee_limit_sats or 0,
+                    asset_id=asset_id
                 )
                 
-                if not payment_success:
-                    log_warning(PAYMENT, f"Internal payment was successful but failed to record in database")
+                # Process the payment using the PaymentService with forced internal type
+                payment_response = await PaymentService.process_payment(
+                    data=payment_data,
+                    wallet=wallet_info,
+                    force_payment_type="internal"
+                )
                 
-                log_info(PAYMENT, "=== DATABASE UPDATES COMPLETED ===")
+                if not payment_response.success:
+                    log_error(PAYMENT, f"Failed to process internal payment: {payment_response.error}")
+                    raise Exception(f"Failed to process internal payment: {payment_response.error}")
                 
-                # Return response with appropriate flags
+                log_info(PAYMENT, "=== INTERNAL PAYMENT COMPLETED SUCCESSFULLY ===")
+                
+                # Convert PaymentResponse to dictionary format for API compatibility
                 response = {
                     "success": True,
-                    "payment_hash": payment_hash,
+                    "payment_hash": payment_response.payment_hash,
                     "message": "Internal payment processed successfully",
-                    "preimage": settlement_result.get('preimage', ''),
-                    "asset_id": asset_id,
-                    "asset_amount": invoice.asset_amount,
+                    "preimage": payment_response.preimage or "",
+                    "asset_id": payment_response.asset_id,
+                    "asset_amount": payment_response.asset_amount,
                     "internal_payment": True
                 }
                 
