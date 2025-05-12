@@ -1,9 +1,8 @@
 """
 Payment service for Taproot Assets extension.
-Handles payment-related business logic using a strategy pattern.
+Handles payment-related business logic.
 """
-from typing import Dict, Any, Optional, List, Tuple, Union, Type
-from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional, List, Tuple, Union
 import re
 import grpc
 import asyncio
@@ -29,53 +28,106 @@ from ..crud import (
 from .settlement_service import SettlementService
 
 
-class PaymentStrategy(ABC):
+class PaymentService:
     """
-    Abstract base class for payment strategies.
-    Each concrete strategy implements a specific payment type.
+    Service for handling Taproot Asset payments.
+    This service encapsulates all payment-related business logic.
     """
     
-    @abstractmethod
-    async def execute(
-        self,
+    @classmethod
+    async def process_payment(
+        cls,
         data: TaprootPaymentRequest,
         wallet: WalletTypeInfo,
-        parsed_invoice: ParsedInvoice,
-        **kwargs
+        force_payment_type: Optional[str] = None
     ) -> PaymentResponse:
         """
-        Execute the payment strategy.
+        Process a payment request, automatically determining the payment type
+        unless a specific type is forced.
         
         Args:
             data: The payment request data
             wallet: The wallet information
-            parsed_invoice: The parsed invoice data
-            **kwargs: Additional parameters specific to the strategy
-            
+            force_payment_type: Optional parameter to force a specific payment type
+                           ("internal" or "external")
+        
         Returns:
             PaymentResponse: The payment result
         """
-        pass
-
-
-class InternalPaymentStrategy(PaymentStrategy):
-    """Strategy for processing internal payments (between users on the same node)."""
+        try:
+            with ErrorContext("process_payment", PAYMENT):
+                # Parse the invoice to get payment details
+                parsed_invoice = await cls.parse_invoice(data.payment_request)
+                
+                # Determine the payment type if not forced
+                if force_payment_type:
+                    payment_type = force_payment_type
+                    log_info(PAYMENT, f"Using forced payment type: {payment_type}")
+                else:
+                    payment_type = await cls.determine_payment_type(
+                        parsed_invoice.payment_hash, wallet.wallet.user
+                    )
+                    log_info(PAYMENT, f"Payment type determined: {payment_type}")
+                
+                # Reject self-payments
+                if payment_type == "self":
+                    log_warning(PAYMENT, f"Self-payment rejected for payment hash: {parsed_invoice.payment_hash}")
+                    return PaymentResponse(
+                        success=False,
+                        payment_hash=parsed_invoice.payment_hash,
+                        status="failed",
+                        error="Self-payments are not allowed. You cannot pay your own invoice.",
+                        asset_amount=parsed_invoice.amount,
+                        asset_id=parsed_invoice.asset_id
+                    )
+                
+                # Process based on payment type
+                if payment_type == "internal":
+                    return await cls._process_internal_payment(data, wallet, parsed_invoice)
+                else:
+                    return await cls._process_external_payment(data, wallet, parsed_invoice)
+        except Exception as e:
+            # Handle any exceptions and return a failed payment response
+            error_message = str(e)
+            log_error(PAYMENT, f"Payment failed with error: {error_message}")
+            
+            # Try to extract payment hash from the parsed invoice if available
+            payment_hash = ""
+            asset_amount = 0
+            asset_id = ""
+            try:
+                # If we've parsed the invoice, use its details
+                if 'parsed_invoice' in locals():
+                    payment_hash = parsed_invoice.payment_hash
+                    asset_amount = parsed_invoice.amount
+                    asset_id = parsed_invoice.asset_id or ""
+            except Exception:
+                pass
+            
+            # Return a failed payment response
+            return PaymentResponse(
+                success=False,
+                payment_hash=payment_hash,
+                status="failed",
+                error=error_message,
+                asset_amount=asset_amount,
+                asset_id=asset_id
+            )
     
-    async def execute(
-        self,
+    @classmethod
+    async def _process_internal_payment(
+        cls,
         data: TaprootPaymentRequest,
         wallet: WalletTypeInfo,
-        parsed_invoice: ParsedInvoice,
-        **kwargs
+        parsed_invoice: ParsedInvoice
     ) -> PaymentResponse:
         """
-        Execute the internal payment strategy.
+        Process an internal payment (between users on the same node).
         
         Args:
             data: The payment request data
             wallet: The wallet information
             parsed_invoice: The parsed invoice data
-            **kwargs: Additional parameters
             
         Returns:
             PaymentResponse: The payment result
@@ -164,26 +216,21 @@ class InternalPaymentStrategy(PaymentStrategy):
                 description=invoice.description,
                 internal_payment=True  # Flag to indicate this was an internal payment
             )
-
-
-class ExternalPaymentStrategy(PaymentStrategy):
-    """Strategy for processing external payments (to different nodes)."""
     
-    async def execute(
-        self,
+    @classmethod
+    async def _process_external_payment(
+        cls,
         data: TaprootPaymentRequest,
         wallet: WalletTypeInfo,
-        parsed_invoice: ParsedInvoice,
-        **kwargs
+        parsed_invoice: ParsedInvoice
     ) -> PaymentResponse:
         """
-        Execute the external payment strategy.
+        Process an external payment (to a different node).
         
         Args:
             data: The payment request data
             wallet: The wallet information
             parsed_invoice: The parsed invoice data
-            **kwargs: Additional parameters
             
         Returns:
             PaymentResponse: The payment result
@@ -270,17 +317,6 @@ class ExternalPaymentStrategy(PaymentStrategy):
                 asset_id=asset_id,
                 description=description
             )
-
-
-class PaymentService:
-    """
-    Service for handling Taproot Asset payments.
-    This service encapsulates all payment-related business logic using a strategy pattern.
-    """
-    
-    # Strategy instances
-    _internal_strategy = InternalPaymentStrategy()
-    _external_strategy = ExternalPaymentStrategy()
     
     @staticmethod
     async def parse_invoice(payment_request: str) -> ParsedInvoice:
@@ -402,87 +438,6 @@ class PaymentService:
         
         return "external"
     
-    
-    @classmethod
-    async def process_payment(
-        cls,
-        data: TaprootPaymentRequest,
-        wallet: WalletTypeInfo,
-        force_payment_type: Optional[str] = None
-    ) -> PaymentResponse:
-        """
-        Process a payment request, automatically determining the payment type
-        unless a specific type is forced.
-        
-        Args:
-            data: The payment request data
-            wallet: The wallet information
-            force_payment_type: Optional parameter to force a specific payment type
-                           ("internal" or "external")
-        
-        Returns:
-            PaymentResponse: The payment result
-        """
-        try:
-            with ErrorContext("process_payment", PAYMENT):
-                # Parse the invoice to get payment details
-                parsed_invoice = await cls.parse_invoice(data.payment_request)
-                
-                # Determine the payment type if not forced
-                if force_payment_type:
-                    payment_type = force_payment_type
-                    log_info(PAYMENT, f"Using forced payment type: {payment_type}")
-                else:
-                    payment_type = await cls.determine_payment_type(
-                        parsed_invoice.payment_hash, wallet.wallet.user
-                    )
-                    log_info(PAYMENT, f"Payment type determined: {payment_type}")
-                
-                # Reject self-payments
-                if payment_type == "self":
-                    log_warning(PAYMENT, f"Self-payment rejected for payment hash: {parsed_invoice.payment_hash}")
-                    return PaymentResponse(
-                        success=False,
-                        payment_hash=parsed_invoice.payment_hash,
-                        status="failed",
-                        error="Self-payments are not allowed. You cannot pay your own invoice.",
-                        asset_amount=parsed_invoice.amount,
-                        asset_id=parsed_invoice.asset_id
-                    )
-                
-                # Select the appropriate strategy based on payment type
-                strategy = cls._internal_strategy if payment_type == "internal" else cls._external_strategy
-                
-                # Execute the selected strategy
-                return await strategy.execute(data, wallet, parsed_invoice)
-        except Exception as e:
-            # Handle any exceptions and return a failed payment response
-            error_message = str(e)
-            log_error(PAYMENT, f"Payment failed with error: {error_message}")
-            
-            # Try to extract payment hash from the parsed invoice if available
-            payment_hash = ""
-            asset_amount = 0
-            asset_id = ""
-            try:
-                # If we've parsed the invoice, use its details
-                if 'parsed_invoice' in locals():
-                    payment_hash = parsed_invoice.payment_hash
-                    asset_amount = parsed_invoice.amount
-                    asset_id = parsed_invoice.asset_id or ""
-            except Exception:
-                pass
-            
-            # Return a failed payment response
-            return PaymentResponse(
-                success=False,
-                payment_hash=payment_hash,
-                status="failed",
-                error=error_message,
-                asset_amount=asset_amount,
-                asset_id=asset_id
-            )
-            
     @staticmethod
     async def get_user_payments(user_id: str) -> List[TaprootPayment]:
         """
