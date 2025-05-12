@@ -200,7 +200,8 @@ class TaprootAssetsNodeExtension(Node):
         self.asset_manager = TaprootAssetManager(self)
         self.invoice_manager = TaprootInvoiceManager(self)
         self.payment_manager = TaprootPaymentManager(self)
-        self.transfer_manager = TaprootTransferManager(self)
+        # Use the singleton pattern for TaprootTransferManager
+        self.transfer_manager = TaprootTransferManager.get_instance(self)
 
         # Start monitoring asset transfers (if not already running)
         if not TaprootTransferManager._is_monitoring:

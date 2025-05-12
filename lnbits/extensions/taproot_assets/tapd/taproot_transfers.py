@@ -25,29 +25,45 @@ from ..logging_utils import (
     log_exception, TRANSFER, LogContext
 )
 
-# Singleton tracking for monitoring instances
-_monitoring_instances = set()
-
 class TaprootTransferManager:
     """
     Handles Taproot Asset transfer monitoring.
     This class is responsible for monitoring asset transfers and settling HODL invoices.
+    Implemented as a singleton to prevent multiple initializations.
     """
-    # Class variables for tracking monitoring state
+    # Class variables for tracking monitoring state and singleton instance
     _is_monitoring = False
+    _instance = None
+    
+    @classmethod
+    def get_instance(cls, node):
+        """
+        Get or create the singleton instance.
+        
+        Args:
+            node: The TaprootAssetsNodeExtension instance
+            
+        Returns:
+            The singleton TaprootTransferManager instance
+        """
+        if cls._instance is None:
+            cls._instance = cls(node)
+            logger.info("TaprootTransferManager initialized")
+        elif cls._instance.node != node:
+            # Update the node reference if needed
+            cls._instance.node = node
+            logger.debug("TaprootTransferManager node reference updated")
+        return cls._instance
 
     def __init__(self, node):
         """
         Initialize the transfer manager with a reference to the node.
+        This should only be called once through get_instance().
 
         Args:
             node: The TaprootAssetsNodeExtension instance
         """
         self.node = node
-        # Add this instance to the set of monitoring instances
-        global _monitoring_instances
-        _monitoring_instances.add(self)
-        logger.info("TaprootTransferManager initialized")
 
     async def monitor_asset_transfers(self):
         """Monitor asset transfers and settle HODL invoices when transfers complete."""
