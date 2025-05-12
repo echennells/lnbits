@@ -31,8 +31,7 @@ class TaprootTransferManager:
     This class is responsible for monitoring asset transfers and settling HODL invoices.
     Implemented as a singleton to prevent multiple initializations.
     """
-    # Class variables for tracking monitoring state and singleton instance
-    _is_monitoring = False
+    # Class variable for singleton instance
     _instance = None
     
     @classmethod
@@ -65,30 +64,7 @@ class TaprootTransferManager:
         """
         self.node = node
 
-    async def monitor_asset_transfers(self):
-        """Monitor asset transfers and settle HODL invoices when transfers complete."""
-        if TaprootTransferManager._is_monitoring:
-            logger.info("Monitoring already active, ignoring duplicate call")
-            return
-            
-        TaprootTransferManager._is_monitoring = True
-        logger.info("Starting asset transfer monitoring")
-
-        try:
-            # Subscribe to send events - simpler without multiple retries
-            request = taprootassets_pb2.SubscribeSendEventsRequest()
-            send_events = self.node.stub.SubscribeSendEvents(request)
-            logger.info("Successfully subscribed to send events")
-
-            # Process incoming events
-            async for event in send_events:
-                logger.debug("Received send event")
-                # Process event logic here
-        except Exception as e:
-            logger.error(f"Error in asset transfer monitoring: {str(e)}")
-        finally:
-            # Reset monitoring state to allow future attempts
-            TaprootTransferManager._is_monitoring = False
+    # Removed unused monitor_asset_transfers method that was not fully implemented
 
     async def monitor_invoice(self, payment_hash: str):
         """

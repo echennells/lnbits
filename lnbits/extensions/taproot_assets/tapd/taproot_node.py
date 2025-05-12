@@ -202,13 +202,8 @@ class TaprootAssetsNodeExtension(Node):
         self.payment_manager = TaprootPaymentManager(self)
         # Use the singleton pattern for TaprootTransferManager
         self.transfer_manager = TaprootTransferManager.get_instance(self)
-
-        # Start monitoring asset transfers (if not already running)
-        if not TaprootTransferManager._is_monitoring:
-            log_info(NODE, "Starting asset transfer monitoring")
-            self.monitoring_task = asyncio.create_task(self.transfer_manager.monitor_asset_transfers())
-        else:
-            log_debug(NODE, "Asset transfer monitoring already active")
+        
+        # Note: Asset transfer monitoring has been removed as it was not fully implemented
 
     def _protobuf_to_dict(self, pb_obj):
         """Convert a protobuf object to a JSON-serializable dict."""
