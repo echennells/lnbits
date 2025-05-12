@@ -24,6 +24,7 @@ from ..crud import (
     is_internal_payment,
     is_self_payment,
     record_asset_transaction,
+    update_asset_balance,
     get_asset_balance,
     create_payment_record
 )
@@ -99,7 +100,10 @@ class SettlementStrategy(ABC):
         conn=None
     ) -> bool:
         """
-        Record an asset transaction.
+        Record an asset transaction with error handling.
+        
+        This method creates a transaction record AND updates the balance atomically.
+        Use this when you need both a transaction record and a balance update.
         
         Args:
             wallet_id: The wallet ID
@@ -113,17 +117,20 @@ class SettlementStrategy(ABC):
         Returns:
             Success status (bool)
         """
+        from ..services.transaction_service import TransactionService
+        
         try:
-            await record_asset_transaction(
+            success, _, _ = await TransactionService.record_transaction(
                 wallet_id=wallet_id,
                 asset_id=asset_id,
                 amount=amount,
                 tx_type=tx_type,
                 payment_hash=payment_hash,
                 description=description,
+                create_tx_record=True,
                 conn=conn
             )
-            return True
+            return success
         except Exception as e:
             log_error(TRANSFER, f"Failed to record asset transaction: {str(e)}")
             return False
@@ -848,23 +855,31 @@ class SettlementService:
         Returns:
             bool: Success status
         """
+        from ..services.transaction_service import TransactionService
+        
         with ErrorContext("update_asset_balance", TRANSFER):
-            # Use the strategy instance to record the asset transaction
-            strategy = cls._internal_strategy
-            success = await strategy.record_asset_transaction(
-                wallet_id=wallet_id,
-                asset_id=asset_id,
-                amount=amount,
-                tx_type="credit",  # Incoming payment
-                payment_hash=payment_hash,
-                description=description or "",
-                conn=conn
-            )
-            
-            if success:
-                log_info(TRANSFER, f"Asset balance updated for asset_id={asset_id}, amount={amount}")
-            
-            return success
+            try:
+                # Always create a transaction record if we have a description
+                create_tx_record = description is not None and description != ""
+                
+                success, _, _ = await TransactionService.record_transaction(
+                    wallet_id=wallet_id,
+                    asset_id=asset_id,
+                    amount=amount,
+                    tx_type="credit",
+                    payment_hash=payment_hash,
+                    description=description or "",
+                    create_tx_record=create_tx_record,
+                    conn=conn
+                )
+                
+                if success:
+                    log_info(TRANSFER, f"Asset balance updated for asset_id={asset_id}, amount={amount}")
+                
+                return success
+            except Exception as e:
+                log_error(TRANSFER, f"Failed to update asset balance: {str(e)}")
+                return False
     
     @classmethod
     async def _send_settlement_notifications(
