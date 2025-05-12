@@ -16,7 +16,8 @@ from lnbits.core.models import WalletTypeInfo
 from ..models import TaprootPaymentRequest, PaymentResponse, ParsedInvoice, TaprootPayment
 from ..logging_utils import log_debug, log_info, log_warning, log_error, PAYMENT, API
 from ..tapd.taproot_factory import TaprootAssetsFactory
-from ..error_utils import raise_http_exception, ErrorContext
+from ..error_utils import raise_http_exception, ErrorContext, handle_error
+from ..asset_utils import resolve_asset_id
 # Import from crud re-exports
 from ..crud import (
     get_invoice_by_payment_hash,
@@ -181,14 +182,8 @@ class PaymentService:
             from ..tapd_settings import taproot_settings
             fee_limit_sats = max(data.fee_limit_sats or taproot_settings.default_sat_fee, 10)
             
-            # Use the client-provided asset ID if available
-            if data.asset_id:
-                log_info(PAYMENT, f"Using client-provided asset_id={data.asset_id} for payment")
-                asset_id_to_use = data.asset_id
-            else:
-                # For backward compatibility, use the parsed invoice asset ID
-                log_info(PAYMENT, f"No client-provided asset_id, using parsed invoice asset_id={parsed_invoice.asset_id}")
-                asset_id_to_use = parsed_invoice.asset_id
+            # Use our standardized asset ID resolution function
+            asset_id_to_use = resolve_asset_id(data.asset_id, parsed_invoice.asset_id)
             
             # Make the payment using the low-level wallet method
             # This only handles the direct node communication

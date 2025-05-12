@@ -30,7 +30,8 @@ from ..logging_utils import (
     log_debug, log_info, log_warning, log_error, 
     log_exception, PAYMENT, TRANSFER, LogContext
 )
-from ..error_utils import ErrorContext
+from ..error_utils import ErrorContext, handle_error
+from ..asset_utils import resolve_asset_id
 
 class SettlementService:
     """
@@ -79,20 +80,23 @@ class SettlementService:
         log_context = "internal payment" if is_internal else "Lightning payment"
         with ErrorContext(f"settle_invoice_{log_context}", TRANSFER):
             with LogContext(TRANSFER, f"settling invoice {payment_hash[:8]}... ({log_context})", log_level="info"):
-                # First check if already settled
+                # Single, clear place to handle already-settled invoices
+                # Check if already settled in memory cache
                 is_settled = False
                 async with cls._cache_lock:
                     is_settled = payment_hash in cls._settled_payment_hashes
                     
                 if is_settled:
-                    log_debug(TRANSFER, f"Invoice {payment_hash[:8]}... already marked as settled, skipping")
+                    log_info(TRANSFER, f"Invoice {payment_hash[:8]}... already marked as settled in memory, skipping")
                     return True, {"already_settled": True}
                 
-                # Get the invoice from database
+                # Check if already settled in database
                 invoice = await get_invoice_by_payment_hash(payment_hash)
                 if invoice and invoice.status == "paid":
-                    log_debug(TRANSFER, f"Invoice {payment_hash[:8]}... is already marked as paid in the database, skipping")
-                    cls._settled_payment_hashes.add(payment_hash)
+                    log_info(TRANSFER, f"Invoice {payment_hash[:8]}... already paid in database, skipping")
+                    # Add to memory cache to avoid future DB lookups
+                    async with cls._cache_lock:
+                        cls._settled_payment_hashes.add(payment_hash)
                     return True, {"already_settled": True}
                 
                 # Get or generate preimage
@@ -171,14 +175,8 @@ class SettlementService:
                 log_error(TRANSFER, f"Missing sender information for payment: {payment_hash}")
                 return False, {"error": "Incomplete sender information"}
             
-            # Use the client-provided asset_id if available, otherwise use the invoice's asset_id
-            sender_asset_id = sender_info.get("asset_id")
-            if sender_asset_id:
-                log_info(TRANSFER, f"Using client-provided asset_id={sender_asset_id} for internal payment")
-                debit_asset_id = sender_asset_id
-            else:
-                log_info(TRANSFER, f"Using invoice asset_id={invoice.asset_id} for internal payment")
-                debit_asset_id = invoice.asset_id
+            # Use our standardized asset ID resolution function
+            debit_asset_id = resolve_asset_id(sender_info.get("asset_id"), invoice.asset_id)
             
             # Use transaction context manager to ensure atomicity
             async with transaction() as conn:

@@ -105,14 +105,25 @@ class TaprootTransferManager:
                     # Attempt settlement with Settlement Service
                     logger.info(f"Found unprocessed payment, attempting settlement")
                     
-                    success, _ = await SettlementService.settle_invoice(
-                        payment_hash=payment_hash,
-                        node=self.node,
-                        is_internal=is_internal,
-                        is_self_payment=is_self_payment,
-                        user_id=user_id,
-                        wallet_id=wallet_id
-                    )
+                    try:
+                        success, result = await SettlementService.settle_invoice(
+                            payment_hash=payment_hash,
+                            node=self.node,
+                            is_internal=is_internal,
+                            is_self_payment=is_self_payment,
+                            user_id=user_id,
+                            wallet_id=wallet_id
+                        )
+                        
+                        if not success:
+                            from ..error_utils import handle_error
+                            error_msg = result.get('error', 'Unknown error')
+                            error_result = handle_error("settle_payment", Exception(error_msg), payment_hash)
+                    except Exception as e:
+                        from ..error_utils import handle_error
+                        error_result = handle_error("check_unprocessed_payments", e, payment_hash)
+                        logger.error(f"Exception during settlement: {error_result['error']}")
+                        continue
                     
                     # Track newly processed payments
                     if success:
@@ -231,8 +242,9 @@ class TaprootTransferManager:
                 if success:
                     logger.info(f"Internal payment successfully settled: {payment_hash}")
                 else:
+                    from ..error_utils import handle_error
                     error_msg = result.get('error', 'Unknown error')
-                    logger.error(f"Failed to settle internal payment: {payment_hash}, error: {error_msg}")
+                    error_result = handle_error("settle_internal_payment", Exception(error_msg), payment_hash)
                     
                 return
             
@@ -277,8 +289,9 @@ class TaprootTransferManager:
                     if success:
                         logger.info(f"Lightning payment successfully settled: {payment_hash}")
                     else:
+                        from ..error_utils import handle_error
                         error_msg = result.get('error', 'Unknown error')
-                        logger.error(f"Failed to settle Lightning payment: {payment_hash}, error: {error_msg}")
+                        error_result = handle_error("settle_lightning_payment", Exception(error_msg), payment_hash)
                     
                     break
                     
@@ -293,7 +306,8 @@ class TaprootTransferManager:
                     break
 
         except Exception as e:
-            logger.error(f"Error monitoring invoice: {str(e)}")
+            from ..error_utils import handle_error
+            error_result = handle_error("monitor_invoice", e, payment_hash)
 
     async def _cleanup_preimage_cache(self) -> int:
         """
@@ -350,6 +364,7 @@ class TaprootTransferManager:
                             script_key = value[script_key_start:script_key_end]
                             return script_key.hex()
                 except Exception as e:
-                    logger.error(f"Error extracting script key: {str(e)}")
+                    from ..error_utils import handle_error
+                    error_result = handle_error("extract_script_key", e)
         
         return None
