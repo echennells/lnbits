@@ -2,16 +2,24 @@ import json
 from typing import List, Dict, Any, Optional
 from loguru import logger
 
+from lnbits.utils.cache import cache
+
 from .taproot_adapter import (
     taprootassets_pb2,
     lightning_pb2
 )
+from ..tapd_settings import ASSET_CACHE_EXPIRY_SECONDS
 
 class TaprootAssetManager:
     """
     Handles Taproot Asset management functionality.
     This class is responsible for listing and managing Taproot Assets.
+    This is the single source for direct tapd communication regarding assets.
     """
+    # Cache keys and expiry times
+    ASSET_CACHE_KEY = "taproot:assets:list"
+    CHANNEL_ASSET_CACHE_KEY = "taproot:channel_assets:list"
+    ASSET_CACHE_EXPIRY = ASSET_CACHE_EXPIRY_SECONDS
 
     def __init__(self, node):
         """
@@ -22,8 +30,21 @@ class TaprootAssetManager:
         """
         self.node = node
 
-    async def list_assets(self) -> List[Dict[str, Any]]:
-        """List all Taproot Assets."""
+    async def list_assets(self, force_refresh=False) -> List[Dict[str, Any]]:
+        """
+        List all Taproot Assets with caching.
+        
+        Args:
+            force_refresh: Whether to force a refresh from the node
+            
+        Returns:
+            List[Dict[str, Any]]: List of assets
+        """
+        # Check cache first if not forcing refresh
+        if not force_refresh:
+            cached_assets = cache.get(self.ASSET_CACHE_KEY)
+            if cached_assets:
+                return cached_assets
         try:
             # Get all assets from tapd
             request = taprootassets_pb2.ListAssetRequest(
@@ -50,7 +71,7 @@ class TaprootAssetManager:
                 })
 
             # Get channel assets
-            channel_assets = await self.list_channel_assets()
+            channel_assets = await self.list_channel_assets(force_refresh=force_refresh)
 
             # Create asset map for lookup
             asset_map = {asset["asset_id"]: asset for asset in assets}
@@ -99,18 +120,28 @@ class TaprootAssetManager:
             #     if asset_id not in channel_assets_by_id:
             #         result_assets.append(asset)
 
+            # Store in cache before returning
+            cache.set(self.ASSET_CACHE_KEY, result_assets, expiry=self.ASSET_CACHE_EXPIRY)
             return result_assets
         except Exception as e:
             logger.error(f"Failed to list assets: {str(e)}")
             return []  # Return empty list on error
 
-    async def list_channel_assets(self) -> List[Dict[str, Any]]:
+    async def list_channel_assets(self, force_refresh=False) -> List[Dict[str, Any]]:
         """
         List all Lightning channels with Taproot Assets.
 
+        Args:
+            force_refresh: Whether to force a refresh from the node
+            
         Returns:
             A list of dictionaries containing channel and asset information.
         """
+        # Check cache first if not forcing refresh
+        if not force_refresh:
+            cached_assets = cache.get(self.CHANNEL_ASSET_CACHE_KEY)
+            if cached_assets:
+                return cached_assets
         try:
             # Get channels from LND
             request = lightning_pb2.ListChannelsRequest()
@@ -169,6 +200,8 @@ class TaprootAssetManager:
                     logger.debug(f"Failed to process channel {channel.channel_point}: {e}")
                     continue
                     
+            # Store in cache before returning
+            cache.set(self.CHANNEL_ASSET_CACHE_KEY, channel_assets, expiry=self.ASSET_CACHE_EXPIRY)
             return channel_assets
         except Exception as e:
             logger.debug(f"Error listing channel assets: {e}")

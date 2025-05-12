@@ -2,6 +2,9 @@ import os
 from typing import Dict, Any
 from loguru import logger
 
+# Default cache expiry times
+ASSET_CACHE_EXPIRY_SECONDS = 300  # 5 minutes
+
 class TaprootSettings:
     """
     Load Taproot Assets settings from environment variables.

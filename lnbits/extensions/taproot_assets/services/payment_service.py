@@ -345,16 +345,10 @@ class PaymentService:
             asset_id = None
             asset_amount = None
             
-            # Import the parser client
-            from ..tapd.taproot_parser import TaprootParserClient
-            
-            # Get the singleton parser client instance
-            parser_client = TaprootParserClient.get_instance()
-            
-            # Get the asset amount using the first available asset
             try:
-                # Get all available assets
-                assets = await parser_client.list_assets()
+                # Get raw assets from AssetService
+                from .asset_service import AssetService
+                assets = await AssetService.get_raw_assets()
                 log_info(API, f"Found {len(assets)} available assets")
                 
                 # Use the first available asset for decoding
@@ -362,6 +356,12 @@ class PaymentService:
                     asset_id_to_try = assets[0].get("asset_id")
                     if asset_id_to_try:
                         log_info(API, f"Using first available asset_id: {asset_id_to_try} for decoding")
+                        
+                        # Import the parser client
+                        from ..tapd.taproot_parser import TaprootParserClient
+                        
+                        # Get the singleton parser client instance
+                        parser_client = TaprootParserClient.get_instance()
                         
                         # Decode the payment request using the parser client
                         decoded_result = await parser_client.decode_asset_pay_req(

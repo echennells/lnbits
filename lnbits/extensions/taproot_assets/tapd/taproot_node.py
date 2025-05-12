@@ -323,15 +323,35 @@ class TaprootAssetsNodeExtension(Node):
         return Page(data=[], total=0)
 
     # Delegate methods to the appropriate managers
-    async def list_assets(self) -> List[Dict[str, Any]]:
-        """List all Taproot Assets."""
+    async def list_assets(self, force_refresh=False) -> List[Dict[str, Any]]:
+        """
+        List all Taproot Assets by delegating to the asset manager.
+        
+        Note: This is a low-level method. For application use, prefer:
+        - AssetService.list_assets() when user context is available
+        - AssetService.get_raw_assets() when no user context is needed
+        
+        Args:
+            force_refresh: Whether to force a refresh from the node
+            
+        Returns:
+            List[Dict[str, Any]]: List of assets
+        """
         with LogContext(NODE, "listing assets", log_level="debug"):
-            return await self.asset_manager.list_assets()
+            return await self.asset_manager.list_assets(force_refresh=force_refresh)
 
-    async def list_channel_assets(self) -> List[Dict[str, Any]]:
-        """List all Lightning channels with Taproot Assets."""
+    async def list_channel_assets(self, force_refresh=False) -> List[Dict[str, Any]]:
+        """
+        List all Lightning channels with Taproot Assets.
+        
+        Args:
+            force_refresh: Whether to force a refresh from the node
+            
+        Returns:
+            List[Dict[str, Any]]: List of channel assets
+        """
         with LogContext(NODE, "listing channel assets", log_level="debug"):
-            return await self.asset_manager.list_channel_assets()
+            return await self.asset_manager.list_channel_assets(force_refresh=force_refresh)
 
     async def create_asset_invoice(
         self,

@@ -110,7 +110,7 @@ class TaprootParserClient:
     async def list_assets(self, force_refresh=False):
         """
         List all Taproot Assets.
-        Caches results for 5 minutes to avoid excessive calls.
+        Delegates to TaprootAssetManager for the actual retrieval.
         
         Args:
             force_refresh: Force a refresh of the assets list
@@ -118,45 +118,25 @@ class TaprootParserClient:
         Returns:
             List of assets
         """
-        import time
-        
         await self.ensure_initialized()
         
-        # Check if we need to refresh the assets list
-        current_time = time.time()
-        cache_expiry = 300  # 5 minutes
+        # Create an asset manager instance if needed
+        if not hasattr(self, 'asset_manager'):
+            from .taproot_assets import TaprootAssetManager
+            self.asset_manager = TaprootAssetManager(self)
         
-        if not self.assets or force_refresh or (current_time - self.last_assets_fetch > cache_expiry):
-            log_debug(PARSER, "Fetching assets list from tapd")
-            try:
-                from .taproot_adapter import taprootassets_pb2
-                request = taprootassets_pb2.ListAssetRequest(
-                    with_witness=False,
-                    include_spent=False,
-                    include_leased=False,  # Changed to False to exclude leased assets
-                    include_unconfirmed_mints=False  # Changed to False to exclude unconfirmed mints
-                )
-                response = await self.stub.ListAssets(request)
-                
-                # Convert response assets to dictionary format
-                self.assets = []
-                for asset in response.assets:
-                    self.assets.append({
-                        "name": asset.asset_genesis.name.decode('utf-8') if isinstance(asset.asset_genesis.name, bytes) else asset.asset_genesis.name,
-                        "asset_id": asset.asset_genesis.asset_id.hex() if isinstance(asset.asset_genesis.asset_id, bytes) else asset.asset_genesis.asset_id,
-                        "type": str(asset.asset_genesis.asset_type),
-                        "amount": str(asset.amount),
-                        "version": str(asset.version)
-                    })
-                
-                self.last_assets_fetch = current_time
-                log_debug(PARSER, f"Fetched {len(self.assets)} assets")
-            except Exception as e:
-                log_error(PARSER, f"Error fetching assets: {str(e)}")
-                # Return empty list on error but don't update cache time
-                return []
+        # Delegate to asset manager with caching controlled by force_refresh parameter
+        assets = await self.asset_manager.list_assets(force_refresh=force_refresh)
         
-        return self.assets
+        # Store the assets in the instance for backward compatibility
+        self.assets = assets
+        
+        # Update last fetch time for backward compatibility
+        import time
+        self.last_assets_fetch = time.time()
+        
+        log_debug(PARSER, f"Retrieved {len(assets)} assets via asset manager")
+        return assets
     
     async def decode_asset_pay_req(self, asset_id: str, payment_request: str) -> Dict[str, Any]:
         """

@@ -27,12 +27,20 @@ class AssetService:
     """
     Service for handling Taproot Assets.
     This service encapsulates asset-related business logic.
+    
+    This is the primary entry point for application-level asset retrieval.
+    It provides methods for retrieving assets with user context (list_assets)
+    and without user context (get_raw_assets).
     """
     
     @staticmethod
     async def list_assets(wallet: WalletTypeInfo) -> List[Dict[str, Any]]:
         """
         List all Taproot Assets for the current user with balance information.
+        
+        This is the primary method that should be used by API endpoints and other
+        services when user context is available. It provides assets enriched with
+        user balance information and sends appropriate WebSocket notifications.
         
         Args:
             wallet: The wallet information
@@ -47,8 +55,8 @@ class AssetService:
                 wallet_id=wallet.wallet.id
             )
 
-            # Get assets from tapd
-            assets_data = await taproot_wallet.list_assets()
+            # Get assets from tapd - specify that we want to use cache by default
+            assets_data = await taproot_wallet.node.asset_manager.list_assets(force_refresh=False)
             
             # Get user information
             user = await get_user(wallet.wallet.user)
@@ -75,6 +83,29 @@ class AssetService:
                 await NotificationService.notify_assets_update(wallet.wallet.user, assets_data)
                 
             return assets_data
+    
+    @staticmethod
+    async def get_raw_assets(force_refresh=False) -> List[Dict[str, Any]]:
+        """
+        Get raw asset data without user balance information.
+        
+        This method should be used when:
+        1. No user context is available
+        2. Only basic asset information is needed
+        3. Calling from other services or utilities
+        
+        Args:
+            force_refresh: Whether to force a refresh from the node
+            
+        Returns:
+            List[Dict[str, Any]]: List of raw assets
+        """
+        with ErrorContext("get_raw_assets", ASSET):
+            # Create a minimal wallet instance without user/wallet IDs
+            taproot_wallet = await TaprootAssetsFactory.create_wallet()
+            
+            # Get assets directly from the node manager
+            return await taproot_wallet.node.asset_manager.list_assets(force_refresh=force_refresh)
     
     @staticmethod
     async def get_asset_balances(wallet: WalletTypeInfo) -> List[AssetBalance]:
