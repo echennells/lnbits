@@ -248,8 +248,8 @@ const PaymentService = {
         asset_id: paymentData.assetId  // Include the selected asset ID
       };
       
-      // Call the internal payment endpoint
-      const response = await ApiService.processInternalPayment(wallet.adminkey, payload);
+      // Use the standard pay endpoint for internal payments
+      const response = await ApiService.payInvoice(wallet.adminkey, payload);
       
       if (!response?.data) {
         throw new Error('Failed to process internal payment: No data returned');

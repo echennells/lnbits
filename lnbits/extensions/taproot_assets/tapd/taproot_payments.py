@@ -107,7 +107,7 @@ class TaprootPaymentManager:
                 is_internal = await is_internal_payment(payment_hash)
                 if is_internal:
                     log_warning(PAYMENT, f"Detected internal payment attempt for hash {payment_hash}. This should be handled by update_after_payment.")
-                    raise Exception("Internal payments (to another user on this node) should be handled through the internal-payment endpoint.")
+                    raise Exception("Internal payments (to another user on this node) are automatically handled by the standard payment endpoint.")
 
                 # Convert asset ID to bytes
                 asset_id_bytes = bytes.fromhex(asset_id)
@@ -194,7 +194,7 @@ class TaprootPaymentManager:
                     elif "self-payments not allowed" in error_str:
                         # Catch the self-payment error specifically
                         log_warning(PAYMENT, f"Self-payment detected for {payment_hash} - this should be handled by update_after_payment")
-                        raise Exception("Self-payments are not allowed through the regular payment flow. Use the internal-payment endpoint.")
+                        raise Exception("Self-payments are not allowed through the regular payment flow. They are automatically handled by the standard payment endpoint.")
                     else:
                         log_error(PAYMENT, f"gRPC error in payment stream: {e.code()}: {e.details()}")
                         raise Exception(f"Payment error: {e.details()}")

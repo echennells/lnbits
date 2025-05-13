@@ -66,38 +66,6 @@ async def api_pay_invoice(
     return await PaymentService.process_payment(data, wallet)
 
 
-@taproot_assets_api_router.post("/internal-payment", status_code=HTTPStatus.OK)
-@handle_api_error
-async def api_internal_payment(
-    data: TaprootPaymentRequest,
-    wallet: WalletTypeInfo = Depends(require_admin_key),
-):
-    """Process an internal payment for a Taproot Asset between different users on the same node."""
-    log_info(API, f"Processing internal payment request for wallet {wallet.wallet.id}")
-    
-    # Parse the invoice to get payment details
-    parsed_invoice = await PaymentService.parse_invoice(data.payment_request)
-    
-    # Verify this is actually an internal payment
-    payment_type = await PaymentService.determine_payment_type(parsed_invoice.payment_hash, wallet.wallet.user)
-    if payment_type not in ["internal"]:
-        if payment_type == "self":
-            log_warning(API, f"Self-payments are not allowed. Payment hash: {parsed_invoice.payment_hash}")
-            raise_http_exception(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail="Self-payments are not allowed. You cannot pay your own invoice."
-            )
-        else:
-            log_warning(API, f"Not an internal payment. Invoice was not created on this node. Payment hash: {parsed_invoice.payment_hash}")
-            raise_http_exception(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail="Not an internal payment. Invoice was not created on this node."
-            )
-    
-    # Process as internal payment
-    log_info(API, f"Confirmed as internal payment, processing")
-    return await PaymentService.process_payment(data, wallet, force_payment_type="internal")
-
 
 @taproot_assets_api_router.get("/payments", status_code=HTTPStatus.OK)
 @handle_api_error

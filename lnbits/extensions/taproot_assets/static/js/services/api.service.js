@@ -84,20 +84,6 @@ const ApiService = {
       });
   },
 
-  /**
-   * Process an internal payment (between different users on the same node)
-   * @param {string} adminkey - Admin key for authentication
-   * @param {Object} payload - Payment payload
-   * @returns {Promise} - Promise that resolves with payment result
-   */
-  processInternalPayment(adminkey, payload) {
-    return LNbits.api
-      .request('POST', '/taproot_assets/api/v1/taproot/internal-payment', adminkey, payload)
-      .catch(error => {
-        console.error('API Error processing internal payment:', error);
-        throw error;
-      });
-  },
 
   /**
    * Parse an invoice using the server-side endpoint
