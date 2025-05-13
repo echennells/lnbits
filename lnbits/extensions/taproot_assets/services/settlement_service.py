@@ -34,7 +34,6 @@ from ..logging_utils import (
     log_exception, PAYMENT, TRANSFER, LogContext
 )
 from ..error_utils import ErrorContext, handle_error
-from ..asset_utils import resolve_asset_id
 
 # Define a settlement strategy abstract base class
 class SettlementStrategy(ABC):
@@ -284,9 +283,17 @@ class InternalPaymentWithSenderStrategy(SettlementStrategy):
                 log_error(TRANSFER, f"Missing sender information for payment: {payment_hash}")
                 return False, {"error": "Incomplete sender information"}
             
-            # Use our standardized asset ID resolution function
-            debit_asset_id = resolve_asset_id(sender_info.get("asset_id"), invoice.asset_id)
-            
+            # Determine which asset ID to use
+            if sender_info.get("asset_id"):
+                log_info(PAYMENT, f"Using client-provided asset_id={sender_info.get('asset_id')}")
+                debit_asset_id = sender_info.get("asset_id")
+            elif invoice.asset_id:
+                log_info(PAYMENT, f"Using invoice asset_id={invoice.asset_id}")
+                debit_asset_id = invoice.asset_id
+            else:
+                log_debug(PAYMENT, "No asset ID available from client or invoice")
+                debit_asset_id = None
+                
             # Use transaction context manager to ensure atomicity
             async with transaction() as conn:
                 # 1. Update invoice status to paid
