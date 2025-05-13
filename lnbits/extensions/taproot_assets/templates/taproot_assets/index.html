@@ -236,102 +236,98 @@
   </div>
 </div>
 
-<!-- Invoice dialog popup - MOBILE RESPONSIVE VERSION -->
-<q-dialog v-model="invoiceDialog.show">
-  <q-card style="width: 100%; max-width: 500px; background-color: #1d1e42;">
-    <q-card-section class="q-pt-lg q-px-md">
-      <div v-if="invoiceDialog.selectedAsset" class="text-center q-mb-md">
-        <div class="text-h5 text-white" style="font-size: 1.5rem; font-weight: 500;">{% raw %}{{ invoiceDialog.selectedAsset.name || 'Unknown' }}{% endraw %}</div>
+<!-- Invoice dialog popup - Styled like LNbits -->
+<q-dialog v-model="invoiceDialog.show" position="top">
+  <q-card class="q-pa-sm q-pt-xl lnbits__dialog-card" style="width: 100%; max-width: 500px;">
+    <q-card-section>
+      <div v-if="invoiceDialog.selectedAsset" class="text-center q-mb-xl">
+        <div class="text-h6">{% raw %}{{ invoiceDialog.selectedAsset.name || 'Unknown' }}{% endraw %}</div>
       </div>
 
-      <form @submit.prevent="submitInvoiceForm" class="q-mt-md">
-        <div class="row q-col-gutter-sm">
-          <div class="col-12">
-            <label class="text-white q-mb-sm block">Amount</label>
-            <input v-model.number="invoiceDialog.form.amount" type="number" min="0.000001" step="0.000001" 
-                  class="invoice-input full-width" required :max="maxInvoiceAmount" 
-                  style="height: 40px; font-size: 16px;" inputmode="numeric" />
-            <div v-if="invoiceDialog.selectedAsset.channel_info && invoiceDialog.selectedAsset.channel_info.capacity !== undefined && invoiceDialog.selectedAsset.channel_info.local_balance !== undefined" class="text-positive q-mt-xs">
-              Max Receivable: {% raw %}{{ maxInvoiceAmount }}{% endraw %}
-            </div>
-            <div class="text-negative" v-if="!isInvoiceAmountValid">
-              <small>Amount exceeds maximum receivable</small>
-            </div>
-          </div>
-          <div class="col-12 q-mt-sm">
-            <label class="text-white q-mb-sm block">Memo (optional)</label>
-            <input v-model="invoiceDialog.form.memo" type="text" class="invoice-input full-width" 
-                   style="height: 40px; font-size: 16px;" />
-          </div>
+      <q-form @submit="submitInvoiceForm" class="q-gutter-md">
+        <q-input
+          filled
+          dense
+          v-model.number="invoiceDialog.form.amount"
+          type="number"
+          label="Amount"
+          :rules="[val => val > 0 || 'Please enter an amount']"
+          :hint="invoiceDialog.selectedAsset.channel_info && invoiceDialog.selectedAsset.channel_info.capacity !== undefined ? 'Max Receivable: ' + maxInvoiceAmount : ''"
+          :error="!isInvoiceAmountValid"
+          :error-message="!isInvoiceAmountValid ? 'Amount exceeds maximum receivable' : ''"
+        ></q-input>
+        
+        <q-input
+          filled
+          dense
+          v-model="invoiceDialog.form.memo"
+          label="Memo (optional)"
+        ></q-input>
+        
+        <div class="row q-mt-lg">
+          <q-btn
+            unelevated
+            color="primary"
+            :disable="!invoiceDialog.selectedAsset || !isInvoiceAmountValid || isSubmitting"
+            type="submit"
+            :label="isSubmitting ? 'CREATING...' : 'CREATE INVOICE'"
+            class="full-width q-mb-sm"
+          ></q-btn>
+          <q-btn
+            flat
+            color="grey"
+            label="CANCEL"
+            class="full-width"
+            @click="closeInvoiceDialog()"
+          ></q-btn>
         </div>
-
-        <div class="row q-mt-md">
-          <div class="col-12">
-            <button type="submit" class="full-width q-py-md bg-primary text-white q-mb-sm" 
-                   style="border: none; border-radius: 4px; height: 50px; font-size: 16px;" 
-                   :disabled="!invoiceDialog.selectedAsset || !isInvoiceAmountValid || isSubmitting">
-              {% raw %}{{ isSubmitting ? 'CREATING...' : 'CREATE INVOICE' }}{% endraw %}
-            </button>
-            <button type="button" class="full-width q-py-md bg-transparent text-white" 
-                   style="border: none; border-radius: 4px; height: 50px; font-size: 16px;" 
-                   @click="closeInvoiceDialog()">
-              CANCEL
-            </button>
-          </div>
-        </div>
-      </form>
+      </q-form>
     </q-card-section>
   </q-card>
 </q-dialog>
 
 <!-- Created Invoice Dialog with QR Code - Styled like LNbits -->
-<q-dialog v-model="createdInvoiceDialog.show">
+<q-dialog v-model="createdInvoiceDialog.show" position="top">
   <q-card class="q-pa-sm q-pt-xl lnbits__dialog-card" style="width: 100%; max-width: 450px;">
     <q-card-section class="">
-      <div class="text-center q-mb-md">
-        <h6 class="text-h6 q-my-none">{% raw %}{{ createdInvoiceDialog.title }}{% endraw %}</h6>
+      <div v-if="createdInvoice">
+        <!-- QR Code at the top -->
+        <div class="text-center">
+          <a :href="'lightning:' + createdInvoice.payment_request">
+            <lnbits-qrcode 
+              :value="'lightning:' + createdInvoice.payment_request" 
+              :options="{
+                width: 350,
+                margin: 4,
+                level: 'Q'
+              }"
+            ></lnbits-qrcode>
+          </a>
+        </div>
         
-        <div v-if="createdInvoice" class="q-mt-md">
-          <div class="text-subtitle2 q-mb-md">
-            <span class="text-bold">Asset:</span> {% raw %}{{ createdInvoice.asset_name || (invoiceDialog.selectedAsset ? invoiceDialog.selectedAsset.name : 'Unknown') }}{% endraw %}<br>
-            <span class="text-bold">Amount:</span> {% raw %}{{ invoiceDialog.form.amount || createdInvoice.asset_amount }}{% endraw %} units
+        <!-- Asset and Amount info below QR code -->
+        <div class="text-center q-mt-md">
+          <div class="text-subtitle1">
+            <div class="q-mb-sm"><span class="text-bold">Asset:</span> {% raw %}{{ createdInvoice.asset_name || (invoiceDialog.selectedAsset ? invoiceDialog.selectedAsset.name : 'Unknown') }}{% endraw %}</div>
+            <div><span class="text-bold">Amount:</span> {% raw %}{{ invoiceDialog.form.amount || createdInvoice.asset_amount }}{% endraw %} units</div>
           </div>
-          
-          <!-- QR Code using LNBits built-in component - Mobile friendly size -->
-          <div class="q-my-md text-center">
-            <a :href="'lightning:' + createdInvoice.payment_request">
-              <lnbits-qrcode 
-                :value="'lightning:' + createdInvoice.payment_request" 
-                :options="{
-                  width: 350,
-                  margin: 4,
-                  level: 'Q'
-                }"
-              ></lnbits-qrcode>
-            </a>
-          </div>
-          
-          <!-- Helper text -->
-          <p class="text-caption q-my-md">
-            Tap the QR code to open in wallet or use the buttons below
-          </p>
-          
-          <!-- Action buttons - Exact LNbits style -->
-          <div class="row q-mt-lg">
-            <q-btn 
-              outline
-              color="grey" 
-              @click="copyInvoice(createdInvoice)"
-              label="Copy Invoice"
-            ></q-btn>
-            <q-btn
-              v-close-popup
-              flat
-              color="grey"
-              class="q-ml-auto"
-              label="Close"
-            ></q-btn>
-          </div>
+        </div>
+        
+        <!-- Action buttons - Exact LNbits style -->
+        <div class="row q-mt-lg">
+          <q-btn 
+            outline
+            color="grey" 
+            @click="copyInvoice(createdInvoice)"
+            label="Copy Invoice"
+          ></q-btn>
+          <q-btn
+            v-close-popup
+            flat
+            color="grey"
+            class="q-ml-auto"
+            label="Close"
+          ></q-btn>
         </div>
       </div>
     </q-card-section>
@@ -340,7 +336,7 @@
 
 <!-- Read invoice dialog - Step 1 -->
 <q-dialog v-model="parseDialog.show" position="top">
-  <q-card class="q-pa-lg q-pt-xl" style="width: 100%; max-width: 500px">
+  <q-card class="q-pa-lg q-pt-xl lnbits__dialog-card" style="width: 100%; max-width: 500px">
     <div v-if="!parseDialog.invoice">
       <q-form @submit="decodeInvoice" class="q-gutter-md">
         <q-input
@@ -385,6 +381,7 @@
       <div class="column content-center text-center q-mb-md">
         <h4 class="q-my-none text-bold">
           <span>{% raw %}{{ parseDialog.invoice.amount }}{% endraw %}</span>
+          <span class="text-subtitle1 q-ml-sm">{% raw %}{{ getAssetNameFromId(parseDialog.invoice.asset_id) || 'Unknown Asset' }}{% endraw %}</span>
         </h4>
       </div>
       <q-separator></q-separator>
@@ -489,8 +486,8 @@
 </q-dialog>
 
 <!-- Send payment modal - Step 2 (now only used for asset selection) -->
-<q-dialog v-model="paymentDialog.show">
-  <q-card class="q-pa-md q-pt-lg" style="width: 100%; max-width: 500px">
+<q-dialog v-model="paymentDialog.show" position="top">
+  <q-card class="q-pa-sm q-pt-xl lnbits__dialog-card" style="width: 100%; max-width: 500px">
     <q-card-section>
       <div class="text-h6">Pay Taproot Asset Invoice</div>
     </q-card-section>
@@ -541,9 +538,9 @@
   </q-card>
 </q-dialog>
 
-<!-- Payment success dialog - MOBILE RESPONSIVE -->
-<q-dialog v-model="successDialog.show" @hide="getAssets(); refreshTransactions();">
-  <q-card class="q-pa-md" style="width: 100%; max-width: 500px;">
+<!-- Payment success dialog - Styled like LNbits -->
+<q-dialog v-model="successDialog.show" position="top" @hide="getAssets(); refreshTransactions();">
+  <q-card class="q-pa-sm q-pt-xl lnbits__dialog-card" style="width: 100%; max-width: 500px;">
     <q-card-section class="row items-center">
       <q-avatar icon="check_circle" color="positive" text-color="white" />
       <span class="q-ml-sm text-h6">{% raw %}{{ successDialog.title }}{% endraw %}</span>
@@ -559,7 +556,7 @@
 
 <!-- Camera overlay for QR code scanning -->
 <q-dialog v-model="camera.show" position="top">
-  <q-card class="q-pa-md" style="width: 100%; max-width: 500px;">
+  <q-card class="q-pa-sm q-pt-xl lnbits__dialog-card" style="width: 100%; max-width: 500px;">
     <q-card-section class="row items-center">
       <div class="text-h6">Scan QR Code</div>
       <q-space></q-space>
