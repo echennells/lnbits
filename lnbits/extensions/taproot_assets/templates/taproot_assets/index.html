@@ -284,11 +284,11 @@
   </q-card>
 </q-dialog>
 
-<!-- Created Invoice Dialog with QR Code - MOBILE RESPONSIVE -->
+<!-- Created Invoice Dialog with QR Code - Styled like LNbits -->
 <q-dialog v-model="createdInvoiceDialog.show">
-  <q-card class="q-pa-md" style="width: 100%; max-width: 450px; background-color: #121212;">
-    <q-card-section class="q-pa-none">
-      <div class="text-center">
+  <q-card class="q-pa-sm q-pt-xl lnbits__dialog-card" style="width: 100%; max-width: 450px;">
+    <q-card-section class="">
+      <div class="text-center q-mb-md">
         <h6 class="text-h6 q-my-none">{% raw %}{{ createdInvoiceDialog.title }}{% endraw %}</h6>
         
         <div v-if="createdInvoice" class="q-mt-md">
@@ -316,29 +316,21 @@
             Tap the QR code to open in wallet or use the buttons below
           </p>
           
-          <!-- Action buttons - Stacked on mobile -->
-          <div class="row q-mt-lg q-col-gutter-sm justify-center">
-            <div class="col-12 col-sm-auto">
-              <q-btn 
-                outline
-                color="grey" 
-                icon-right="content_copy" 
-                label="Copy Invoice" 
-                class="full-width"
-                style="height: 40px;"
-                @click="copyInvoice(createdInvoice)"
-              ></q-btn>
-            </div>
-            <div class="col-12 col-sm-auto q-mt-sm q-mt-sm-none">
-              <q-btn
-                unelevated
-                color="primary"
-                label="Done"
-                class="full-width"
-                style="height: 40px;"
-                v-close-popup
-              ></q-btn>
-            </div>
+          <!-- Action buttons - Exact LNbits style -->
+          <div class="row q-mt-lg">
+            <q-btn 
+              outline
+              color="grey" 
+              @click="copyInvoice(createdInvoice)"
+              label="Copy Invoice"
+            ></q-btn>
+            <q-btn
+              v-close-popup
+              flat
+              color="grey"
+              class="q-ml-auto"
+              label="Close"
+            ></q-btn>
           </div>
         </div>
       </div>

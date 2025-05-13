@@ -12,18 +12,18 @@ class TaprootSettings:
     
     def __init__(self):
         # TAPD connection settings
-        self.tapd_host = os.environ.get("TAPROOT_TAPD_HOST", "lit:10009")
-        self.tapd_network = os.environ.get("TAPROOT_NETWORK", "mainnet")
-        self.tapd_tls_cert_path = os.environ.get("TAPROOT_TLS_CERT_PATH", "/root/.lnd/tls.cert")
-        self.tapd_macaroon_path = os.environ.get("TAPROOT_MACAROON_PATH", "/root/.tapd/data/mainnet/admin.macaroon")
-        self.tapd_macaroon_hex = os.environ.get("TAPROOT_MACAROON_HEX", None)
+        self.tapd_host = os.environ.get("TAPD_HOST", None)
+        self.tapd_network = os.environ.get("TAPD_NETWORK", "mainnet")  # Keeping default for network
+        self.tapd_tls_cert_path = os.environ.get("TAPD_TLS_CERT_PATH", None)
+        self.tapd_macaroon_path = os.environ.get("TAPD_MACAROON_PATH", None)
+        self.tapd_macaroon_hex = os.environ.get("TAPD_MACAROON_HEX", None)
         
         # LND connection settings
-        self.lnd_macaroon_path = os.environ.get("TAPROOT_LND_MACAROON_PATH", "/root/.lnd/data/chain/bitcoin/mainnet/admin.macaroon")
-        self.lnd_macaroon_hex = os.environ.get("TAPROOT_LND_MACAROON_HEX", None)
+        self.lnd_macaroon_path = os.environ.get("LND_REST_MACAROON", None)
+        self.lnd_macaroon_hex = os.environ.get("LND_MACAROON_HEX", None)
         
         # Fee settings
-        self.default_sat_fee = int(os.environ.get("TAPROOT_DEFAULT_SAT_FEE", "1"))
+        self.default_sat_fee = int(os.environ.get("TAPD_DEFAULT_SAT_FEE", "1"))  # Keeping default for fee
         
         logger.info("Taproot Assets settings loaded from environment variables")
     

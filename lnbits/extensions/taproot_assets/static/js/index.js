@@ -611,12 +611,10 @@ window.app = Vue.createApp({
         // Get notification message and title
         const {title, message} = NotificationService.notifyPaymentSent(paymentResult);
         
-        // Set success dialog content
-        this.successDialog.title = title;
-        this.successDialog.message = message;
-        
-        // Show success dialog
-        this.successDialog.show = true;
+        // Don't show success dialog, notification is enough
+        // this.successDialog.title = title;
+        // this.successDialog.message = message;
+        // this.successDialog.show = true;
         
         // Immediately refresh assets to get updated balances
         this.getAssets();
@@ -728,12 +726,10 @@ window.app = Vue.createApp({
         // Get notification message and title
         const {title, message} = NotificationService.notifyPaymentSent(paymentResult);
         
-        // Set success dialog content
-        this.successDialog.title = title;
-        this.successDialog.message = message;
-        
-        // Show success dialog
-        this.successDialog.show = true;
+        // Don't show success dialog, notification is enough
+        // this.successDialog.title = title;
+        // this.successDialog.message = message;
+        // this.successDialog.show = true;
         
         // Immediately refresh assets to get updated balances
         this.getAssets();
@@ -806,10 +802,10 @@ window.app = Vue.createApp({
         // Get notification message and title
         const {title, message} = NotificationService.notifyPaymentSent(paymentResult);
         
-        // Set success dialog content
-        this.successDialog.title = title || 'Internal Payment Processed';
-        this.successDialog.message = message || 'Payment to another user on this node has been processed successfully.';
-        this.successDialog.show = true;
+        // Don't show success dialog, notification is enough
+        // this.successDialog.title = title || 'Internal Payment Processed';
+        // this.successDialog.message = message || 'Payment to another user on this node has been processed successfully.';
+        // this.successDialog.show = true;
         
         // Immediately refresh assets to show updated balances
         this.getAssets();
