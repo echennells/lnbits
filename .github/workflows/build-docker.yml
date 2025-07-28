@@ -14,6 +14,27 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+    
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: latest
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+    
+    - name: Build bundles
+      run: make bundle
+    
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     
@@ -35,7 +56,7 @@ jobs:
           type=sha
           type=raw,value=latest,enable={{is_default_branch}}
     
-    - name: Build and push
+    - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
         context: .
